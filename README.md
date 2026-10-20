@@ -11,13 +11,13 @@
 ```bash
 npm install
 npm run build
-npm start            # http://localhost:8080 ，鉴权默认关闭
+npm start            # http://localhost:8080/data-pipeline ，鉴权默认关闭
 ```
 
 推送一条：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/records \
+curl -X POST http://localhost:8080/data-pipeline/api/v1/records \
   -H 'content-type: application/json' \
   -d '{"prompt":"写一首关于秋天的短诗","content":"……生成的正文……","source_agent":"claude-code"}'
 # {"id":"...","status":"created","created_at":"..."}
@@ -30,6 +30,7 @@ curl -X POST http://localhost:8080/api/v1/records \
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `PORT` | 8080 | 监听端口 |
+| `BASE_PATH` | /data-pipeline | 项目路径前缀，挂在 `/api` 前面；API 同时也在无前缀路径可用，设为空字符串可关掉前缀 |
 | `DATA_DIR` | ./data | 数据目录 |
 | `STORAGE` | sqlite | `sqlite` 或 `file`，同一接口双实现，行为契约一致 |
 | `AUTH_REQUIRED` | false | true 时启用 `X-API-Key` 鉴权，令牌只存哈希 |
@@ -49,7 +50,7 @@ Docker：`docker compose up -d`。
 | `skills/pipe-push-muse/` | Muse | 同一工作流，skill.yaml 元数据，凭证走 adapter |
 | `skills/pipe-push-generic/` | Grok Bot 等无 SKILL.md 加载器的 Agent | `AGENT_INSTRUCTIONS.md` + `tool.json` 兜底（Grok 的 skill 格式待核实） |
 
-安装：把对应目录复制到该运行时的 skills 目录，设好 `DATA_PIPELINE_BASE_URL`（及开鉴权时的凭证），手动唤起后输入提示词即可。
+安装：把对应目录复制到该运行时的 skills 目录，设好 `DATA_PIPELINE_BASE_URL`（形如 `http://服务器:8080/data-pipeline`，及开鉴权时的凭证），手动唤起后输入提示词即可。
 
 ## 决策记录（2026-10-20 定版时的待定项处理）
 

@@ -1,5 +1,7 @@
 export interface AppConfig {
   port: number;
+  /** Project path prefix mounted before /api, e.g. "/data-pipeline". Empty string disables it. */
+  basePath: string;
   dataDir: string;
   storage: "sqlite" | "file";
   authRequired: boolean;
@@ -9,8 +11,10 @@ export interface AppConfig {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const basePath = (env.BASE_PATH ?? "/data-pipeline").replace(/\/+$/, "");
   return {
     port: Number(env.PORT ?? 8080),
+    basePath: basePath && !basePath.startsWith("/") ? `/${basePath}` : basePath,
     dataDir: env.DATA_DIR ?? "./data",
     storage: env.STORAGE === "file" ? "file" : "sqlite",
     authRequired: env.AUTH_REQUIRED === "true",

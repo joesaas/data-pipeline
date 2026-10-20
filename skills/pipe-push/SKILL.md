@@ -37,7 +37,7 @@ when the user gave one.
 
 ## Configuration
 
-- `DATA_PIPELINE_BASE_URL`: server base URL (default `http://localhost:8080`).
+- `DATA_PIPELINE_BASE_URL`: server base URL (default `http://localhost:8080/data-pipeline`).
 - Auth is configurable on the server and off by default. When the server has
   auth on, credentials come from `DATA_PIPELINE_ADAPTER` (an executable that
   returns auth headers as JSON) or `DATA_PIPELINE_API_KEY`. Never write a real

@@ -6,12 +6,18 @@ import type { AuthService } from "../auth/auth.js";
 import type { IngestService } from "../ingest/ingest-service.js";
 import type { StorageDriver } from "../storage/storage-driver.js";
 
-/** Routing layer only: parse HTTP, delegate, format responses. No business rules. */
+/**
+ * Routing layer only: parse HTTP, delegate, format responses. No business rules.
+ * All routes live on one router, mounted twice: under the project base path
+ * (config.basePath, default /data-pipeline) and at the root for compatibility.
+ * So POST {basePath}/api/v1/records and POST /api/v1/records are the same API.
+ */
 export function registerRoutes(
   app: Express,
   deps: { config: AppConfig; auth: AuthService; ingest: IngestService; driver: StorageDriver },
 ): void {
   const { config, auth, ingest, driver } = deps;
+  const router = express.Router();
 
   // Simple fixed-window rate limit, keyed by identity (or IP when anonymous).
   const windows = new Map<string, { start: number; count: number }>();
@@ -35,32 +41,34 @@ export function registerRoutes(
     return identity;
   }
 
-  app.use(express.json({ limit: Math.ceil(config.maxContentBytes * 1.6) }));
+  router.use(express.json({ limit: Math.ceil(config.maxContentBytes * 1.6) }));
 
-  // Project root: service info and the endpoint index. No auth, no data.
-  app.get("/", (_req, res) => {
+  // Service info root (also the project base path root). No auth, no data.
+  router.get("/", (_req, res) => {
+    const base = config.basePath;
     res.json({
       name: "data-pipeline",
       version: "0.1.0",
       description: "Agents push prompt+content pairs here via the pipe-push skill.",
+      base_path: base || "/",
       storage: config.storage,
       auth_required: config.authRequired,
       endpoints: {
-        health: "GET /api/v1/health",
-        push: "POST /api/v1/records",
-        list: "GET /api/v1/records?source_agent=&tag=&limit=&offset=",
-        get: "GET /api/v1/records/:id",
-        delete: "DELETE /api/v1/records/:id",
+        health: `GET ${base}/api/v1/health`,
+        push: `POST ${base}/api/v1/records`,
+        list: `GET ${base}/api/v1/records?source_agent=&tag=&limit=&offset=`,
+        get: `GET ${base}/api/v1/records/:id`,
+        delete: `DELETE ${base}/api/v1/records/:id`,
       },
       docs: "https://github.com/joesaas/data-pipeline",
     });
   });
 
-  app.get("/api/v1/health", (_req, res) => {
+  router.get("/api/v1/health", (_req, res) => {
     res.json({ ok: true });
   });
 
-  app.post("/api/v1/records", (req, res) => {
+  router.post("/api/v1/records", (req, res) => {
     const identity = identityOf(req, res);
     if (identity === null) return;
     if (rateLimited(config.authRequired ? identity : (req.ip ?? "unknown"))) {
@@ -81,7 +89,7 @@ export function registerRoutes(
     }
   });
 
-  app.get("/api/v1/records", (req, res) => {
+  router.get("/api/v1/records", (req, res) => {
     const identity = identityOf(req, res);
     if (identity === null) return;
     const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
@@ -95,7 +103,7 @@ export function registerRoutes(
     res.json({ items, total, limit, offset });
   });
 
-  app.get("/api/v1/records/:id", (req, res) => {
+  router.get("/api/v1/records/:id", (req, res) => {
     const identity = identityOf(req, res);
     if (identity === null) return;
     const rec = driver.getRecord(identity, req.params.id);
@@ -106,7 +114,7 @@ export function registerRoutes(
     res.json(rec);
   });
 
-  app.delete("/api/v1/records/:id", (req, res) => {
+  router.delete("/api/v1/records/:id", (req, res) => {
     const identity = identityOf(req, res);
     if (identity === null) return;
     if (!driver.deleteRecord(identity, req.params.id)) {
@@ -115,4 +123,7 @@ export function registerRoutes(
     }
     res.status(204).send();
   });
+
+  if (config.basePath) app.use(config.basePath, router);
+  app.use(router);
 }

@@ -62,6 +62,8 @@ API 单体内部按单一职责分四个模块，模块间只经接口调用：
 
 ## 2. API 设计
 
+路径口径（定版补充）：全部接口挂在项目路径前缀之下，前缀可配置（`BASE_PATH`，默认 `/data-pipeline`），即形如 `/data-pipeline/api/v1/records`；无前缀的 `/api/v1/...` 同时保留可用。
+
 ### 2.1 约定
 
 - Base：`/api/v1`，HTTPS，JSON。

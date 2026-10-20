@@ -10,6 +10,7 @@ import type { AppConfig } from "../src/config.js";
 function baseConfig(dir: string, over: Partial<AppConfig> = {}): AppConfig {
   return {
     port: 0,
+    basePath: "/data-pipeline",
     dataDir: dir,
     storage: "sqlite",
     authRequired: false,
@@ -62,7 +63,20 @@ describe("api: auth off (default)", () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as { name: string; endpoints: Record<string, string> };
     assert.equal(body.name, "data-pipeline");
-    assert.equal(body.endpoints.push, "POST /api/v1/records");
+    assert.equal(body.endpoints.push, "POST /data-pipeline/api/v1/records");
+  });
+
+  it("the whole API also answers under the project base path", async () => {
+    const info = await fetch(`${ctx.base}/data-pipeline/`);
+    assert.equal(info.status, 200);
+    const pushed = await post(ctx.base, "/data-pipeline/api/v1/records", {
+      prompt: "p",
+      content: "via prefixed path",
+      external_id: "prefixed-1",
+    });
+    assert.equal(pushed.status, 201);
+    const health = await fetch(`${ctx.base}/data-pipeline/api/v1/health`);
+    assert.equal(health.status, 200);
   });
 
   it("health is open", async () => {

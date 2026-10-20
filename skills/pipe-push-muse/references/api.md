@@ -1,6 +1,6 @@
 # data-pipeline API quick reference
 
-Base: `/api/v1` over HTTPS, JSON. Full design: `docs/design.md` in the repo.
+Base: `{DATA_PIPELINE_BASE_URL}/api/v1` over HTTPS, JSON. The server mounts the API under a project base path (default `/data-pipeline`, so the full push URL looks like `http://localhost:8080/data-pipeline/api/v1/records`); the unprefixed `/api/v1` paths also work. Full design: `docs/design.md` in the repo.
 
 ## POST /api/v1/records
 
