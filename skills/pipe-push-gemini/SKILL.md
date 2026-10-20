@@ -8,6 +8,9 @@ description: "Manually invoked only. Generates content from the user's prompt fo
 Prepare a push to the user's data-pipeline server. The server stores the
 original prompt and the generated content as a pair.
 
+This file is self-contained: the workflow, the API reference, and a payload
+example are all below. No other files are needed.
+
 ## Platform constraint (read first)
 
 Gemini Apps skills cannot run scripts that access the internet, so this
@@ -22,8 +25,8 @@ user shows you the server's response.
    one short question for it.
 2. Generate the content the prompt asks for, as you normally would. This
    skill does not change how you generate.
-3. Assemble the JSON payload exactly as specified in `references/api.md`
-   (a filled example is in `references/payload.example.json`):
+3. Assemble the JSON payload exactly as specified in the API reference
+   below:
    - `prompt`: the user's original prompt, verbatim.
    - `content`: the generated content.
    - `source_agent`: `"gemini"`.
@@ -56,4 +59,51 @@ user shows you the server's response.
   answers 401, auth is on: tell the user the push command needs an
   `X-API-Key` header with their own key. Never write a real key into this
   skill or into the content being pushed.
-- Field and error reference: `references/api.md`.
+
+## API reference
+
+Base: `{DATA_PIPELINE_BASE_URL}/api/v1` over HTTPS, JSON. The server mounts
+the API under a project base path (default `/data-pipeline`, so the full
+push URL looks like `https://agent101.uk/data-pipeline/api/v1/records`);
+the unprefixed `/api/v1` paths also work.
+
+### POST /api/v1/records
+
+Required: `prompt` (string, ≤ 64 KB), `content` (string, ≤ 1 MB).
+Optional: `external_id` (≤ 128 chars, upsert key within the caller's
+identity), `title`, `content_format` (`markdown` | `text` | `html` |
+`json`), `source_agent`, `skill_version`, `tags` (string array),
+`metadata` (object), `schema_version` (currently 1).
+
+Response: `{ "id": "...", "status": "created | replaced | deduped", "created_at": "..." }`
+
+- With `external_id`: same content → `deduped`; changed content →
+  `replaced` (same id, original `created_at` kept).
+- Without: an identical content hash under the same identity → `deduped`.
+
+### Errors
+
+| Status | Meaning |
+|---|---|
+| 400 | Validation failed; body names the `field` |
+| 401 | Auth is on and the key is missing or invalid |
+| 413 | `prompt` or `content` over the size limit |
+| 429 | Rate limit exceeded |
+
+### Read endpoints
+
+- `GET /api/v1/records?source_agent=&tag=&limit=&offset=` → `{ items, total, limit, offset }`
+- `GET /api/v1/records/:id` → the full record
+- `DELETE /api/v1/records/:id` → 204 (with auth on, only the owner's token)
+- `GET /api/v1/health` → `{ "ok": true }`, no auth
+
+## Payload example
+
+```json
+{
+  "prompt": "Summarize today's Aave governance activity in one short paragraph.",
+  "content": "Aave's governance forum saw one new proposal today...",
+  "source_agent": "gemini",
+  "content_format": "markdown"
+}
+```
