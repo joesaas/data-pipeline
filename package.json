@@ -14,6 +14,7 @@
   "name": "data-pipeline",
   "private": true,
   "scripts": {
+    "prebuild": "node scripts/check-node.mjs",
     "build": "tsc -p tsconfig.json",
     "create-token": "node dist/src/cli/create-token.js",
     "dev": "npm run build && node dist/src/server.js",

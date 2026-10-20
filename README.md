@@ -6,6 +6,8 @@
 
 ## 快速开始
 
+需要 **Node >= 22**（SQLite 驱动用内置 `node:sqlite`；仓库带 `.nvmrc`，`nvm use` 即可）。
+
 ```bash
 npm install
 npm run build
