@@ -50,7 +50,7 @@ Docker：`docker compose up -d`。
 | `skills/pipe-push-muse/` | Muse | 同一工作流，skill.yaml 元数据，凭证走 adapter |
 | `skills/pipe-push-generic/` | Grok Bot 等无 SKILL.md 加载器的 Agent | `AGENT_INSTRUCTIONS.md` + `tool.json` 兜底（Grok 的 skill 格式待核实） |
 
-安装：把对应目录复制到该运行时的 skills 目录，设好 `DATA_PIPELINE_BASE_URL`（形如 `http://服务器:8080/data-pipeline`，及开鉴权时的凭证），手动唤起后输入提示词即可。
+安装：把对应目录复制到该运行时的 skills 目录，设好 `DATA_PIPELINE_BASE_URL`（形如 `https://agent101.uk/data-pipeline`（已部署实例），及开鉴权时的凭证），手动唤起后输入提示词即可。
 
 ## 决策记录（2026-10-20 定版时的待定项处理）
 

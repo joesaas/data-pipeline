@@ -11,7 +11,7 @@
  * Content can also come from stdin when --content-file is "-".
  *
  * Config (env):
- *   DATA_PIPELINE_BASE_URL   default http://localhost:8080/data-pipeline
+ *   DATA_PIPELINE_BASE_URL   default https://agent101.uk/data-pipeline
  *   DATA_PIPELINE_API_KEY    used when no adapter is configured
  *   DATA_PIPELINE_ADAPTER    path to a credential adapter executable
  *                            (stdin/stdout JSON: {} -> {"headers": {...}})
@@ -53,7 +53,7 @@ if (!args.prompt) {
 }
 
 const content = await readContent(args["content-file"]);
-const base = (process.env.DATA_PIPELINE_BASE_URL ?? "http://localhost:8080/data-pipeline").replace(/\/$/, "");
+const base = (process.env.DATA_PIPELINE_BASE_URL ?? "https://agent101.uk/data-pipeline").replace(/\/$/, "");
 
 const headers = { "content-type": "application/json", ...adapterHeaders() };
 if (!headers["x-api-key"] && process.env.DATA_PIPELINE_API_KEY) {
