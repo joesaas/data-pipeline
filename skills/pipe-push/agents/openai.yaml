@@ -1,0 +1,7 @@
+interface:
+  display_name: "pipe-push"
+  short_description: "Push generated content to your data-pipeline server"
+  default_prompt: "Use $pipe-push to generate from my prompt and push the result to my server."
+
+policy:
+  allow_implicit_invocation: false

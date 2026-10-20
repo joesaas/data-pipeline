@@ -1,0 +1,7 @@
+name: pipe-push-muse
+title: Pipe Push (Muse)
+description: 仅手动唤起。把你按用户提示词生成的内容通过 API push 到用户的 data-pipeline 服务器，原始提示词与生成内容成对存储。仅当用户明确唤起 pipe-push 时使用，不自动触发。
+include_in_prompt: true
+availability:
+  confidential_vm: true
+  needs_speech: false
