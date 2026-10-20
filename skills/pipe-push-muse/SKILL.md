@@ -22,6 +22,6 @@ node <本 skill 目录>/scripts/push.mjs \
 
 ## 配置
 
-- `DATA_PIPELINE_BASE_URL`：服务器地址（默认 `http://localhost:8080`）。
+- `DATA_PIPELINE_BASE_URL`：服务器地址（默认 `https://agent101.uk/data-pipeline`）。
 - 服务端鉴权可配置、默认关闭。开启时凭证走 `DATA_PIPELINE_ADAPTER`（返回鉴权头的可执行程序）或 `DATA_PIPELINE_API_KEY`；Muse 环境优先用连接器替身作 adapter。真 Key 不写进 skill 与推送内容。
 - 字段与错误码速查：`references/api.md`。

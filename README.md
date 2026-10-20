@@ -49,6 +49,7 @@ Docker：`docker compose up -d`。
 | `skills/pipe-push/` | Claude Code / Codex / Gemini CLI | 标准 SKILL.md（仅手动唤起）+ `agents/openai.yaml` + 发送脚本 |
 | `skills/pipe-push-muse/` | Muse | 同一工作流，skill.yaml 元数据，凭证走 adapter |
 | `skills/pipe-push-generic/` | Grok Bot 等无 SKILL.md 加载器的 Agent | `AGENT_INSTRUCTIONS.md` + `tool.json` 兜底（Grok 的 skill 格式待核实） |
+| `skills/pipe-push-gemini/` | Gemini Apps（网页/移动/Mac 应用） | 在 Skills 页上传本目录（或其 zip）安装：根目录 `SKILL.md` + 纯文本 references，不含脚本。Gemini 平台禁止 skill 脚本联网，本变体只生成内容并组装推送载荷，实际 POST 由用户在 Gemini 外用随附的 curl 命令完成 |
 
 安装：把对应目录复制到该运行时的 skills 目录，设好 `DATA_PIPELINE_BASE_URL`（形如 `https://agent101.uk/data-pipeline`（已部署实例），及开鉴权时的凭证），手动唤起后输入提示词即可。
 

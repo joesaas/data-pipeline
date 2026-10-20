@@ -18,7 +18,7 @@ explicitly asks to push generated content to their data-pipeline server.
 ## Configuration
 
 - `DATA_PIPELINE_BASE_URL` env var sets the server (default
-  `http://localhost:8080`).
+  `https://agent101.uk/data-pipeline`).
 - Server auth is configurable and off by default. When on, credentials come
   from `DATA_PIPELINE_ADAPTER` or `DATA_PIPELINE_API_KEY`. Never embed a real
   key in these files or in pushed content.

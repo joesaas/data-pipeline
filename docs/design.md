@@ -137,6 +137,7 @@ API 单体内部按单一职责分四个模块，模块间只经接口调用：
 | Claude Code | `pipe-push` | SKILL.md（标准 frontmatter） | `~/.claude/skills/` 或项目 `.claude/skills/` | `/pipe-push` |
 | Codex | `pipe-push` | SKILL.md + `agents/openai.yaml` | `~/.codex/skills/` 等 | `$pipe-push` 或 `/skills` 点选 |
 | Gemini CLI | `pipe-push` | SKILL.md（开放标准格式） | `~/.gemini/skills/` | 按其 skill 唤起方式 |
+| Gemini Apps | `pipe-push-gemini` | SKILL.md + references（仅纯文本文件，无脚本） | Gemini Skills 页上传文件夹/zip（SKILL.md 须在根目录） | 用户点名唤起；平台禁止脚本联网，只组装载荷、POST 由用户在 Gemini 外执行 |
 | Grok Bot | `pipe-push`（generic 变体） | `AGENT_INSTRUCTIONS.md` + `tool.json` | 依 Grok Bot 的扩展目录（待核实） | 手动唤起 |
 
 说明：Claude Code、Codex、Gemini 走 Agent Skills 开放标准（agentskills.io），同一份标准 SKILL.md 为底，差异只在各自的元数据文件。Grok Bot 的 skill 规范未见公开标准文档，先用 generic 变体兜底，**其格式与安装路径列为待核实项**，实现阶段第一步先验真。
