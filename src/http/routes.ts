@@ -37,6 +37,25 @@ export function registerRoutes(
 
   app.use(express.json({ limit: Math.ceil(config.maxContentBytes * 1.6) }));
 
+  // Project root: service info and the endpoint index. No auth, no data.
+  app.get("/", (_req, res) => {
+    res.json({
+      name: "data-pipeline",
+      version: "0.1.0",
+      description: "Agents push prompt+content pairs here via the pipe-push skill.",
+      storage: config.storage,
+      auth_required: config.authRequired,
+      endpoints: {
+        health: "GET /api/v1/health",
+        push: "POST /api/v1/records",
+        list: "GET /api/v1/records?source_agent=&tag=&limit=&offset=",
+        get: "GET /api/v1/records/:id",
+        delete: "DELETE /api/v1/records/:id",
+      },
+      docs: "https://github.com/joesaas/data-pipeline",
+    });
+  });
+
   app.get("/api/v1/health", (_req, res) => {
     res.json({ ok: true });
   });

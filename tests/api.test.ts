@@ -57,6 +57,14 @@ describe("api: auth off (default)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("root path returns service info and the endpoint index", async () => {
+    const res = await fetch(`${ctx.base}/`);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { name: string; endpoints: Record<string, string> };
+    assert.equal(body.name, "data-pipeline");
+    assert.equal(body.endpoints.push, "POST /api/v1/records");
+  });
+
   it("health is open", async () => {
     const res = await fetch(`${ctx.base}/api/v1/health`);
     assert.equal(res.status, 200);
