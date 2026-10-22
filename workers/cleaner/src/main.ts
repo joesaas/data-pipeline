@@ -11,6 +11,10 @@
  * Pipeline per record: fetch via API -> quality gate -> skip when
  * (id, content_hash) already cleaned -> LLM (or mock) -> validate -> SQLite.
  */
+import { loadDefaultEnv } from "./load-env.js";
+
+const envFile = loadDefaultEnv();
+if (envFile) console.log(`[cleaner] loaded env from ${envFile}`);
 import { createRecordsClient } from "./client.js";
 import { createLlmProvider } from "./providers.js";
 import { CleanerStore } from "./store.js";

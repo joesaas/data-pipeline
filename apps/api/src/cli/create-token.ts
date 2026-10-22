@@ -1,5 +1,8 @@
 import { createApp } from "../app.js";
 import { loadConfig } from "../config.js";
+import { loadDefaultEnv } from "../load-env.js";
+
+loadDefaultEnv();
 
 // Usage: npm run create-token -- <name>
 // Prints the plain API key once; only its hash is stored.

@@ -40,6 +40,13 @@ curl -X POST http://localhost:8080/data-pipeline/api/v1/records \
 
 ## 配置（环境变量）
 
+复制模板生成 `.env` 后填真实值，服务启动时自动加载（真实环境变量优先，`.env` 只补缺；查找顺序：工作目录 → 仓库根目录 → 服务自己目录）：
+
+```bash
+cp .env.example .env   # 模板含 API / cleaner / LLM 三个分区，逐项有注释
+```
+
+
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `PORT` | 8080 | 监听端口 |

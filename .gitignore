@@ -4,3 +4,6 @@ data/
 *.log
 .DS_Store
 workers/cleaner/output/
+.env
+.env.*
+!.env.example
