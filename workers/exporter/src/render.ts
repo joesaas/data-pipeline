@@ -16,7 +16,7 @@ export function fmtDateTime(iso: string | null): string {
   return new Date(iso).toLocaleString("zh-CN", { hour12: false });
 }
 
-function head(title: string, cssHref: string): string {
+function head(title: string, cssHref: string, base = "./"): string {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -27,8 +27,8 @@ function head(title: string, cssHref: string): string {
 </head>
 <body>
 <header class="topbar">
-  <a class="logo" href="./">data<span>-pipeline</span></a>
-  <nav><a href="./">清洗结果</a></nav>
+  <a class="logo" href="${base}"><span class="mark">D</span>data<span>-pipeline</span></a>
+  <nav><a href="${base}">清洗结果</a></nav>
   <div class="spacer"></div>
 </header>
 <main>`;
@@ -140,7 +140,7 @@ export function renderItem(item: ExportItem, publicApiPath: string): string {
           .map((s) => `<div><a href="${esc(s.url)}" target="_blank" rel="noreferrer">${esc(s.name || s.url)}</a></div>`)
           .join("")}</div>`
       : "";
-  return `${head(item.title, "../../styles.css")}
+  return `${head(item.title, "../../styles.css", "../../")}
 <p class="muted"><a href="../../" style="color:var(--accent)">← 返回列表</a> · ${esc(item.category)} · 重要性 ${esc(IMPORTANCE_LABEL[item.importance] ?? item.importance)}${item.event_date ? ` · 事件日期 ${esc(item.event_date)}` : ""}</p>
 <h1 style="line-height:1.4">${esc(item.title)}</h1>
 <div style="margin:10px 0">${tags}</div>
