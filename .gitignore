@@ -8,3 +8,5 @@ workers/cleaner/output/
 .env.*
 !.env.example
 logs/
+.next/
+next-env.d.ts

@@ -17,6 +17,7 @@ function baseConfig(dir: string, over: Partial<AppConfig> = {}): AppConfig {
     maxContentBytes: 1_048_576,
     maxPromptBytes: 65_536,
     rateLimitPerMin: 60,
+    cleanedDbFile: join(dir, "no-cleaned.sqlite"),
     ...over,
   };
 }

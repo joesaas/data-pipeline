@@ -5,6 +5,7 @@ import { ValidationError } from "../domain/types.js";
 import type { AuthService } from "../auth/auth.js";
 import type { IngestService } from "../ingest/ingest-service.js";
 import type { StorageDriver } from "../storage/storage-driver.js";
+import { CleanedReader } from "../cleaned/cleaned-reader.js";
 
 /**
  * Routing layer only: parse HTTP, delegate, format responses. No business rules.
@@ -59,6 +60,9 @@ export function registerRoutes(
         list: `GET ${base}/api/v1/records?source_agent=&tag=&limit=&offset=`,
         get: `GET ${base}/api/v1/records/:id`,
         delete: `DELETE ${base}/api/v1/records/:id`,
+        cleaned_items: `GET ${base}/api/v1/cleaned/items?category=&importance=&q=&limit=&offset=`,
+        cleaned_item: `GET ${base}/api/v1/cleaned/items/:id`,
+        cleaned_stats: `GET ${base}/api/v1/cleaned/stats`,
       },
       docs: "https://github.com/joesaas/data-pipeline",
     });
@@ -112,6 +116,40 @@ export function registerRoutes(
       return;
     }
     res.json(rec);
+  });
+
+  const cleaned = new CleanedReader(config.cleanedDbFile);
+
+  router.get("/api/v1/cleaned/items", (req, res) => {
+    const identity = identityOf(req, res);
+    if (identity === null) return;
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+    const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
+    const { items, total } = cleaned.listItems({
+      category: typeof req.query.category === "string" && req.query.category ? req.query.category : undefined,
+      importance: typeof req.query.importance === "string" && req.query.importance ? req.query.importance : undefined,
+      q: typeof req.query.q === "string" && req.query.q ? req.query.q : undefined,
+      limit,
+      offset,
+    });
+    res.json({ items, total, limit, offset });
+  });
+
+  router.get("/api/v1/cleaned/items/:id", (req, res) => {
+    const identity = identityOf(req, res);
+    if (identity === null) return;
+    const item = cleaned.getItem(req.params.id);
+    if (!item) {
+      res.status(404).json({ error: "cleaned item not found" });
+      return;
+    }
+    res.json(item);
+  });
+
+  router.get("/api/v1/cleaned/stats", (req, res) => {
+    const identity = identityOf(req, res);
+    if (identity === null) return;
+    res.json(cleaned.stats());
   });
 
   router.delete("/api/v1/records/:id", (req, res) => {

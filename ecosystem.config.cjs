@@ -14,6 +14,16 @@ module.exports = {
       },
     },
     {
+      name: "data-web",
+      cwd: path.join(root, "apps/web"),
+      script: "npm",
+      args: "run start",
+      env: {
+        DATA_PIPELINE_API_URL: "http://localhost:8080/data-pipeline",
+        // NEXT_BASE_PATH: "/data-ui", // set when served under a path prefix
+      },
+    },
+    {
       name: "data-cleaner",
       cwd: root,
       script: "workers/cleaner/dist/src/main.js",
