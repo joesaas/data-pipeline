@@ -19,8 +19,10 @@ export interface CleanMeta {
  */
 export class CleanerStore {
   private readonly db: DatabaseSync;
+  readonly filePath: string;
 
   constructor(filePath: string) {
+    this.filePath = filePath;
     if (filePath !== ":memory:") {
       mkdirSync(dirname(filePath), { recursive: true });
     }

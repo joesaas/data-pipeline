@@ -11,6 +11,7 @@
  * Pipeline per record: fetch via API -> quality gate -> skip when
  * (id, content_hash) already cleaned -> LLM (or mock) -> validate -> SQLite.
  */
+import { join } from "node:path";
 import { loadDefaultEnv } from "./load-env.js";
 
 const envFile = loadDefaultEnv();
@@ -20,7 +21,8 @@ import { createLlmProvider } from "./providers.js";
 import { CleanerStore } from "./store.js";
 import { loadCleanPrompt } from "./prompt.js";
 import { runBatch, type BatchStats } from "./batch.js";
-import { setupFileLogging } from "./log.js";
+import { repoRoot, setupFileLogging } from "./log.js";
+import { exportSite } from "@data-pipeline/exporter";
 
 const logFile = setupFileLogging("data-cleaner");
 if (logFile) console.log(`[cleaner] logging to ${logFile}`);
@@ -29,6 +31,23 @@ const baseUrl = process.env.DATA_PIPELINE_BASE_URL?.trim() || "https://agent101.
 const limit = Number(process.env.CLEANER_LIMIT ?? 100);
 const maxPerRun = Number(process.env.CLEANER_MAX_PER_RUN ?? 20);
 const intervalMinutes = Math.max(1, Number(process.env.CLEANER_INTERVAL_MINUTES ?? 60));
+
+/**
+ * After a batch that cleaned something new, re-export the static site.
+ * Failure isolation is a hard rule: an export error is logged and ignored,
+ * it must never change the batch outcome.
+ */
+function maybeExport(stats: BatchStats): void {
+  if (stats.cleaned <= 0) return;
+  if (process.env.WEB_EXPORT_ON_CLEAN === "false") return;
+  try {
+    const outDir = process.env.WEB_EXPORT_DIR?.trim() || join(repoRoot(), "web-dist");
+    const result = exportSite({ dbFile: store.filePath, outDir, publicApiPath: process.env.PUBLIC_API_PATH });
+    console.log(`[cleaner] exported static site: ${result.items} items -> ${result.currentLink}`);
+  } catch (err) {
+    console.error(`[cleaner] export failed (ignored): ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
 const provider = createLlmProvider(process.env);
 const store = new CleanerStore(CleanerStore.defaultPath());
@@ -62,6 +81,7 @@ async function main(): Promise<void> {
   }
   if (once) {
     const stats = await runOnce();
+    maybeExport(stats);
     store.close();
     process.exit(stats.failed > 0 ? 1 : 0);
   }
@@ -69,7 +89,8 @@ async function main(): Promise<void> {
   const tick = async () => {
     if (stopping) return;
     try {
-      await runOnce();
+      const stats = await runOnce();
+      maybeExport(stats);
     } catch (err) {
       console.error(`[cleaner] batch error: ${err instanceof Error ? err.message : String(err)}`);
     }

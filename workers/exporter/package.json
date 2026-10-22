@@ -1,0 +1,25 @@
+{
+  "name": "@data-pipeline/exporter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static site exporter: render the cleaned items into plain HTML/CSS/JSON for nginx to serve directly.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/export.d.ts",
+      "default": "./dist/src/export.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/main.js",
+    "test": "node --test dist/tests/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

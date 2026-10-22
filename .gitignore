@@ -10,3 +10,4 @@ workers/cleaner/output/
 logs/
 .next/
 next-env.d.ts
+web-dist/

@@ -11,6 +11,7 @@
 |---|---|
 | `apps/api/` | 收集服务（原根目录 `src/` 整体搬入，逻辑未改） |
 | `workers/cleaner/` | 清洗服务：拉记录 → 质量门 → LLM 清洗 → 结构化条目落自己的 SQLite；pm2 定时服务或单次跑批，见下节 |
+| `workers/exporter/` | 静态站点导出：把清洗结果渲染成纯静态站（列表页 + 详情页 + items.json），nginx 直供，见「静态站点」节 |
 | `packages/shared/` | 共享契约（仅类型）：`RawRecord` 线格式与 `CleanedItem` 草案 schema |
 | `skills/` | pipe-push 各运行时变体（见下） |
 | `docs/` | [设计文档](docs/design.md) 与 [结构说明](docs/architecture.md) |
@@ -77,6 +78,22 @@ pm2 start ecosystem.config.cjs --only data-cleaner   # 服务模式：启动先�
 LLM 走 OpenAI 兼容接口，只认三个环境变量：`LLM_API_KEY`、`LLM_BASE_URL`（默认 OpenRouter）、`LLM_MODEL`（默认 openai/gpt-4o-mini）。**不设 Key 时自动用 mock provider**（按 markdown 标题启发式拆条）先跑通全链路，结果在库里标记 provider=mock，不得当作 LLM 产出。清洗提示词在 `workers/cleaner/prompts/clean.md`（clean-v1）。
 
 查清洗结果：`sqlite3 workers/cleaner/data/cleaned.sqlite "SELECT COUNT(*) FROM cleaned_items;"`
+
+## 静态站点（workers/exporter）
+
+展示层是静态导出而不是应用服务：数据只在清洗时变化，所以 cleaner 每轮有新清洗时自动重新导出站点（`WEB_EXPORT_ON_CLEAN=false` 可关；也可手动 `npm run export`）。导出产物（样式沿用 agentic-news 的视觉）：`index.html`（统计 + 分类/重要性筛选 + 搜索，浏览器端过滤）、`item/<id>/index.html`（逐条预渲染详情）、`items.json`（全量数据）。
+
+发布是原子的：每代写进 `web-dist/releases/<时间戳>/`，再把 `web-dist/current` 符号链接一翻切换（保留最近 3 代）；导出失败只记日志，不影响清洗结果，也不动线上那一代。nginx 指向符号链接即可：
+
+```nginx
+location /data-ui/ {
+    alias /home/ec2-user/app/data-pipeline/web-dist/current/;
+    try_files $uri $uri/ =404;
+    add_header Cache-Control "no-cache";
+}
+```
+
+api 的 cleaned 只读接口保留给程序化消费方，静态站不依赖它。
 
 ## Skill 变体（skills/）
 
