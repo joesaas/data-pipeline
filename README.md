@@ -10,7 +10,7 @@
 | 目录 | 内容 |
 |---|---|
 | `apps/api/` | 收集服务（原根目录 `src/` 整体搬入，逻辑未改） |
-| `workers/cleaner/` | 清洗进程骨架：拉记录 → 质量门 → LLM 清洗 → 结构化输出；LLM 与输出落点待定版，见 [docs/architecture.md](docs/architecture.md) |
+| `workers/cleaner/` | 清洗服务：拉记录 → 质量门 → LLM 清洗 → 结构化条目落自己的 SQLite；pm2 定时服务或单次跑批，见下节 |
 | `packages/shared/` | 共享契约（仅类型）：`RawRecord` 线格式与 `CleanedItem` 草案 schema |
 | `skills/` | pipe-push 各运行时变体（见下） |
 | `docs/` | [设计文档](docs/design.md) 与 [结构说明](docs/architecture.md) |
@@ -55,6 +55,22 @@ curl -X POST http://localhost:8080/data-pipeline/api/v1/records \
 
 Docker：`docker compose up -d`。
 
+
+## 清洗服务（workers/cleaner）
+
+把 records（多为整篇简报）用 LLM 拆成结构化条目（schema v1 在 `packages/shared`：title / summary / detail / category / tags / event_date / sources / importance），存入 cleaner 自己的 SQLite（`CLEANER_DATA_DIR/cleaned.sqlite`，表 `cleaned_records` + `cleaned_items`）。幂等键是 (记录 id, content_hash)：内容没变不重复洗、不重复花钱。
+
+运行方式（二选一）：
+
+```bash
+npm run clean        # 单次跑批：构建 + 清洗一遍 + 退出
+pm2 start ecosystem.config.cjs --only data-cleaner   # 服务模式：启动先跑一遍，之后每 CLEANER_INTERVAL_MINUTES 分钟一轮
+```
+
+LLM 走 OpenAI 兼容接口，只认三个环境变量：`LLM_API_KEY`、`LLM_BASE_URL`（默认 OpenRouter）、`LLM_MODEL`（默认 openai/gpt-4o-mini）。**不设 Key 时自动用 mock provider**（按 markdown 标题启发式拆条）先跑通全链路，结果在库里标记 provider=mock，不得当作 LLM 产出。清洗提示词在 `workers/cleaner/prompts/clean.md`（clean-v1）。
+
+查清洗结果：`sqlite3 workers/cleaner/data/cleaned.sqlite "SELECT COUNT(*) FROM cleaned_items;"`
+
 ## Skill 变体（skills/）
 
 | 目录 | 运行时 | 说明 |
@@ -76,7 +92,8 @@ Docker：`docker compose up -d`。
 | skill 名 | pipe-push | 按建议默认，可改名 |
 | 限额 | 内容 1 MB、每分钟 60 次 | 按建议默认，环境变量可调 |
 | Web 查看页 | 一期未做 | 用 API 查询 |
-| 仓库结构 | 2026-10-22 按 agentic-news 分法重组为 apps/workers/packages + npm workspaces | li 定版；api 逻辑未改，cleaner 为骨架 |
+| 仓库结构 | 2026-10-22 按 agentic-news 分法重组为 apps/workers/packages + npm workspaces | li 定版；api 逻辑未改 |
+| 清洗服务 | 2026-10-22 实现：schema v1、cleaner 自有 SQLite 落存、OpenAI 兼容 provider（默认 OpenRouter + gpt-4o-mini，无 Key 时 mock）、pm2 定时服务 | 实现默认项，模型与间隔均可经环境变量改 |
 
 ## 测试
 

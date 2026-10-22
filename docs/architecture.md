@@ -27,21 +27,19 @@ npm start          # 启动 apps/api（根脚本转发）
 npm run clean      # 构建并运行 workers/cleaner 一次
 ```
 
-## cleaner 管线与未定项
+## cleaner 管线（2026-10-22 已实现）
 
 管线形状与 agentic-news 的 workers/cleaner 对齐：
-取原始条目 → 质量门（quality.ts，太短/营销直接拒）→ LLM 清洗
-（providers.ts，只依赖接口不绑厂商）→ 校验 → 输出。幂等靠原始记录 id：
-同一条记录重复跑不产出两份结果（落地时以 source_record_id 唯一约束保证）。
+取原始条目 → 质量门（quality.ts，太短/营销直接拒）→ 幂等检查
+（(记录 id, content_hash) 已洗则跳过）→ LLM 清洗（providers.ts 只依赖
+接口不绑厂商，提示词 prompts/clean.md）→ 校验（validate.ts，坏条目丢弃
+不拖垮整批）→ 落存。
 
-未定项（2026-10-22，均待逐项定版后再实现）：
+实现定版（均为可改默认值，改法只动环境变量或对应小模块）：
 
-1. 结构化输出的最终 schema（packages/shared 里是 v0 草案）与清洗结果存哪。
-2. 用哪个 LLM / provider（providers.ts 目前返回 null，cleaner 只做质量门与待洗统计）。
-3. 触发方式：手动跑批、定时，还是记录入库后自动触发。
-
-## 部署影响
-
-线上 EC2 的操作不变：在仓库根目录 `git pull` → `npm install` → `npm run build`
-→ `npm start`（根脚本转发到 apps/api）。Docker 路径同样保留：
-根目录 `docker compose up -d`（构建上下文已改为 apps/api）。
+1. 输出 schema v1：见 packages/shared 的 CleanedRecord / CleanedItem。
+2. 落存：cleaner 自有 SQLite（CLEANER_DATA_DIR/cleaned.sqlite），不写 API 的库。
+3. LLM：OpenAI 兼容接口，默认 OpenRouter + openai/gpt-4o-mini；
+   无 LLM_API_KEY 时自动降级 mock provider（启发式拆条，结果带 mock 标记）。
+4. 触发：服务模式（pm2）启动先跑一遍、之后按 CLEANER_INTERVAL_MINUTES
+   定时重复；`--once` 单次模式保留给手动跑批与测试。

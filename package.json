@@ -18,7 +18,7 @@
     "start": "npm run start -w @data-pipeline/api",
     "dev": "npm run dev -w @data-pipeline/api",
     "create-token": "npm run create-token -w @data-pipeline/api",
-    "clean": "npm run build -w @data-pipeline/cleaner && npm run start -w @data-pipeline/cleaner"
+    "clean": "npm run build -w @data-pipeline/shared -w @data-pipeline/cleaner && node workers/cleaner/dist/src/main.js --once"
   },
   "devDependencies": {
     "typescript": "^5.7.0"

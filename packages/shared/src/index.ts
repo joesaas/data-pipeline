@@ -31,35 +31,42 @@ export interface RecordsPage {
   offset: number;
 }
 
-/**
- * CleanedItem is a DRAFT (v0) — the cleaning stage was agreed on 2026-10-22,
- * but the final output schema and where cleaned items are stored are still
- * open decisions. Do not treat this shape as final.
- */
+/* ------------------------------------------------------------------ */
+/* Cleaning output schema v1 (decided 2026-10-22, implemented in       */
+/* workers/cleaner). One raw record (e.g. a whole news brief) is       */
+/* cleaned into one CleanedRecord holding many CleanedItems.           */
+/* ------------------------------------------------------------------ */
+
 export interface CleanedSource {
   name: string;
   url: string;
 }
 
+export type Importance = "high" | "medium" | "low";
+
 export interface CleanedItem {
-  /** id of the RawRecord this item was extracted from */
-  source_record_id: string;
   title: string;
+  /** 1-3 sentence summary of what happened */
   summary: string;
+  /** optional longer detail (mechanism / what changed) */
   detail?: string;
-  category?: string;
+  /** topic bucket, e.g. "Web3 DeFi" / "AI Agent"; "未分类" when unclear */
+  category: string;
   tags: string[];
-  /** ISO date of the event itself, not of the brief that reported it */
-  event_date?: string;
+  /** ISO date (yyyy-mm-dd) of the event itself, null when not stated */
+  event_date: string | null;
   sources: CleanedSource[];
-  importance?: "high" | "medium" | "low";
+  importance: Importance;
 }
 
 export interface CleanedRecord {
-  schema_version: 0;
+  schema_version: 1;
   source_record_id: string;
+  /** content_hash of the raw record at cleaning time (idempotency key) */
+  content_hash: string;
   cleaned_at: string;
   provider: string;
   model: string;
+  prompt_version: string;
   items: CleanedItem[];
 }

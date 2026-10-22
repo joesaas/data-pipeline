@@ -1,56 +1,96 @@
 /**
- * cleaner worker entry (batch, run manually or on a schedule):
+ * cleaner worker — a pm2-managed scheduled service.
  *
- *   fetch raw records via GET /api/v1/records
- *   -> quality gate (src/quality.ts)
- *   -> LLM cleaning (src/providers.ts) into structured items
- *   -> write cleaned output (sink not decided yet, see docs/architecture.md)
+ * Default (service) mode: run one batch on start, then repeat every
+ * CLEANER_INTERVAL_MINUTES (default 60). Batches never overlap; SIGINT /
+ * SIGTERM finish the in-flight batch, then exit.
  *
- * Current state (2026-10-22): steps 1-2 are live. Step 3 is not wired (no LLM
- * provider chosen), and the output sink is an open decision, so records that
- * pass the gate are reported as "pending" instead of being cleaned. Nothing
- * is written anywhere yet.
+ * One-shot mode: `node dist/src/main.js --once` runs a single batch and
+ * exits (exit code 1 when any record failed).
+ *
+ * Pipeline per record: fetch via API -> quality gate -> skip when
+ * (id, content_hash) already cleaned -> LLM (or mock) -> validate -> SQLite.
  */
-import type { RawRecord, RecordsPage } from "@data-pipeline/shared";
-import { checkQuality } from "./quality.js";
+import { createRecordsClient } from "./client.js";
 import { createLlmProvider } from "./providers.js";
+import { CleanerStore } from "./store.js";
+import { loadCleanPrompt } from "./prompt.js";
+import { runBatch, type BatchStats } from "./batch.js";
 
-const baseUrl = (process.env.DATA_PIPELINE_BASE_URL ?? "https://agent101.uk/data-pipeline").replace(/\/$/, "");
+const once = process.argv.includes("--once");
+const baseUrl = process.env.DATA_PIPELINE_BASE_URL?.trim() || "https://agent101.uk/data-pipeline";
 const limit = Number(process.env.CLEANER_LIMIT ?? 100);
+const maxPerRun = Number(process.env.CLEANER_MAX_PER_RUN ?? 20);
+const intervalMinutes = Math.max(1, Number(process.env.CLEANER_INTERVAL_MINUTES ?? 60));
 
-async function fetchRecords(): Promise<RawRecord[]> {
-  const res = await fetch(`${baseUrl}/api/v1/records?limit=${limit}&offset=0`);
-  if (!res.ok) throw new Error(`GET records failed: ${res.status} ${res.statusText}`);
-  const page = (await res.json()) as RecordsPage;
-  return page.items;
+const provider = createLlmProvider(process.env);
+const store = new CleanerStore(CleanerStore.defaultPath());
+const deps = {
+  client: createRecordsClient(baseUrl),
+  provider,
+  store,
+  systemPrompt: loadCleanPrompt(),
+  limit,
+  maxPerRun,
+};
+
+let stopping = false;
+let inFlight: Promise<BatchStats> | null = null;
+
+async function runOnce(): Promise<BatchStats> {
+  inFlight = runBatch(deps);
+  try {
+    return await inFlight;
+  } finally {
+    inFlight = null;
+  }
 }
 
 async function main(): Promise<void> {
-  const provider = createLlmProvider(process.env);
-  console.log(`[cleaner] source=${baseUrl} llm=${provider ? `${provider.name}/${provider.model}` : "not configured"}`);
-  const records = await fetchRecords();
-  let rejected = 0;
-  let pending = 0;
-  for ( const record of records) {
-    const quality = checkQuality(record);
-    if (!quality.ok) {
-      rejected += 1;
-      console.log(`[cleaner] rejected ${record.id}: ${quality.reason}`);
-      continue;
-    }
-    if (!provider) {
-      pending += 1;
-      console.log(`[cleaner] pending ${record.id}: passed quality gate, no LLM provider yet`);
-      continue;
-    }
-    // TODO(cleaning): call provider.clean(record), validate against the
-    // shared schema, then write to the decided sink.
-    throw new Error("cleaning step not implemented yet");
+  console.log(
+    `[cleaner] start mode=${once ? "once" : "service"} source=${baseUrl} provider=${provider.name}/${provider.model} interval=${intervalMinutes}m store=${CleanerStore.defaultPath()}`,
+  );
+  if (provider.name === "mock") {
+    console.log("[cleaner] WARNING: no LLM_API_KEY set — running the heuristic mock provider; output is marked provider=mock");
   }
-  console.log(`[cleaner] done: total=${records.length} rejected=${rejected} pending=${pending}`);
+  if (once) {
+    const stats = await runOnce();
+    store.close();
+    process.exit(stats.failed > 0 ? 1 : 0);
+  }
+  // service mode: run immediately, then schedule after each batch finishes
+  const tick = async () => {
+    if (stopping) return;
+    try {
+      await runOnce();
+    } catch (err) {
+      console.error(`[cleaner] batch error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!stopping) {
+      // NOTE: the timer must stay ref'd — it is the only handle keeping the
+      // daemon alive between batches.
+      timer = setTimeout(tick, intervalMinutes * 60_000);
+    }
+  };
+  let timer: NodeJS.Timeout | null = setTimeout(tick, 0);
+  const shutdown = async (signal: string) => {
+    if (stopping) return;
+    stopping = true;
+    if (timer) clearTimeout(timer);
+    console.log(`[cleaner] ${signal}: finishing in-flight batch, then exit`);
+    try {
+      await inFlight;
+    } catch {
+      /* already logged */
+    }
+    store.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
 main().catch((err) => {
-  console.error(`[cleaner] failed: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`[cleaner] fatal: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });
