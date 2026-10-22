@@ -5,8 +5,8 @@
   "description": "Web UI for cleaned data (Next.js, style aligned with joesaas/agentic-news).",
   "scripts": {
     "build": "next build",
-    "dev": "next dev -p 3001",
-    "start": "next start -p 3001"
+    "dev": "next dev -p 3101",
+    "start": "next start -p 3101"
   },
   "dependencies": {
     "next": "^15.1.3",
