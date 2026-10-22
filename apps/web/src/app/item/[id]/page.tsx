@@ -2,7 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { fetchItem, fmtDateTime, IMPORTANCE_LABEL } from "../../../lib/api";
 
-const API_BASE = (process.env.DATA_PIPELINE_API_URL ?? "http://localhost:8080/data-pipeline").replace(/\/$/, "");
+// Public mount path of the API (where nginx exposes it) — used only for the
+// "raw record" link. This is NOT the internal fetch URL: DATA_PIPELINE_API_URL
+// points at localhost and would be wrong in a visitor's browser.
+const RECORDS_PATH = process.env.NEXT_PUBLIC_API_PATH ?? "/data-pipeline";
 
 export default async function ItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -58,7 +61,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
       <p className="muted" style={{ marginTop: 24 }}>
         由 {item.provider} / {item.model} 于 {fmtDateTime(item.cleaned_at)} 清洗 ·
         原始记录{" "}
-        <a href={`${API_BASE}/api/v1/records/${item.source_record_id}`} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
+        <a href={`${RECORDS_PATH}/api/v1/records/${item.source_record_id}`} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
           {item.source_record_id.slice(0, 8)}…
         </a>
       </p>
