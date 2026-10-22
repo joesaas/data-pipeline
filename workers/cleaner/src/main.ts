@@ -20,7 +20,10 @@ import { createLlmProvider } from "./providers.js";
 import { CleanerStore } from "./store.js";
 import { loadCleanPrompt } from "./prompt.js";
 import { runBatch, type BatchStats } from "./batch.js";
+import { setupFileLogging } from "./log.js";
 
+const logFile = setupFileLogging("data-cleaner");
+if (logFile) console.log(`[cleaner] logging to ${logFile}`);
 const once = process.argv.includes("--once");
 const baseUrl = process.env.DATA_PIPELINE_BASE_URL?.trim() || "https://agent101.uk/data-pipeline";
 const limit = Number(process.env.CLEANER_LIMIT ?? 100);
