@@ -16,7 +16,18 @@ export function fmtDateTime(iso: string | null): string {
   return new Date(iso).toLocaleString("zh-CN", { hour12: false });
 }
 
-function head(title: string, cssHref: string, base = "./"): string {
+/** Category accent colors, from the agent101.uk palette family. */
+const CATEGORY_PALETTE = ["#7c5cff", "#0ea5a4", "#f59e0b", "#3b82f6", "#ef4444", "#06b6d4", "#71717a"];
+
+export function categoryColor(category: string): string {
+  let hash = 0;
+  for (let i = 0; i < category.length; i++) hash = (hash * 31 + category.charCodeAt(i)) >>> 0;
+  return CATEGORY_PALETTE[hash % CATEGORY_PALETTE.length];
+}
+
+const BOOK_ICON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>`;
+
+function head(title: string, cssHref: string, base = "./", showSearch = false): string {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -27,9 +38,10 @@ function head(title: string, cssHref: string, base = "./"): string {
 </head>
 <body>
 <header class="topbar">
-  <a class="logo" href="${base}"><span class="mark">D</span>data<span>-pipeline</span></a>
-  <nav><a href="${base}">清洗结果</a></nav>
+  <a class="logo" href="${base}"><span class="mark">${BOOK_ICON}</span>Agent 101<span>&nbsp;资讯</span></a>
+  ${showSearch ? `<div class="head-search"><input id="q" placeholder="搜索标题、摘要或标签…" /></div>` : ""}
   <div class="spacer"></div>
+  <a class="head-link" href="/">文档站</a>
 </header>
 <main>`;
 }
@@ -38,19 +50,22 @@ const FILTER_JS = `
 <script>
 (function () {
   var state = { category: "", importance: "", q: "" };
-  var items = Array.prototype.slice.call(document.querySelectorAll(".feed-item"));
+  var items = Array.prototype.slice.call(document.querySelectorAll(".news-card"));
   var count = document.getElementById("count");
+  var pageTitle = document.getElementById("pageTitle");
   function apply() {
     var shown = 0;
-    items.forEach(function (el, i) {
+    items.forEach(function (el) {
       var ok =
         (!state.category || el.dataset.category === state.category) &&
         (!state.importance || el.dataset.importance === state.importance) &&
         (!state.q || el.dataset.search.indexOf(state.q) !== -1);
       el.style.display = ok ? "" : "none";
-      if (ok) { shown++; el.querySelector(".idx").textContent = String(shown).padStart(2, "0"); }
+      if (ok) shown++;
     });
-    if (count) count.textContent = "共 " + shown + " 条";
+    if (count) count.textContent = shown + " 条";
+    var empty = document.getElementById("emptyFilter");
+    if (empty) empty.style.display = shown === 0 && items.length > 0 ? "" : "none";
   }
   function wire(group, key) {
     var box = document.querySelector('[data-group="' + group + '"]');
@@ -59,7 +74,11 @@ const FILTER_JS = `
       var btn = e.target.closest("[data-value]");
       if (!btn) return;
       state[key] = btn.dataset.value;
-      box.querySelectorAll(".chip").forEach(function (c) { c.classList.toggle("on", c === btn); });
+      box.querySelectorAll(".side-item").forEach(function (c) { c.classList.toggle("on", c === btn); });
+      if (key === "category" && pageTitle) {
+        var label = btn.querySelector(".flex");
+        pageTitle.textContent = label ? label.textContent : "全部资讯";
+      }
       apply();
     });
   }
@@ -71,57 +90,62 @@ const FILTER_JS = `
 })();
 </script>`;
 
+function sideItem(opts: { value: string; label: string; count?: number; color?: string; on?: boolean }): string {
+  return `<button type="button" class="side-item${opts.on ? " on" : ""}" data-value="${esc(opts.value)}">${
+    opts.color ? `<span class="dot" style="background:${opts.color}"></span>` : ""
+  }<span class="flex">${esc(opts.label)}</span>${
+    opts.count !== undefined ? `<span class="cnt">${opts.count}</span>` : ""
+  }</button>`;
+}
+
 export function renderIndex(data: ExportData, generatedAt: string): string {
-  const chips = (group: string, values: { value: string; label: string }[]) =>
-    `<div class="chips" data-group="${group}"><span class="lbl">${group === "category" ? "分类" : "重要性"}</span>` +
-    values
-      .map(
-        (v, i) =>
-          `<button type="button" class="chip${i === 0 ? " on" : ""}" data-value="${esc(v.value)}">${esc(v.label)}</button>`,
-      )
-      .join("") +
-    `</div>`;
+  const impCount = (imp: string) => data.items.filter((i) => i.importance === imp).length;
+  const sidebar = `<aside>
+  <nav>
+    <div data-group="category">
+      ${sideItem({ value: "", label: "全部资讯", count: data.items.length, color: "#7c5cff", on: true })}
+      ${data.categories.map((c) => sideItem({ value: c.name, label: c.name, count: c.count, color: categoryColor(c.name) })).join("\n      ")}
+    </div>
+    <div class="side-title">重要性</div>
+    <div data-group="importance">
+      ${sideItem({ value: "", label: "全部重要性", on: true })}
+      ${sideItem({ value: "high", label: "高", count: impCount("high") })}
+      ${sideItem({ value: "medium", label: "中", count: impCount("medium") })}
+      ${sideItem({ value: "low", label: "低", count: impCount("low") })}
+    </div>
+  </nav>
+</aside>`;
 
   const cards = data.items
     .map((item) => {
       const search = `${item.title} ${item.summary} ${item.tags.join(" ")}`.toLowerCase();
-      const srcLine = [item.category, item.event_date ? `事件 ${item.event_date}` : "", item.sources[0]?.name ?? ""]
-        .filter(Boolean)
-        .join(" · ");
-      return `<a class="feed-item" href="item/${encodeURIComponent(item.id)}/" data-category="${esc(item.category)}" data-importance="${esc(item.importance)}" data-search="${esc(search)}">
-  <div class="idx">00</div>
-  <div class="body">
-    <div class="src">${esc(srcLine)}</div>
-    <div class="ttl">${esc(item.title)}</div>
-    <div class="sum">${esc(item.summary)}</div>
-  </div>
-  <div class="side">
+      const date = item.event_date ?? fmtDateTime(item.cleaned_at).slice(0, 10);
+      return `<a class="news-card" href="item/${encodeURIComponent(item.id)}/" data-category="${esc(item.category)}" data-importance="${esc(item.importance)}" data-search="${esc(search)}">
+  <div class="card-top">
+    <span class="pill" style="background:${categoryColor(item.category)}">${esc(item.category)}</span>
+    ${item.sources[0] ? `<span class="pill-gray">${esc(item.sources[0].name)}</span>` : ""}
     <span class="imp imp-${esc(item.importance)}">${esc(IMPORTANCE_LABEL[item.importance] ?? item.importance)}</span>
-    <span class="time">${esc(item.event_date ?? fmtDateTime(item.cleaned_at).slice(0, 10))}</span>
   </div>
+  <div class="card-title">${esc(item.title)}</div>
+  <p class="card-sum">${esc(item.summary)}</p>
+  <div class="card-foot"><span>${esc(date)}</span>${item.tags[0] ? `<span>${esc(item.tags[0])}</span>` : ""}</div>
 </a>`;
     })
     .join("\n");
 
-  return `${head("data-pipeline · 清洗结果", "./styles.css")}
-<h1>清洗结果</h1>
-<div class="stats">
-  <div class="stat"><b>${data.items.length}</b><span>结构化条目</span></div>
-  <div class="stat"><b>${data.records}</b><span>已清洗原始记录</span></div>
-  <div class="stat"><b>${data.categories.length}</b><span>分类</span></div>
-  <div class="stat"><b style="font-size:14px;padding-top:4px">${esc(fmtDateTime(data.lastCleanedAt))}</b><span>最近清洗</span></div>
+  return `${head("Agent 101 资讯 · 全部资讯", "./styles.css", "./", true)}
+<div class="layout">
+${sidebar}
+<section class="content">
+  <div class="page-head"><h1 id="pageTitle">全部资讯</h1><span class="muted" id="count">${data.items.length} 条</span></div>
+  ${
+    data.items.length === 0
+      ? `<div class="card empty"><p>这里还没有资讯</p><p class="muted">新的简报清洗完成后会自动出现在这里</p></div>`
+      : `<div class="grid">\n${cards}\n</div>
+  <div class="card empty" id="emptyFilter" style="display:none"><p>这个筛选下没有资讯</p><p class="muted">换个分类或清除搜索试试</p></div>`
+  }
+</section>
 </div>
-${chips("category", [{ value: "", label: "全部" }, ...data.categories.map((c) => ({ value: c.name, label: `${c.name} · ${c.count}` }))])}
-${chips("importance", [
-  { value: "", label: "全部重要性" },
-  { value: "high", label: "高" },
-  { value: "medium", label: "中" },
-  { value: "low", label: "低" },
-])}
-<div class="searchbar"><input id="q" placeholder="搜索标题或摘要…" /></div>
-<p class="muted" id="count" style="margin:14px 0 10px">共 ${data.items.length} 条</p>
-${data.items.length === 0 ? `<div class="card"><p>还没有清洗结果。等 cleaner 下一轮跑完，这里会自动更新。</p></div>` : cards}
-<p class="muted" style="margin-top:24px">静态页面 · 生成于 ${esc(fmtDateTime(generatedAt))} · 数据随清洗批次更新</p>
 </main>
 ${FILTER_JS}
 </body>
@@ -140,15 +164,22 @@ export function renderItem(item: ExportItem, publicApiPath: string): string {
           .map((s) => `<div><a href="${esc(s.url)}" target="_blank" rel="noreferrer">${esc(s.name || s.url)}</a></div>`)
           .join("")}</div>`
       : "";
+  const date = item.event_date ?? fmtDateTime(item.cleaned_at).slice(0, 10);
   return `${head(item.title, "../../styles.css", "../../")}
-<p class="muted"><a href="../../" style="color:var(--accent)">← 返回列表</a> · ${esc(item.category)} · 重要性 ${esc(IMPORTANCE_LABEL[item.importance] ?? item.importance)}${item.event_date ? ` · 事件日期 ${esc(item.event_date)}` : ""}</p>
-<h1 style="line-height:1.4">${esc(item.title)}</h1>
+<p class="muted"><a href="../../" style="color:var(--accent-strong)">← 返回列表</a></p>
+<div class="card-top" style="margin-top:12px">
+  <span class="pill" style="background:${categoryColor(item.category)}">${esc(item.category)}</span>
+  ${item.sources[0] ? `<span class="pill-gray">${esc(item.sources[0].name)}</span>` : ""}
+  <span class="imp imp-${esc(item.importance)}">重要性 ${esc(IMPORTANCE_LABEL[item.importance] ?? item.importance)}</span>
+</div>
+<h1 style="line-height:1.45;font-size:22px;margin-top:12px">${esc(item.title)}</h1>
+<p class="muted">${esc(date)}${item.event_date ? " · 事件日期" : ""}</p>
 <div style="margin:10px 0">${tags}</div>
 <h2>摘要</h2>
 <div class="card"><p class="summary">${esc(item.summary)}</p></div>
 ${detail}
 ${sources}
-<p class="muted" style="margin-top:24px">由 ${esc(item.provider)} / ${esc(item.model)} 于 ${esc(fmtDateTime(item.cleaned_at))} 清洗 · 原始记录 <a href="${esc(publicApiPath)}/api/v1/records/${encodeURIComponent(item.source_record_id)}" target="_blank" rel="noreferrer" style="color:var(--accent)">${esc(item.source_record_id.slice(0, 8))}…</a></p>
+<p class="muted" style="margin-top:24px">由 ${esc(item.provider)} / ${esc(item.model)} 于 ${esc(fmtDateTime(item.cleaned_at))} 清洗 · 原始记录 <a href="${esc(publicApiPath)}/api/v1/records/${encodeURIComponent(item.source_record_id)}" target="_blank" rel="noreferrer" style="color:var(--accent-strong)">${esc(item.source_record_id.slice(0, 8))}…</a></p>
 </main>
 </body>
 </html>

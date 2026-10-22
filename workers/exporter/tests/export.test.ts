@@ -43,7 +43,7 @@ describe("exportSite", () => {
     const result = exportSite({ dbFile, outDir, now: new Date("2026-10-22T15:00:00Z") });
     assert.equal(result.items, 1);
     const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
-    assert.ok(index.includes("结构化条目"));
+    assert.ok(index.includes("全部资讯"));
     assert.ok(index.includes("标题 &lt;script&gt;"), "titles must be HTML-escaped");
     assert.ok(!index.includes("<script>alert(1)</script>"), "no raw injection");
     assert.ok(index.includes('href="item/item-1/"'));
@@ -69,6 +69,6 @@ describe("exportSite", () => {
   it("exports an empty site when the database does not exist yet", () => {
     const result = exportSite({ dbFile: join(dir, "missing.sqlite"), outDir: join(dir, "empty-dist") });
     assert.equal(result.items, 0);
-    assert.ok(readFileSync(join(result.releaseDir, "index.html"), "utf8").includes("还没有清洗结果"));
+    assert.ok(readFileSync(join(result.releaseDir, "index.html"), "utf8").includes("这里还没有资讯"));
   });
 });
