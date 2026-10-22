@@ -79,6 +79,10 @@ LLM 走 OpenAI 兼容接口，只认三个环境变量：`LLM_API_KEY`、`LLM_BA
 
 查清洗结果：`sqlite3 workers/cleaner/data/cleaned.sqlite "SELECT COUNT(*) FROM cleaned_items;"`
 
+## 运维脚本（deploy.sh）
+
+仓库根的 `deploy.sh` 把日常运维收成一个入口，`./deploy.sh help` 列全部操作：`deploy`（拉代码→构建→重启→状态一键走完）、`update`、`build`、`start/stop/restart [api|cleaner]`、`status`、`logs [服务] [行数]`、`export`（手动导出静态站）、`health`（本机/公网 API、清洗统计、静态站五项检查）。
+
 ## 静态站点（workers/exporter）
 
 展示层是静态导出而不是应用服务：数据只在清洗时变化，所以 cleaner 每轮有新清洗时自动重新导出站点（`WEB_EXPORT_ON_CLEAN=false` 可关；也可手动 `npm run export`）。导出产物（样式沿用 agentic-news 的视觉）：`index.html`（统计 + 分类/重要性筛选 + 搜索，浏览器端过滤）、`item/<id>/index.html`（逐条预渲染详情）、`items.json`（全量数据）。
