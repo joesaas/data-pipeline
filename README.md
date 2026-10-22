@@ -4,6 +4,19 @@
 
 设计文档：[docs/design.md](docs/design.md)（遵循单一职责、开闭、里氏替换、接口隔离、依赖倒置、迪米特六大原则）
 
+
+## 仓库结构（2026-10-22 按 agentic-news 分法重组）
+
+| 目录 | 内容 |
+|---|---|
+| `apps/api/` | 收集服务（原根目录 `src/` 整体搬入，逻辑未改） |
+| `workers/cleaner/` | 清洗进程骨架：拉记录 → 质量门 → LLM 清洗 → 结构化输出；LLM 与输出落点待定版，见 [docs/architecture.md](docs/architecture.md) |
+| `packages/shared/` | 共享契约（仅类型）：`RawRecord` 线格式与 `CleanedItem` 草案 schema |
+| `skills/` | pipe-push 各运行时变体（见下） |
+| `docs/` | [设计文档](docs/design.md) 与 [结构说明](docs/architecture.md) |
+
+根目录是 npm workspaces 入口：`npm install` / `npm run build` / `npm test` / `npm start` 都在根目录执行，与重组前用法一致。
+
 ## 快速开始
 
 需要 **Node >= 22**（SQLite 驱动用内置 `node:sqlite`；仓库带 `.nvmrc`，`nvm use` 即可）。
@@ -63,6 +76,7 @@ Docker：`docker compose up -d`。
 | skill 名 | pipe-push | 按建议默认，可改名 |
 | 限额 | 内容 1 MB、每分钟 60 次 | 按建议默认，环境变量可调 |
 | Web 查看页 | 一期未做 | 用 API 查询 |
+| 仓库结构 | 2026-10-22 按 agentic-news 分法重组为 apps/workers/packages + npm workspaces | li 定版；api 逻辑未改，cleaner 为骨架 |
 
 ## 测试
 

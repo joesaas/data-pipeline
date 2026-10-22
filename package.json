@@ -1,26 +1,26 @@
 {
-  "dependencies": {
-    "express": "^4.19.2"
-  },
-  "description": "Data collection service: agents push prompt+content pairs via API; companion skills for Muse, Grok Bot, Codex, Claude Code, Gemini.",
-  "devDependencies": {
-    "@types/express": "^4.17.21",
-    "@types/node": "^22.10.0",
-    "typescript": "^5.7.0"
-  },
+  "name": "data-pipeline",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Data pipeline monorepo: apps/api (collection service), workers/cleaner (LLM cleaning), packages/shared (contracts), skills/ (pipe-push variants).",
+  "type": "module",
   "engines": {
     "node": ">=22"
   },
-  "name": "data-pipeline",
-  "private": true,
+  "workspaces": [
+    "apps/*",
+    "workers/*",
+    "packages/*"
+  ],
   "scripts": {
-    "prebuild": "node scripts/check-node.mjs",
-    "build": "tsc -p tsconfig.json",
-    "create-token": "node dist/src/cli/create-token.js",
-    "dev": "npm run build && node dist/src/server.js",
-    "start": "node dist/src/server.js",
-    "test": "npm run build && node --test dist/tests/*.test.js"
+    "build": "npm run build -w @data-pipeline/shared && npm run build -w @data-pipeline/api && npm run build -w @data-pipeline/cleaner",
+    "test": "npm run build && npm run test --workspaces --if-present",
+    "start": "npm run start -w @data-pipeline/api",
+    "dev": "npm run dev -w @data-pipeline/api",
+    "create-token": "npm run create-token -w @data-pipeline/api",
+    "clean": "npm run build -w @data-pipeline/cleaner && npm run start -w @data-pipeline/cleaner"
   },
-  "type": "module",
-  "version": "0.1.0"
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
 }

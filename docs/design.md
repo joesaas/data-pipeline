@@ -248,3 +248,10 @@ pipe-push/
 | 遵循六大设计原则 | ok 文首原则表逐条给出落地方式；模块划分、存储接口、变体扩展三处已按原则改实 |
 | 待定项标清 | ok 第 6 节共 8 项：2 项已按你的决定确认（Node + TypeScript、鉴权可配置默认关），其余 6 项待定且均带建议与影响面 |
 | 确认后能直接开工 | ok 第 7 节实施路线四阶段，顺序与依赖已排 |
+
+## 仓库结构变更（2026-10-22）
+
+收集阶段完成后转入清洗阶段。经 li 定版，仓库按 joesaas/agentic-news 的
+顶层分法重组（apps / workers / packages，npm workspaces 轻量版）：
+原根目录 `src/` 整体搬入 `apps/api/`（逻辑未改），新增 `workers/cleaner/`
+清洗骨架与 `packages/shared/` 共享契约。详见 docs/architecture.md。

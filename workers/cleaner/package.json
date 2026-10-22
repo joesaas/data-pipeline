@@ -1,0 +1,22 @@
+{
+  "name": "@data-pipeline/cleaner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cleaner worker: fetch raw records via the API, run the quality gate, clean them with an LLM into structured items.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/main.js",
+    "test": "node --test dist/tests/*.test.js"
+  },
+  "dependencies": {
+    "@data-pipeline/shared": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

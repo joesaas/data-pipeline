@@ -1,6 +1,7 @@
 services:
   api:
-    build: .
+    build:
+      context: ./apps/api
     ports:
       - "8080:8080"
     environment:
