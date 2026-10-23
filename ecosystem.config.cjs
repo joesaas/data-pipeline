@@ -21,7 +21,9 @@ module.exports = {
       env: {
         DATA_PIPELINE_BASE_URL: "https://agent101.uk/data-pipeline",
         CLEANER_DATA_DIR: path.join(root, "workers/cleaner/data"),
-        CLEANER_INTERVAL_MINUTES: 60,
+        // CLEANER_INTERVAL_MINUTES intentionally NOT set here: pm2 env beats
+        // .env (real env wins by design), so the interval lives in the repo
+        // root .env only. In-code default is 60 when neither sets it.
         // LLM_API_KEY: "...",            // set on the server; without it the cleaner runs the mock provider
         // LLM_BASE_URL: "https://openrouter.ai/api/v1",
         // LLM_MODEL: "openai/gpt-4o-mini",
