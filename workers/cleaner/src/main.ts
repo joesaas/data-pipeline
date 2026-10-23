@@ -15,7 +15,6 @@ import { join } from "node:path";
 import { loadDefaultEnv } from "./load-env.js";
 
 const envFile = loadDefaultEnv();
-if (envFile) console.log(`[cleaner] loaded env from ${envFile}`);
 import { createRecordsClient } from "./client.js";
 import { createLlmProvider } from "./providers.js";
 import { CleanerStore } from "./store.js";
@@ -26,6 +25,7 @@ import { exportSite } from "@data-pipeline/exporter";
 
 const logFile = setupFileLogging("data-cleaner");
 if (logFile) console.log(`[cleaner] logging to ${logFile}`);
+console.log(`[cleaner] env file: ${envFile ?? "(none found)"}`);
 const once = process.argv.includes("--once");
 const baseUrl = process.env.DATA_PIPELINE_BASE_URL?.trim() || "https://agent101.uk/data-pipeline";
 const limit = Number(process.env.CLEANER_LIMIT ?? 100);

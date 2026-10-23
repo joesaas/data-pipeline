@@ -4,9 +4,9 @@ import { loadDefaultEnv } from "./load-env.js";
 import { setupFileLogging } from "./log.js";
 
 const envFile = loadDefaultEnv();
-if (envFile) console.log(`data-pipeline: loaded env from ${envFile}`);
 const logFile = setupFileLogging("data-pipeline");
 if (logFile) console.log(`data-pipeline: logging to ${logFile}`);
+console.log(`data-pipeline: env file: ${envFile ?? "(none found)"}`);
 const config = loadConfig();
 const { app } = createApp(config);
 app.listen(config.port, () => {
