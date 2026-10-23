@@ -14,6 +14,28 @@ export function extractJson(text: string): unknown {
   return JSON.parse(stripped.slice(start, end + 1));
 }
 
+/**
+ * Canonical category names. The prompt asks for these verbatim, but models
+ * drift ("GitHub 热点" one day, "开源项目" the next) and a drifted name
+ * splits one sidebar category into two. Aliases fold known variants back.
+ */
+const CATEGORY_ALIASES: Record<string, string> = {
+  github: "GitHub 热点项目",
+  "github 热点": "GitHub 热点项目",
+  "github热点": "GitHub 热点项目",
+  "github 热门项目": "GitHub 热点项目",
+  "github热门项目": "GitHub 热点项目",
+  "github trending": "GitHub 热点项目",
+  "开源项目": "GitHub 热点项目",
+  "热门开源项目": "GitHub 热点项目",
+};
+
+export function canonicalCategory(raw: string): string {
+  const c = raw.trim();
+  if (!c) return "未分类";
+  return CATEGORY_ALIASES[c.toLowerCase()] ?? c;
+}
+
 function asString(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
@@ -54,7 +76,7 @@ export function validateCleanedItems(raw: unknown): ValidationOutcome {
       title,
       summary,
       ...(detail ? { detail } : {}),
-      category: asString(e.category) || "未分类",
+      category: canonicalCategory(asString(e.category)),
       tags,
       event_date: validDate(e.event_date),
       sources,

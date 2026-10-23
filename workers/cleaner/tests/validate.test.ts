@@ -41,6 +41,18 @@ describe("validateCleanedItems", () => {
     });
     assert.equal(items[0].event_date, "2026-10-21");
   });
+  it("folds category aliases to the canonical name", () => {
+    const { items } = validateCleanedItems({
+      items: [
+        { title: "a", summary: "s", category: "GitHub 热点" },
+        { title: "b", summary: "s", category: "开源项目" },
+        { title: "c", summary: "s", category: "Web3 DeFi" },
+      ],
+    });
+    assert.equal(items[0].category, "GitHub 热点项目");
+    assert.equal(items[1].category, "GitHub 热点项目");
+    assert.equal(items[2].category, "Web3 DeFi");
+  });
   it("throws when items is not an array", () => {
     assert.throws(() => validateCleanedItems({ nope: 1 }));
   });

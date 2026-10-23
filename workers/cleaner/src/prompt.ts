@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const PROMPT_VERSION = "clean-v2";
+export const PROMPT_VERSION = "clean-v3";
 
 const FALLBACK = `你是一名数据清洗员。把输入的资讯简报拆成结构化条目，只输出 JSON：
 {"items":[{"title":"...","summary":"...","category":"...","tags":[],"event_date":null,"sources":[{"name":"...","url":"https://..."}]}]}

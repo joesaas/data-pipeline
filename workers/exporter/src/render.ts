@@ -28,6 +28,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   "Web3 DeFi": "#0ea5a4",
   "DeFi Protocol": "#3b82f6",
   "区块链技术": "#f59e0b",
+  "GitHub 热点项目": "#8250df",
 };
 const FALLBACK_PALETTE = ["#8b5cf6", "#06b6d4", "#f97316", "#22c55e", "#ec4899", "#6366f1"];
 
