@@ -140,3 +140,68 @@ describe("cleaned endpoints without a cleaned database yet", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("cleaned endpoints: category merge + translation", () => {
+  let dir: string;
+  let server: Server;
+  let base: string;
+
+  before(async () => {
+    dir = mkdtempSync(join(tmpdir(), "cleaned-merge-"));
+    const cleanedDbFile = join(dir, "cleaned.sqlite");
+    const db = new DatabaseSync(cleanedDbFile);
+    db.exec(`
+      CREATE TABLE cleaned_records (
+        source_record_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, cleaned_at TEXT NOT NULL,
+        provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, item_count INTEGER NOT NULL,
+        source_agent TEXT NOT NULL DEFAULT '');
+      CREATE TABLE cleaned_items (
+        id TEXT PRIMARY KEY, source_record_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL,
+        summary TEXT NOT NULL, detail TEXT, category TEXT NOT NULL, tags TEXT NOT NULL,
+        event_date TEXT, sources TEXT NOT NULL, translation_zh TEXT);
+    `);
+    db.prepare("INSERT INTO cleaned_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("rec-9", "hash-9", "2026-10-23T01:00:00.000Z", "openai-compatible", "openai/gpt-4o-mini", "clean-v4", 2, "muse");
+    const insert = db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    insert.run("it-a", "rec-9", 0, "Aave proposes V3.8 upgrade", "Lending pool gets reentrancy guard", null,
+      "DeFi Protocol", "[]", "2026-10-21", "[]",
+      JSON.stringify({ title: "Aave 提出 V3.8 升级", summary: "借贷池增加重入防护" }));
+    insert.run("it-b", "rec-9", 1, "Solana Alpenglow goes live", "New consensus on mainnet", null,
+      "Web3 DeFi", "[]", "2026-10-22", "[]", null);
+    db.close();
+    const config: AppConfig = {
+      port: 0, basePath: "/data-pipeline", dataDir: dir, storage: "sqlite", authRequired: false,
+      maxContentBytes: 1_048_576, maxPromptBytes: 65_536, rateLimitPerMin: 60, cleanedDbFile,
+    };
+    const { app } = createApp(config);
+    server = app.listen(0);
+    await new Promise<void>((r) => server.once("listening", r));
+    const addr = server.address();
+    base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}/data-pipeline`;
+  });
+
+  after(() => {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("?category=Web3 DeFi also matches stored DeFi Protocol rows, reported merged", async () => {
+    const body = (await (await fetch(`${base}/api/v1/cleaned/items?category=Web3%20DeFi`)).json()) as {
+      total: number;
+      items: { id: string; category: string; title_zh: string | null }[];
+    };
+    assert.equal(body.total, 2);
+    assert.ok(body.items.every((i) => i.category === "Web3 DeFi"));
+    const a = body.items.find((i) => i.id === "it-a")!;
+    assert.equal(a.title_zh, "Aave 提出 V3.8 升级");
+    const b = body.items.find((i) => i.id === "it-b")!;
+    assert.equal(b.title_zh, null);
+  });
+
+  it("stats merge the two spellings into one category", async () => {
+    const stats = (await (await fetch(`${base}/api/v1/cleaned/stats`)).json()) as {
+      categories: { name: string; count: number }[];
+    };
+    assert.deepEqual(stats.categories, [{ name: "Web3 DeFi", count: 2 }]);
+  });
+});

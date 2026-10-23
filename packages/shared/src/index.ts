@@ -104,3 +104,62 @@ export type WeightTier = 1 | 2 | 3;
 export function weightTier(weight: number): WeightTier {
   return weight >= 50 ? 1 : weight >= 20 ? 2 : 3;
 }
+
+/* ------------------------------------------------------------------ */
+/* Canonical categories. The cleaning prompt asks for canonical names */
+/* verbatim, but models drift ("DeFi Protocol" vs "Web3 DeFi"), and a  */
+/* drifted name splits one sidebar category into two. This table is   */
+/* the single source of truth: the cleaner folds aliases at write     */
+/* time, readers fold again at read time (so rows stored before an    */
+/* alias existed merge instantly, without a re-clean).                 */
+/* ------------------------------------------------------------------ */
+
+const CATEGORY_ALIASES: Record<string, string> = {
+  github: "GitHub 热点项目",
+  "github 热点": "GitHub 热点项目",
+  "github热点": "GitHub 热点项目",
+  "github 热门项目": "GitHub 热点项目",
+  "github热门项目": "GitHub 热点项目",
+  "github trending": "GitHub 热点项目",
+  "开源项目": "GitHub 热点项目",
+  "热门开源项目": "GitHub 热点项目",
+  "defi protocol": "Web3 DeFi",
+  "defi 协议": "Web3 DeFi",
+  "defi协议": "Web3 DeFi",
+  "web3 defi protocol": "Web3 DeFi",
+};
+
+export function canonicalCategory(raw: string): string {
+  const c = raw.trim();
+  if (!c) return "未分类";
+  return CATEGORY_ALIASES[c.toLowerCase()] ?? c;
+}
+
+/** Every stored spelling that folds into `canonical` (for SQL IN filters). */
+export function categoryAliasesFor(canonical: string): string[] {
+  const names = new Set<string>([canonical]);
+  for (const [alias, target] of Object.entries(CATEGORY_ALIASES)) {
+    if (target === canonical) names.add(alias);
+  }
+  return [...names];
+}
+
+/** Chinese translation of an item's display fields, produced by one
+ *  batched LLM call per cleaning round (never per item). Stored on the
+ *  item row as JSON text in cleaned_items.translation_zh. */
+export interface TranslationZh {
+  title: string;
+  summary: string;
+}
+
+export function parseTranslationZh(text: string | null | undefined): TranslationZh | null {
+  if (!text) return null;
+  try {
+    const v = JSON.parse(text) as { title?: unknown; summary?: unknown };
+    const title = typeof v.title === "string" ? v.title.trim() : "";
+    const summary = typeof v.summary === "string" ? v.summary.trim() : "";
+    return title || summary ? { title, summary } : null;
+  } catch {
+    return null;
+  }
+}

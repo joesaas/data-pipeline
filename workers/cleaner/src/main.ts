@@ -20,6 +20,7 @@ import { LlmRateLimiter } from "./ratelimit.js";
 import { createLlmProvider } from "./providers.js";
 import { CleanerStore } from "./store.js";
 import { loadCleanPrompt } from "./prompt.js";
+import { loadTranslatePrompt } from "./translate.js";
 import { runBatch, type BatchStats } from "./batch.js";
 import { repoRoot, setupFileLogging } from "./log.js";
 import { exportSite } from "@data-pipeline/exporter";
@@ -43,7 +44,7 @@ const llmRateLimits = {
  * it must never change the batch outcome.
  */
 function maybeExport(stats: BatchStats): void {
-  if (stats.cleaned <= 0) return;
+  if (stats.cleaned <= 0 && stats.translated <= 0) return;
   if (process.env.WEB_EXPORT_ON_CLEAN === "false") return;
   try {
     const outDir = process.env.WEB_EXPORT_DIR?.trim() || join(repoRoot(), "web-dist");
@@ -62,6 +63,7 @@ const deps = {
   provider,
   store,
   systemPrompt: loadCleanPrompt(),
+  translatePrompt: loadTranslatePrompt(),
   limit,
   maxPerRun,
   rateLimiter,

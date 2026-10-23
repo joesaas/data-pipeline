@@ -224,16 +224,20 @@ export function renderIndex(data: ExportData, generatedAt: string, cssVersion = 
 
   const cards = data.items
     .map((item) => {
-      const search = `${item.title} ${item.summary} ${item.tags.join(" ")}`.toLowerCase();
+      const search = `${item.title} ${item.title_zh ?? ""} ${item.summary} ${item.summary_zh ?? ""} ${item.tags.join(" ")}`.toLowerCase();
       const displayDate = item.event_date ?? item.cleaned_at.slice(0, 10);
+      const shownTitle = item.title_zh || item.title;
+      const origTitle =
+        item.title_zh && item.title_zh !== item.title ? `<div class="card-orig">${esc(item.title)}</div>` : "";
       return `<a class="news-card" href="item/${encodeURIComponent(item.id)}/" data-category="${esc(item.category)}" data-published="${esc(item.cleaned_at)}" data-search="${esc(search)}">
   <div class="card-top">
     <span class="pill" style="background:${categoryColor(item.category)}">${esc(item.category)}</span>
     ${item.sources[0] ? `<span class="pill-gray">${esc(item.sources[0].name)}</span>` : ""}
     ${weightBadge(item)}
   </div>
-  <div class="card-title">${esc(item.title)}</div>
-  <p class="card-sum">${esc(item.summary)}</p>
+  <div class="card-title">${esc(shownTitle)}</div>
+  ${origTitle}
+  <p class="card-sum">${esc(item.summary_zh || item.summary)}</p>
   <div class="card-foot"><span>${esc(fmtZhDate(displayDate))}</span>${item.source_agent ? `<span>${esc(item.source_agent)}</span>` : ""}</div>
 </a>`;
     })
@@ -283,11 +287,13 @@ export function renderItem(item: ExportItem, publicApiPath: string, cssVersion =
   ${item.sources[0] ? `<span class="pill-gray">${esc(item.sources[0].name)}</span>` : ""}
   ${weightBadge(item)}
 </div>
-<h1 style="line-height:1.45;font-size:22px;margin-top:12px">${esc(item.title)}</h1>
+<h1 style="line-height:1.45;font-size:22px;margin-top:12px">${esc(item.title_zh || item.title)}</h1>
+${item.title_zh && item.title_zh !== item.title ? `<p class="muted" style="margin-top:4px">原文：${esc(item.title)}</p>` : ""}
 <p class="muted">${esc(fmtZhDate(displayDate))}${item.event_date ? " · 事件日期" : ""}</p>
 <div style="margin:10px 0">${tags}</div>
 <h2>摘要</h2>
-<div class="card"><p class="summary">${esc(item.summary)}</p></div>
+<div class="card"><p class="summary">${esc(item.summary_zh || item.summary)}</p></div>
+${item.summary_zh && item.summary_zh !== item.summary ? `<div class="card"><p class="muted" style="margin:0 0 6px">原文摘要</p><p class="summary">${esc(item.summary)}</p></div>` : ""}
 ${detail}
 ${sources}
 <p class="muted" style="margin-top:24px">由 ${esc(item.provider)} / ${esc(item.model)} 于 ${esc(fmtDateTime(item.cleaned_at))} 清洗${item.source_agent ? ` · 推送 agent ${esc(item.source_agent)}` : ""} · 原始记录 <a href="${esc(publicApiPath)}/api/v1/records/${encodeURIComponent(item.source_record_id)}" target="_blank" rel="noreferrer" style="color:var(--accent-strong)">${esc(item.source_record_id.slice(0, 8))}…</a></p>

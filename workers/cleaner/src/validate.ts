@@ -1,4 +1,17 @@
 import type { CleanedItem } from "@data-pipeline/shared";
+import { canonicalCategory } from "@data-pipeline/shared";
+
+export { canonicalCategory };
+
+/**
+ * Some sources are single-topic by construction: every item in a record
+ * from them belongs to one canonical category, whatever the LLM says.
+ * (A trending-repos brief's items never mention the category per item,
+ * so the model leaves it empty and everything lands in 未分类.)
+ */
+export const SOURCE_CATEGORY: Record<string, string> = {
+  "github-trending": "GitHub 热点项目",
+};
 
 export interface ValidationOutcome {
   items: CleanedItem[];
@@ -14,37 +27,6 @@ export function extractJson(text: string): unknown {
   return JSON.parse(stripped.slice(start, end + 1));
 }
 
-/**
- * Canonical category names. The prompt asks for these verbatim, but models
- * drift ("GitHub 热点" one day, "开源项目" the next) and a drifted name
- * splits one sidebar category into two. Aliases fold known variants back.
- */
-const CATEGORY_ALIASES: Record<string, string> = {
-  github: "GitHub 热点项目",
-  "github 热点": "GitHub 热点项目",
-  "github热点": "GitHub 热点项目",
-  "github 热门项目": "GitHub 热点项目",
-  "github热门项目": "GitHub 热点项目",
-  "github trending": "GitHub 热点项目",
-  "开源项目": "GitHub 热点项目",
-  "热门开源项目": "GitHub 热点项目",
-};
-
-/**
- * Some sources are single-topic by construction: every item in a record
- * from them belongs to one canonical category, whatever the LLM says.
- * (A trending-repos brief's items never mention the category per item,
- * so the model leaves it empty and everything lands in 未分类.)
- */
-export const SOURCE_CATEGORY: Record<string, string> = {
-  "github-trending": "GitHub 热点项目",
-};
-
-export function canonicalCategory(raw: string): string {
-  const c = raw.trim();
-  if (!c) return "未分类";
-  return CATEGORY_ALIASES[c.toLowerCase()] ?? c;
-}
 
 function asString(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";

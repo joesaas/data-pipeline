@@ -60,6 +60,7 @@ export class CleanerStore {
       CREATE INDEX IF NOT EXISTS idx_llm_calls_at ON llm_calls(called_at);
     `);
     this.migrateV2();
+    this.migrateV3();
   }
 
   /**
@@ -102,6 +103,39 @@ export class CleanerStore {
         throw err;
       }
     }
+  }
+
+  /**
+   * Translation column (2026-10-23): cleaned_items gains translation_zh —
+   * NULL = not yet translated, '' = checked, already Chinese (no call
+   * needed), JSON text = {title, summary} from the round's one batched
+   * translation call.
+   */
+  private migrateV3(): void {
+    const itemCols = this.db.prepare("PRAGMA table_info(cleaned_items)").all() as { name: string }[];
+    if (!itemCols.some((c) => c.name === "translation_zh")) {
+      this.db.exec("ALTER TABLE cleaned_items ADD COLUMN translation_zh TEXT");
+    }
+  }
+
+  /** Items still awaiting a translation decision, newest first. */
+  listUntranslated(limit: number): { id: string; title: string; summary: string }[] {
+    return this.db
+      .prepare(
+        "SELECT id, title, summary FROM cleaned_items WHERE translation_zh IS NULL ORDER BY rowid DESC LIMIT ?",
+      )
+      .all(limit) as { id: string; title: string; summary: string }[];
+  }
+
+  setTranslation(id: string, zh: { title: string; summary: string }): void {
+    this.db
+      .prepare("UPDATE cleaned_items SET translation_zh = ? WHERE id = ?")
+      .run(JSON.stringify(zh), id);
+  }
+
+  /** Mark an item as checked-but-not-needing-translation (already Chinese). */
+  markNoTranslation(id: string): void {
+    this.db.prepare("UPDATE cleaned_items SET translation_zh = '' WHERE id = ?").run(id);
   }
 
   static defaultPath(env: NodeJS.ProcessEnv = process.env): string {

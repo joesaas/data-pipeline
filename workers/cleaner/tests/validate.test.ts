@@ -53,6 +53,10 @@ describe("validateCleanedItems", () => {
     assert.equal(items[1].category, "GitHub 热点项目");
     assert.equal(items[2].category, "Web3 DeFi");
   });
+  it("folds DeFi Protocol into Web3 DeFi", () => {
+    const { items } = validateCleanedItems({ items: [{ title: "a", summary: "s", category: "DeFi Protocol" }] });
+    assert.equal(items[0].category, "Web3 DeFi");
+  });
   it("forceCategory overrides whatever the model said", () => {
     const { items } = validateCleanedItems(
       { items: [{ title: "a", summary: "s" }, { title: "b", summary: "s", category: "AI Agent" }] },

@@ -5,6 +5,7 @@ import { checkQuality } from "./quality.js";
 import type { LlmRateLimiter } from "./ratelimit.js";
 import type { CleanerStore } from "./store.js";
 import { PROMPT_VERSION } from "./prompt.js";
+import { needsTranslation, TRANSLATE_PROMPT_VERSION } from "./translate.js";
 
 export interface BatchStats {
   fetched: number;
@@ -14,6 +15,7 @@ export interface BatchStats {
   failed: number;
   deferred: number;
   items: number;
+  translated: number;
 }
 
 export interface BatchDeps {
@@ -21,6 +23,8 @@ export interface BatchDeps {
   provider: LlmProvider;
   store: CleanerStore;
   systemPrompt: string;
+  /** System prompt for the round's single batched translation call. */
+  translatePrompt: string;
   limit: number;
   maxPerRun: number;
   /** Budget for real LLM calls; mock provider calls are never charged. */
@@ -51,6 +55,7 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
     failed: 0,
     deferred: 0,
     items: 0,
+    translated: 0,
   };
   const startCursor = deps.store.getCursor();
   const records: RawRecord[] = await deps.client.fetchSince(startCursor, deps.limit);
@@ -126,8 +131,54 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
       break;
     }
   }
+  await translatePending(deps, stats, log);
   log(
-    `[cleaner] batch done: fetched=${stats.fetched} cleaned=${stats.cleaned} items=${stats.items} skipped=${stats.skipped} rejected=${stats.rejected} failed=${stats.failed} deferred=${stats.deferred}`,
+    `[cleaner] batch done: fetched=${stats.fetched} cleaned=${stats.cleaned} items=${stats.items} skipped=${stats.skipped} rejected=${stats.rejected} failed=${stats.failed} deferred=${stats.deferred} translated=${stats.translated}`,
   );
   return stats;
+}
+
+/** How many untranslated items one round looks at (newest first). */
+const TRANSLATE_SWEEP_LIMIT = 200;
+
+/**
+ * Translation phase, once per round (never per item): sweep the store for
+ * items without a translation — this round's fresh items plus any left
+ * over from a failed or budget-deferred earlier round — mark the ones
+ * already in Chinese, and translate the rest in ONE provider call that
+ * shares the cleaner's LLM budget. Failures leave rows NULL; the next
+ * round's sweep retries them.
+ */
+async function translatePending(
+  deps: BatchDeps,
+  stats: BatchStats,
+  log: (line: string) => void,
+): Promise<void> {
+  if (deps.provider.name === "mock") return;
+  const pending = deps.store.listUntranslated(TRANSLATE_SWEEP_LIMIT);
+  const entries: { id: string; title: string; summary: string }[] = [];
+  for (const row of pending) {
+    if (needsTranslation(row.title, row.summary)) entries.push(row);
+    else deps.store.markNoTranslation(row.id);
+  }
+  if (entries.length === 0) return;
+  if (deps.rateLimiter && !deps.rateLimiter.tryAcquire()) {
+    const u = deps.rateLimiter.usage();
+    log(
+      `[cleaner] translation deferred: LLM budget exhausted (last hour ${u.lastHour}/${deps.rateLimiter.limits.perHour}, last day ${u.lastDay}/${deps.rateLimiter.limits.perDay}); ${entries.length} item(s) wait for the next cycle`,
+    );
+    return;
+  }
+  try {
+    const results = await deps.provider.translate(entries, deps.translatePrompt);
+    for (const [id, zh] of results) deps.store.setTranslation(id, zh);
+    stats.translated = results.size;
+    log(
+      `[cleaner] translated ${results.size}/${entries.length} items in one batch call (${TRANSLATE_PROMPT_VERSION} via ${deps.provider.name}/${deps.provider.model})`,
+    );
+  } catch (err) {
+    log(
+      `[cleaner] translation failed (items stay untranslated, retried next cycle): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }

@@ -39,6 +39,7 @@ describe("runBatch", () => {
       provider: new MockProvider(),
       store,
       systemPrompt: "x",
+      translatePrompt: "t",
       limit: 100,
       maxPerRun: 20,
       log: () => {},
@@ -58,6 +59,7 @@ describe("runBatch", () => {
       provider: new MockProvider(),
       store,
       systemPrompt: "x",
+      translatePrompt: "t",
       limit: 100,
       maxPerRun: 20,
       log: () => {},
@@ -79,6 +81,7 @@ describe("runBatch cursor + budget discipline", () => {
       name: "openai-compatible",
       model: "fake",
       clean: async (rec: RawRecord) => new MockProvider().clean(rec),
+      translate: async () => new Map(),
     };
     const limiter = new LlmRateLimiter(store, { perHour: 1, perDay: 500 });
     const stats = await runBatch({
@@ -86,6 +89,7 @@ describe("runBatch cursor + budget discipline", () => {
       provider,
       store,
       systemPrompt: "x",
+      translatePrompt: "t",
       limit: 100,
       maxPerRun: 20,
       rateLimiter: limiter,
@@ -106,12 +110,14 @@ describe("runBatch cursor + budget discipline", () => {
       clean: async () => {
         throw new Error("provider down");
       },
+      translate: async () => new Map(),
     };
     const stats = await runBatch({
       client: stubClient(twoRecords()),
       provider,
       store,
       systemPrompt: "x",
+      translatePrompt: "t",
       limit: 100,
       maxPerRun: 20,
       log: () => {},
@@ -120,6 +126,63 @@ describe("runBatch cursor + budget discipline", () => {
     assert.equal(stats.deferred, 1);
     assert.equal(store.getCursor(), null);
     assert.equal(store.getAttempts("a1"), 1);
+    store.close();
+  });
+});
+
+describe("runBatch translation phase", () => {
+  const EN_BRIEF = `## A. DeFi Protocol\n\n### 1. Protocol launches v2 on mainnet\n${"The protocol shipped a major upgrade with new vaults and lower fees for all users. ".repeat(2)}`;
+
+  function enDeps(store: CleanerStore, translateCalls: { n: number; sizes: number[] }) {
+    return {
+      client: stubClient([record("e1", "eh1", EN_BRIEF), { ...record("e2", "eh2", EN_BRIEF), updated_at: "2026-10-22T00:00:01Z" }]),
+      provider: {
+        name: "openai-compatible",
+        model: "fake",
+        clean: async (rec: RawRecord) => new MockProvider().clean(rec),
+        translate: async (entries: { id: string; title: string; summary: string }[]) => {
+          translateCalls.n += 1;
+          translateCalls.sizes.push(entries.length);
+          return new Map(entries.map((e) => [e.id, { title: `译:${e.title}`, summary: `译:${e.summary}` }]));
+        },
+      },
+      store,
+      systemPrompt: "x",
+      translatePrompt: "t",
+      limit: 100,
+      maxPerRun: 20,
+      log: () => {},
+    };
+  }
+
+  it("translates a whole round in ONE provider call, then never again", async () => {
+    const store = new CleanerStore(":memory:");
+    const calls = { n: 0, sizes: [] as number[] };
+    const stats = await runBatch(enDeps(store, calls));
+    assert.equal(stats.cleaned, 2);
+    assert.equal(calls.n, 1); // one batched call for the entire round
+    assert.ok(stats.translated >= 2);
+    assert.equal(store.listUntranslated(10).length, 0);
+    const second = await runBatch(enDeps(store, calls));
+    assert.equal(calls.n, 1); // nothing pending -> no further call
+    assert.equal(second.translated, 0);
+    store.close();
+  });
+
+  it("mock provider never translates", async () => {
+    const store = new CleanerStore(":memory:");
+    const stats = await runBatch({
+      client: stubClient([record("m1", "mh1", EN_BRIEF)]),
+      provider: new MockProvider(),
+      store,
+      systemPrompt: "x",
+      translatePrompt: "t",
+      limit: 100,
+      maxPerRun: 20,
+      log: () => {},
+    });
+    assert.equal(stats.translated, 0);
+    assert.equal(store.listUntranslated(10).length, 1); // left pending, not marked
     store.close();
   });
 });

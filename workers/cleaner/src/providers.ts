@@ -10,13 +10,22 @@
  *   Its output is marked provider="mock" in storage — never pass it off
  *   as LLM output.
  */
-import type { CleanedItem, RawRecord } from "@data-pipeline/shared";
-import { extractJson, SOURCE_CATEGORY, validateCleanedItems } from "./validate.js";
+import type { CleanedItem, RawRecord, TranslationZh } from "@data-pipeline/shared";
+import { canonicalCategory, extractJson, SOURCE_CATEGORY, validateCleanedItems } from "./validate.js";
+import { parseTranslationResponse } from "./translate.js";
+
+export interface TranslateEntry {
+  id: string;
+  title: string;
+  summary: string;
+}
 
 export interface LlmProvider {
   readonly name: string;
   readonly model: string;
   clean(record: RawRecord, systemPrompt: string): Promise<CleanedItem[]>;
+  /** One batched call translating many items at once (per cleaning round). */
+  translate(entries: TranslateEntry[], systemPrompt: string): Promise<Map<string, TranslationZh>>;
 }
 
 type FetchFn = typeof fetch;
@@ -47,6 +56,22 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       }
     }
     throw lastError ?? new Error("LLM call failed");
+  }
+
+  async translate(entries: TranslateEntry[], systemPrompt: string): Promise<Map<string, TranslationZh>> {
+    if (entries.length === 0) return new Map();
+    const wanted = new Set(entries.map((e) => e.id));
+    const user = JSON.stringify(entries.map((e) => ({ id: e.id, title: e.title, summary: e.summary })));
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const text = await this.chat(systemPrompt, user, attempt === 0);
+        return parseTranslationResponse(text, wanted);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+    throw lastError ?? new Error("translation call failed");
   }
 
   private async chat(system: string, user: string, withFormat: boolean): Promise<string> {
@@ -85,6 +110,11 @@ export class OpenAiCompatibleProvider implements LlmProvider {
 export class MockProvider implements LlmProvider {
   readonly name = "mock";
   readonly model = "heading-split-v1";
+
+  /** The mock never translates; items stay untranslated (translation_zh NULL). */
+  async translate(): Promise<Map<string, TranslationZh>> {
+    return new Map();
+  }
 
   async clean(record: RawRecord): Promise<CleanedItem[]> {
     const lines = record.content.split("\n");
@@ -138,7 +168,8 @@ export class MockProvider implements LlmProvider {
         sources: [],
       });
     }
-    return items;
+    const forced = SOURCE_CATEGORY[record.source_agent];
+    return items.map((item) => ({ ...item, category: forced ?? canonicalCategory(item.category) }));
   }
 }
 

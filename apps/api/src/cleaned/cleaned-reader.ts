@@ -6,7 +6,14 @@ export interface CleanedSourceView {
   url: string;
 }
 
-import { computeWeight, eventParts, weightTier } from "@data-pipeline/shared";
+import {
+  canonicalCategory,
+  categoryAliasesFor,
+  computeWeight,
+  eventParts,
+  parseTranslationZh,
+  weightTier,
+} from "@data-pipeline/shared";
 
 export interface CleanedItemView {
   id: string;
@@ -22,6 +29,9 @@ export interface CleanedItemView {
   event_month: number | null;
   event_day: number | null;
   sources: CleanedSourceView[];
+  /** Chinese translation of title/summary (null until the cleaner translates it) */
+  title_zh: string | null;
+  summary_zh: string | null;
   source_agent: string;
   /** time-decay weight from cleaned_at (publish time), computed at read */
   weight: number;
@@ -50,6 +60,7 @@ interface ItemRow {
   tags: string;
   event_date: string | null;
   sources: string;
+  translation_zh: string | null;
   source_agent: string;
   cleaned_at: string;
   provider: string;
@@ -68,8 +79,13 @@ function parseJsonArray<T>(text: string): T[] {
 function toView(row: ItemRow): CleanedItemView {
   const parts = eventParts(row.event_date);
   const weight = computeWeight(row.cleaned_at);
+  const zh = parseTranslationZh(row.translation_zh);
+  const { translation_zh: _raw, ...rest } = row;
   return {
-    ...row,
+    ...rest,
+    category: canonicalCategory(row.category),
+    title_zh: zh?.title || null,
+    summary_zh: zh?.summary || null,
     event_year: parts?.event_year ?? null,
     event_month: parts?.event_month ?? null,
     event_day: parts?.event_day ?? null,
@@ -85,9 +101,13 @@ function toView(row: ItemRow): CleanedItemView {
 function selectSql(db: DatabaseSync): string {
   const cols = db.prepare("PRAGMA table_info(cleaned_records)").all() as { name: string }[];
   const agentExpr = cols.some((c) => c.name === "source_agent") ? "r.source_agent" : "''";
+  // translation_zh exists only after the cleaner's v3 migration ran.
+  const itemCols = db.prepare("PRAGMA table_info(cleaned_items)").all() as { name: string }[];
+  const zhExpr = itemCols.some((c) => c.name === "translation_zh") ? "i.translation_zh" : "NULL";
   return `
   SELECT i.id, i.source_record_id, i.idx, i.title, i.summary, i.detail,
          i.category, i.tags, i.event_date, i.sources,
+         ${zhExpr} AS translation_zh,
          ${agentExpr} AS source_agent,
          r.cleaned_at, r.provider, r.model
   FROM cleaned_items i
@@ -125,8 +145,11 @@ export class CleanedReader {
       const where: string[] = [];
       const params: unknown[] = [];
       if (filter.category) {
-        where.push("i.category = ?");
-        params.push(filter.category);
+        // Stored spellings may predate an alias (e.g. "DeFi Protocol"):
+        // match every spelling that folds into the requested category.
+        const names = categoryAliasesFor(canonicalCategory(filter.category));
+        where.push(`i.category COLLATE NOCASE IN (${names.map(() => "?").join(", ")})`);
+        params.push(...names);
       }
       if (filter.q) {
         where.push("(i.title LIKE ? OR i.summary LIKE ?)");
@@ -168,9 +191,16 @@ export class CleanedReader {
       const records = db.prepare("SELECT COUNT(*) AS n FROM cleaned_records").get() as { n: number };
       const items = db.prepare("SELECT COUNT(*) AS n FROM cleaned_items").get() as { n: number };
       const last = db.prepare("SELECT MAX(cleaned_at) AS m FROM cleaned_records").get() as { m: string | null };
-      const categories = db
+      const rawCategories = db
         .prepare("SELECT category AS name, COUNT(*) AS count FROM cleaned_items GROUP BY category ORDER BY count DESC")
         .all() as { name: string; count: number }[];
+      const categories = rawCategories.reduce<{ name: string; count: number }[]>((acc, c) => {
+        const name = canonicalCategory(c.name);
+        const found = acc.find((x) => x.name === name);
+        if (found) found.count += Number(c.count);
+        else acc.push({ name, count: Number(c.count) });
+        return acc;
+      }, []).sort((a, b) => b.count - a.count);
       const providers = db
         .prepare("SELECT provider, model, COUNT(*) AS records FROM cleaned_records GROUP BY provider, model")
         .all() as { provider: string; model: string; records: number }[];
@@ -178,7 +208,7 @@ export class CleanedReader {
         records: Number(records.n),
         items: Number(items.n),
         last_cleaned_at: last.m,
-        categories: categories.map((c) => ({ name: c.name, count: Number(c.count) })),
+        categories,
         providers: providers.map((p) => ({ ...p, records: Number(p.records) })),
       };
     } finally {
