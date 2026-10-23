@@ -57,7 +57,7 @@ export function registerRoutes(
       endpoints: {
         health: `GET ${base}/api/v1/health`,
         push: `POST ${base}/api/v1/records`,
-        list: `GET ${base}/api/v1/records?source_agent=&tag=&limit=&offset=`,
+        list: `GET ${base}/api/v1/records?source_agent=&tag=&limit=&offset=&order=updated_asc&updated_after=&after_id=`,
         get: `GET ${base}/api/v1/records/:id`,
         delete: `DELETE ${base}/api/v1/records/:id`,
         cleaned_items: `GET ${base}/api/v1/cleaned/items?category=&importance=&q=&limit=&offset=`,
@@ -103,6 +103,9 @@ export function registerRoutes(
       tag: typeof req.query.tag === "string" ? req.query.tag : undefined,
       limit,
       offset,
+      updated_after: typeof req.query.updated_after === "string" ? req.query.updated_after : undefined,
+      after_id: typeof req.query.after_id === "string" ? req.query.after_id : undefined,
+      order: req.query.order === "updated_asc" ? "updated_asc" : undefined,
     });
     res.json({ items, total, limit, offset });
   });

@@ -51,6 +51,14 @@ export class CleanerStore {
         importance TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_items_record ON cleaned_items(source_record_id);
+      CREATE TABLE IF NOT EXISTS cleaner_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS llm_calls (
+        called_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_llm_calls_at ON llm_calls(called_at);
     `);
   }
 
@@ -105,6 +113,69 @@ export class CleanerStore {
       this.db.exec("ROLLBACK");
       throw err;
     }
+  }
+
+  // ---- fetch cursor: (updated_at, id) of the last record the cleaner has
+  // fully dealt with. Records after it are fetched next round; the cursor
+  // never jumps over an unprocessed record (failure / rate limit stop the
+  // batch first), so nothing is silently dropped.
+  getCursor(): { updated_at: string; id: string } | null {
+    const raw = this.getMeta("cursor");
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as { updated_at: string; id: string };
+      return typeof parsed.updated_at === "string" && typeof parsed.id === "string" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setCursor(cursor: { updated_at: string; id: string }): void {
+    this.setMeta("cursor", JSON.stringify(cursor));
+  }
+
+  // ---- consecutive failure attempts per record (poison-record escape hatch)
+  getAttempts(sourceRecordId: string): number {
+    return Number(this.getMeta(`attempts:${sourceRecordId}`) ?? 0) || 0;
+  }
+
+  setAttempts(sourceRecordId: string, n: number): void {
+    if (n <= 0) {
+      this.db.prepare("DELETE FROM cleaner_meta WHERE key = ?").run(`attempts:${sourceRecordId}`);
+    } else {
+      this.setMeta(`attempts:${sourceRecordId}`, String(n));
+    }
+  }
+
+  // ---- LLM call log for rolling-window rate limits
+  recordLlmCall(atMs: number): void {
+    this.db.prepare("INSERT INTO llm_calls (called_at) VALUES (?)").run(atMs);
+  }
+
+  countLlmCalls(sinceMs: number): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM llm_calls WHERE called_at >= ?")
+      .get(sinceMs) as { n: number };
+    return Number(row.n);
+  }
+
+  pruneLlmCalls(beforeMs: number): void {
+    this.db.prepare("DELETE FROM llm_calls WHERE called_at < ?").run(beforeMs);
+  }
+
+  private getMeta(key: string): string | null {
+    const row = this.db.prepare("SELECT value FROM cleaner_meta WHERE key = ?").get(key) as
+      | { value: string }
+      | undefined;
+    return row?.value ?? null;
+  }
+
+  private setMeta(key: string, value: string): void {
+    this.db
+      .prepare(
+        "INSERT INTO cleaner_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      )
+      .run(key, value);
   }
 
   counts(): { records: number; items: number } {

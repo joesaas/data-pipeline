@@ -68,6 +68,29 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.equal(driver.deleteRecord("anonymous", id), false);
     });
 
+    it("lists ascending by (updated_at, id) with a keyset cursor", () => {
+      for (const c of ["k1 body", "k2 body", "k3 body"]) {
+        ingest.push("anonymous", { prompt: "pk", content: c, external_id: `k-${c}`, tags: ["keyset"] });
+      }
+      const page1 = driver.listRecords("anonymous", { tag: "keyset", limit: 2, offset: 0, order: "updated_asc" });
+      assert.equal(page1.items.length, 2);
+      const sorted = [...page1.items].sort(
+        (a, b) => a.updated_at.localeCompare(b.updated_at) || a.id.localeCompare(b.id),
+      );
+      assert.deepEqual(page1.items.map((r) => r.id), sorted.map((r) => r.id));
+      const last = page1.items[page1.items.length - 1];
+      const page2 = driver.listRecords("anonymous", {
+        tag: "keyset",
+        limit: 10,
+        offset: 0,
+        order: "updated_asc",
+        updated_after: last.updated_at,
+        after_id: last.id,
+      });
+      assert.equal(page2.items.length, 1);
+      assert.notEqual(page2.items[0].id, last.id);
+    });
+
     it("stores tokens and finds them by hash", () => {
       driver.createToken({ id: "t1", name: "n", key_hash: "h1", created_at: new Date().toISOString(), revoked_at: null });
       assert.equal(driver.findTokenByHash("h1")?.id, "t1");

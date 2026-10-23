@@ -16,6 +16,7 @@ import { loadDefaultEnv } from "./load-env.js";
 
 const envFile = loadDefaultEnv();
 import { createRecordsClient } from "./client.js";
+import { LlmRateLimiter } from "./ratelimit.js";
 import { createLlmProvider } from "./providers.js";
 import { CleanerStore } from "./store.js";
 import { loadCleanPrompt } from "./prompt.js";
@@ -31,6 +32,10 @@ const baseUrl = process.env.DATA_PIPELINE_BASE_URL?.trim() || "https://agent101.
 const limit = Number(process.env.CLEANER_LIMIT ?? 100);
 const maxPerRun = Number(process.env.CLEANER_MAX_PER_RUN ?? 20);
 const intervalMinutes = Math.max(1, Number(process.env.CLEANER_INTERVAL_MINUTES ?? 60));
+const llmRateLimits = {
+  perHour: Number(process.env.LLM_RATE_PER_HOUR ?? 30),
+  perDay: Number(process.env.LLM_RATE_PER_DAY ?? 500),
+};
 
 /**
  * After a batch that cleaned something new, re-export the static site.
@@ -51,6 +56,7 @@ function maybeExport(stats: BatchStats): void {
 
 const provider = createLlmProvider(process.env);
 const store = new CleanerStore(CleanerStore.defaultPath());
+const rateLimiter = new LlmRateLimiter(store, llmRateLimits);
 const deps = {
   client: createRecordsClient(baseUrl),
   provider,
@@ -58,6 +64,7 @@ const deps = {
   systemPrompt: loadCleanPrompt(),
   limit,
   maxPerRun,
+  rateLimiter,
 };
 
 let stopping = false;
@@ -74,7 +81,7 @@ async function runOnce(): Promise<BatchStats> {
 
 async function main(): Promise<void> {
   console.log(
-    `[cleaner] start mode=${once ? "once" : "service"} source=${baseUrl} provider=${provider.name}/${provider.model} interval=${intervalMinutes}m store=${CleanerStore.defaultPath()}`,
+    `[cleaner] start mode=${once ? "once" : "service"} source=${baseUrl} provider=${provider.name}/${provider.model} interval=${intervalMinutes}m llm_budget=${llmRateLimits.perHour}/h,${llmRateLimits.perDay}/d store=${CleanerStore.defaultPath()}`,
   );
   if (provider.name === "mock") {
     console.log("[cleaner] WARNING: no LLM_API_KEY set — running the heuristic mock provider; output is marked provider=mock");

@@ -65,12 +65,31 @@ export class FileDriver implements StorageDriver {
 
   listRecords(
     identity: string,
-    filter: { source_agent?: string; tag?: string; limit: number; offset: number },
+    filter: {
+      source_agent?: string;
+      tag?: string;
+      limit: number;
+      offset: number;
+      updated_after?: string;
+      after_id?: string;
+      order?: "created_desc" | "updated_asc";
+    },
   ): { items: StoredRecord[]; total: number } {
     let items = this.readAllRecords().filter((r) => r.token_id === identity);
     if (filter.source_agent) items = items.filter((r) => r.source_agent === filter.source_agent);
     if (filter.tag) items = items.filter((r) => r.tags.includes(filter.tag as string));
-    items.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    if (filter.order === "updated_asc") {
+      if (filter.updated_after) {
+        const after = filter.updated_after;
+        const afterId = filter.after_id ?? "";
+        items = items.filter(
+          (r) => r.updated_at > after || (r.updated_at === after && r.id > afterId),
+        );
+      }
+      items.sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.id.localeCompare(b.id));
+    } else {
+      items.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    }
     return { items: items.slice(filter.offset, filter.offset + filter.limit), total: items.length };
   }
 

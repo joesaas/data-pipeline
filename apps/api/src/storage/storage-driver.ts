@@ -14,7 +14,17 @@ export interface StorageDriver {
   getRecord(identity: string, id: string): StoredRecord | null;
   listRecords(
     identity: string,
-    filter: { source_agent?: string; tag?: string; limit: number; offset: number },
+    filter: {
+      source_agent?: string;
+      tag?: string;
+      limit: number;
+      offset: number;
+      /** Keyset cursor mode (order="updated_asc"): only records strictly
+       *  after (updated_after, after_id) in (updated_at, id) order. */
+      updated_after?: string;
+      after_id?: string;
+      order?: "created_desc" | "updated_asc";
+    },
   ): { items: StoredRecord[]; total: number };
   deleteRecord(identity: string, id: string): boolean;
 

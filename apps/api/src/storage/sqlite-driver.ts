@@ -127,7 +127,15 @@ export class SqliteDriver implements StorageDriver {
 
   listRecords(
     identity: string,
-    filter: { source_agent?: string; tag?: string; limit: number; offset: number },
+    filter: {
+      source_agent?: string;
+      tag?: string;
+      limit: number;
+      offset: number;
+      updated_after?: string;
+      after_id?: string;
+      order?: "created_desc" | "updated_asc";
+    },
   ): { items: StoredRecord[]; total: number } {
     let where = "WHERE token_id = ?";
     const params: unknown[] = [identity];
@@ -139,11 +147,18 @@ export class SqliteDriver implements StorageDriver {
       where += " AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)";
       params.push(filter.tag);
     }
+    const keyset = filter.order === "updated_asc";
+    if (keyset && filter.updated_after) {
+      where += " AND (updated_at > ? OR (updated_at = ? AND id > ?))";
+      params.push(filter.updated_after, filter.updated_after, filter.after_id ?? "");
+    }
     const totalRow = this.db
       .prepare(`SELECT COUNT(*) AS n FROM records ${where}`)
       .get(...params) as { n: number };
     const rows = this.db
-      .prepare(`SELECT * FROM records ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .prepare(
+        `SELECT * FROM records ${where} ORDER BY ${keyset ? "updated_at ASC, id ASC" : "created_at DESC"} LIMIT ? OFFSET ?`,
+      )
       .all(...params, filter.limit, filter.offset) as RecordRow[];
     return { items: rows.map(rowToRecord), total: totalRow.n };
   }
