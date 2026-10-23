@@ -119,6 +119,8 @@ aside nav { position: sticky; top: 76px; }
   padding: 3px 10px; border-radius: 999px; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; max-width: 45%;
 }
+.pill-src { cursor: pointer; }
+.pill-src:hover { color: var(--accent-strong); text-decoration: underline; }
 .card-top .imp { margin-left: auto; }
 .card-title {
   grid-area: title;
@@ -157,6 +159,17 @@ aside nav { position: sticky; top: 76px; }
 }
 .seg-btn + .seg-btn { border-left: 1px solid var(--line); }
 .seg-btn.on { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
+
+.refresh-btn {
+  margin-left: 10px; align-self: center; flex: none;
+  width: 32px; height: 32px; padding: 0; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line-strong); cursor: pointer; font-family: inherit;
+}
+.refresh-btn:hover { color: var(--accent-strong); border-color: var(--accent-line); }
+.refresh-btn.spinning svg { animation: dp-spin 0.9s linear infinite; }
+@keyframes dp-spin { to { transform: rotate(360deg); } }
 
 .group-head {
   font-size: 13px; font-weight: 600; color: var(--muted);

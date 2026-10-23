@@ -52,6 +52,9 @@ describe("exportSite", () => {
     assert.ok(index.includes("data-gran-group"), "date granularity switch rendered");
     assert.ok(index.includes("muse"), "source_agent rendered");
     assert.ok(!index.includes("重要性"), "importance is gone");
+    assert.ok(!index.includes("文档站"), "docs-site link is gone from the topbar");
+    assert.ok(index.includes('data-src="https://solana.com"'), "list source pill carries the source URL");
+    assert.ok(index.includes('id="refreshBtn"'), "refresh button rendered");
     const detail = readFileSync(join(result.releaseDir, "item/item-1/index.html"), "utf8");
     assert.ok(detail.includes("openai/gpt-4o-mini"));
     assert.ok(detail.includes("/data-pipeline/api/v1/records/rec-1"));

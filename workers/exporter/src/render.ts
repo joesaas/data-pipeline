@@ -55,6 +55,8 @@ export function fmtZhDate(isoDate: string): string {
 
 const BOOK_ICON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>`;
 
+const REFRESH_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`;
+
 function head(title: string, cssHref: string, base = "./", showSearch = false, cssVersion = ""): string {
   const versioned = cssVersion ? `${cssHref}?v=${cssVersion}` : cssHref;
   return `<!doctype html>
@@ -70,7 +72,6 @@ function head(title: string, cssHref: string, base = "./", showSearch = false, c
   <a class="logo" href="${base}"><span class="mark">${BOOK_ICON}</span>Agent 101<span>&nbsp;资讯</span></a>
   ${showSearch ? `<div class="head-search"><input id="q" placeholder="搜索标题、摘要或标签…" /></div>` : ""}
   <div class="spacer"></div>
-  <a class="head-link" href="/">文档站</a>
 </header>
 <main>`;
 }
@@ -187,6 +188,42 @@ const PAGE_JS = `
   }
   var input = document.getElementById("q");
   if (input) input.addEventListener("input", function () { state.q = input.value.trim().toLowerCase(); render(); });
+  if (grid) {
+    grid.addEventListener("click", function (e) {
+      var src = e.target.closest("[data-src]");
+      if (!src) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.open(src.dataset.src, "_blank", "noreferrer");
+    });
+  }
+  var refreshBtn = document.getElementById("refreshBtn");
+  if (refreshBtn && grid) {
+    refreshBtn.addEventListener("click", function () {
+      if (refreshBtn.classList.contains("spinning")) return;
+      refreshBtn.classList.add("spinning");
+      fetch("./?__refresh=" + Date.now(), { cache: "no-store" })
+        .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.text(); })
+        .then(function (html) {
+          var doc = new DOMParser().parseFromString(html, "text/html");
+          var newGrid = doc.getElementById("grid");
+          var newCat = doc.querySelector('[data-group="category"]');
+          var curCat = document.querySelector('[data-group="category"]');
+          if (newCat && curCat) curCat.innerHTML = newCat.innerHTML;
+          if (newGrid) {
+            grid.innerHTML = newGrid.innerHTML;
+            cards = Array.prototype.slice.call(document.querySelectorAll(".news-card"));
+          }
+          document.querySelectorAll('[data-group="category"] .side-item').forEach(function (c) {
+            c.classList.toggle("on", c.dataset.value === state.category);
+          });
+          refreshWeights();
+          render();
+        })
+        .catch(function () { /* keep the current list when the refresh fails */ })
+        .then(function () { refreshBtn.classList.remove("spinning"); });
+    });
+  }
   refreshWeights();
   render();
 })();
@@ -233,7 +270,7 @@ export function renderIndex(data: ExportData, generatedAt: string, cssVersion = 
       return `<a class="news-card" href="item/${encodeURIComponent(item.id)}/" data-category="${esc(item.category)}" data-published="${esc(item.cleaned_at)}" data-search="${esc(search)}">
   <div class="card-top">
     <span class="pill" style="background:${categoryColor(item.category)}">${esc(item.category)}</span>
-    ${item.sources[0] ? `<span class="pill-gray">${esc(item.sources[0].name)}</span>` : ""}
+    ${item.sources[0] ? (item.sources[0].url ? `<span class="pill-gray pill-src" data-src="${esc(item.sources[0].url)}" title="打开来源">${esc(item.sources[0].name)}</span>` : `<span class="pill-gray">${esc(item.sources[0].name)}</span>`) : ""}
     ${weightBadge(item)}
   </div>
   <div class="card-title">${esc(shownTitle)}</div>
@@ -253,6 +290,7 @@ ${sidebar}
     <div class="seg" data-gran-group>
       <button type="button" class="seg-btn on" data-gran="day">日</button><button type="button" class="seg-btn" data-gran="week">周</button><button type="button" class="seg-btn" data-gran="month">月</button><button type="button" class="seg-btn" data-gran="year">年</button>
     </div>
+    <button type="button" class="refresh-btn" id="refreshBtn" title="刷新列表" aria-label="刷新列表">${REFRESH_ICON}</button>
   </div>
   ${
     data.items.length === 0
