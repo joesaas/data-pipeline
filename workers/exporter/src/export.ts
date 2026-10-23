@@ -1,4 +1,5 @@
-import { copyFileSync, mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readExportData } from "./reader.js";
@@ -41,13 +42,17 @@ export function exportSite(options: {
   const releaseDir = join(releasesDir, releaseName);
   mkdirSync(join(releaseDir, "item"), { recursive: true });
 
-  writeFileSync(join(releaseDir, "index.html"), renderIndex(data, now.toISOString()), "utf8");
+  // Version the stylesheet URL by content hash: CDN/browser caches happily
+  // serve a stale styles.css for hours (Cloudflare defaults CSS to 4h),
+  // which once shipped new markup with old styles. A new hash = a new URL.
+  const cssVersion = createHash("md5").update(readFileSync(stylesPath())).digest("hex").slice(0, 8);
+  writeFileSync(join(releaseDir, "index.html"), renderIndex(data, now.toISOString(), cssVersion), "utf8");
   writeFileSync(join(releaseDir, "items.json"), JSON.stringify({ generated_at: now.toISOString(), ...data }, null, 2), "utf8");
   copyFileSync(stylesPath(), join(releaseDir, "styles.css"));
   for (const item of data.items) {
     const dir = join(releaseDir, "item", item.id);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "index.html"), renderItem(item, publicApiPath), "utf8");
+    writeFileSync(join(dir, "index.html"), renderItem(item, publicApiPath, cssVersion), "utf8");
   }
 
   // Flip `current` atomically: build a temp symlink, then rename over.

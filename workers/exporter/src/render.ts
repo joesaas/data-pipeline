@@ -53,14 +53,15 @@ export function fmtZhDate(isoDate: string): string {
 
 const BOOK_ICON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>`;
 
-function head(title: string, cssHref: string, base = "./", showSearch = false): string {
+function head(title: string, cssHref: string, base = "./", showSearch = false, cssVersion = ""): string {
+  const versioned = cssVersion ? `${cssHref}?v=${cssVersion}` : cssHref;
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${esc(title)}</title>
-<link rel="stylesheet" href="${cssHref}" />
+<link rel="stylesheet" href="${versioned}" />
 </head>
 <body>
 <header class="topbar">
@@ -202,7 +203,7 @@ function weightBadge(item: ExportItem): string {
   return `<span class="wt wt-${weightTier(w)}" data-wt>权重 ${w}</span>`;
 }
 
-export function renderIndex(data: ExportData, generatedAt: string): string {
+export function renderIndex(data: ExportData, generatedAt: string, cssVersion = ""): string {
   const sidebar = `<aside>
   <nav>
     <div data-group="category">
@@ -237,7 +238,7 @@ export function renderIndex(data: ExportData, generatedAt: string): string {
     })
     .join("\n");
 
-  return `${head("Agent 101 资讯 · 全部资讯", "./styles.css", "./", true)}
+  return `${head("Agent 101 资讯 · 全部资讯", "./styles.css", "./", true, cssVersion)}
 <div class="layout">
 ${sidebar}
 <section class="content">
@@ -262,7 +263,7 @@ ${PAGE_JS}
 `;
 }
 
-export function renderItem(item: ExportItem, publicApiPath: string): string {
+export function renderItem(item: ExportItem, publicApiPath: string, cssVersion = ""): string {
   const tags = item.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("");
   const detail = item.detail
     ? `<h2>细节</h2><div class="card"><p class="summary">${esc(item.detail)}</p></div>`
@@ -274,7 +275,7 @@ export function renderItem(item: ExportItem, publicApiPath: string): string {
           .join("")}</div>`
       : "";
   const displayDate = item.event_date ?? item.cleaned_at.slice(0, 10);
-  return `${head(item.title, "../../styles.css", "../../")}
+  return `${head(item.title, "../../styles.css", "../../", false, cssVersion)}
 <p class="muted"><a href="../../" style="color:var(--accent-strong)">← 返回列表</a></p>
 <div class="card-top" style="margin-top:12px">
   <span class="pill" style="background:${categoryColor(item.category)}">${esc(item.category)}</span>
