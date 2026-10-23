@@ -58,7 +58,7 @@ describe("OpenAiCompatibleProvider", () => {
     const provider = new OpenAiCompatibleProvider({ baseUrl: "https://llm.example/v1", apiKey: "k", model: "m" }, fakeFetch as typeof fetch);
     const items = await provider.clean(record("正文"), "系统提示词");
     assert.equal(items.length, 1);
-    assert.equal(items[0].importance, "high");
+    assert.equal(items[0].title, "T");
   });
   it("retries once when the endpoint errors", async () => {
     let calls = 0;

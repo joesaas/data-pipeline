@@ -1,11 +1,9 @@
-import type { CleanedItem, Importance } from "@data-pipeline/shared";
+import type { CleanedItem } from "@data-pipeline/shared";
 
 export interface ValidationOutcome {
   items: CleanedItem[];
   dropped: number;
 }
-
-const IMPORTANCE: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 
 /** Extract the JSON object from a model response (tolerates code fences and prose around it). */
 export function extractJson(text: string): unknown {
@@ -51,9 +49,6 @@ export function validateCleanedItems(raw: unknown): ValidationOutcome {
           })
           .filter((s) => /^https?:\/\//.test(s.url))
       : [];
-    const importance = IMPORTANCE.has(asString(e.importance))
-      ? (asString(e.importance) as Importance)
-      : "medium";
     const detail = asString(e.detail);
     items.push({
       title,
@@ -63,7 +58,6 @@ export function validateCleanedItems(raw: unknown): ValidationOutcome {
       tags,
       event_date: validDate(e.event_date),
       sources,
-      importance,
     });
   }
   return { items, dropped };

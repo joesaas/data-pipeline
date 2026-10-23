@@ -109,7 +109,6 @@ export class MockProvider implements LlmProvider {
         tags: [],
         event_date: null,
         sources,
-        importance: "medium",
       });
       current = null;
     };
@@ -135,7 +134,6 @@ export class MockProvider implements LlmProvider {
         tags: [],
         event_date: null,
         sources: [],
-        importance: "medium",
       });
     }
     return items;

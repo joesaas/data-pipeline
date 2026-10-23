@@ -14,19 +14,20 @@ function seedCleanedDb(file: string): void {
   db.exec(`
     CREATE TABLE cleaned_records (
       source_record_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, cleaned_at TEXT NOT NULL,
-      provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, item_count INTEGER NOT NULL);
+      provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, item_count INTEGER NOT NULL,
+      source_agent TEXT NOT NULL DEFAULT '');
     CREATE TABLE cleaned_items (
       id TEXT PRIMARY KEY, source_record_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL,
       summary TEXT NOT NULL, detail TEXT, category TEXT NOT NULL, tags TEXT NOT NULL,
-      event_date TEXT, sources TEXT NOT NULL, importance TEXT NOT NULL);
+      event_date TEXT, sources TEXT NOT NULL);
   `);
-  db.prepare("INSERT INTO cleaned_records VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run("rec-1", "hash-1", "2026-10-22T12:00:00.000Z", "openai-compatible", "openai/gpt-4o-mini", "clean-v1", 2);
-  const insert = db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  db.prepare("INSERT INTO cleaned_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run("rec-1", "hash-1", "2026-10-22T12:00:00.000Z", "openai-compatible", "openai/gpt-4o-mini", "clean-v2", 2, "muse");
+  const insert = db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   insert.run("item-1", "rec-1", 0, "Solana 升级 Alpenglow", "主网切换新共识", null, "Web3 DeFi",
-    JSON.stringify(["Solana"]), "2026-10-21", JSON.stringify([{ name: "Solana", url: "https://solana.com" }]), "high");
+    JSON.stringify(["Solana"]), "2026-10-21", JSON.stringify([{ name: "Solana", url: "https://solana.com" }]));
   insert.run("item-2", "rec-1", 1, "某框架发布 2.0", "发布新版本", "细节若干", "AI Agent",
-    JSON.stringify([]), null, JSON.stringify([]), "medium");
+    JSON.stringify([]), null, JSON.stringify([]));
   db.close();
 }
 
@@ -65,9 +66,21 @@ describe("cleaned endpoints", () => {
   it("lists cleaned items with parsed tags and sources", async () => {
     const res = await fetch(`${base}/api/v1/cleaned/items`);
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { items: { title: string; tags: string[]; sources: { url: string }[] }[]; total: number };
+    const body = (await res.json()) as {
+      items: {
+        title: string; tags: string[]; sources: { url: string }[];
+        source_agent: string; event_year: number | null; event_month: number | null; event_day: number | null;
+        weight: number; weight_tier: number;
+      }[];
+      total: number;
+    };
     assert.equal(body.total, 2);
     const first = body.items.find((i) => i.title.includes("Solana"))!;
+    assert.equal(first.source_agent, "muse");
+    assert.deepEqual([first.event_year, first.event_month, first.event_day], [2026, 10, 21]);
+    assert.ok(first.weight >= 0 && first.weight <= 100);
+    assert.ok([1, 2, 3].includes(first.weight_tier));
+    assert.ok(!("importance" in first));
     assert.deepEqual(first.tags, ["Solana"]);
     assert.equal(first.sources[0].url, "https://solana.com");
   });

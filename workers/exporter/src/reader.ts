@@ -12,7 +12,7 @@ export interface ExportItem {
   tags: string[];
   event_date: string | null;
   sources: { name: string; url: string }[];
-  importance: string;
+  source_agent: string;
   cleaned_at: string;
   provider: string;
   model: string;
@@ -36,7 +36,7 @@ interface Row {
   tags: string;
   event_date: string | null;
   sources: string;
-  importance: string;
+  source_agent: string;
   cleaned_at: string;
   provider: string;
   model: string;
@@ -51,20 +51,25 @@ function parseArray<T>(text: string): T[] {
   }
 }
 
-/** Read everything the site needs from the cleaner's SQLite (read-only). */
+/** Read everything the site needs from the cleaner's SQLite (read-only).
+ *  Items come back in publish order (cleaned_at desc) — the UI's sort. */
 export function readExportData(dbFile: string): ExportData {
   const empty: ExportData = { items: [], records: 0, lastCleanedAt: null, categories: [] };
   if (!existsSync(dbFile)) return empty;
   const db = new DatabaseSync(dbFile, { readOnly: true });
   try {
+    // source_agent exists only after the cleaner's v2 migration ran.
+    const cols = db.prepare("PRAGMA table_info(cleaned_records)").all() as unknown as { name: string }[];
+    const agentExpr = cols.some((c) => c.name === "source_agent") ? "r.source_agent" : "''";
     const rows = db
       .prepare(
         `SELECT i.id, i.source_record_id, i.idx, i.title, i.summary, i.detail,
-                i.category, i.tags, i.event_date, i.sources, i.importance,
+                i.category, i.tags, i.event_date, i.sources,
+                ${agentExpr} AS source_agent,
                 r.cleaned_at, r.provider, r.model
          FROM cleaned_items i
          JOIN cleaned_records r ON r.source_record_id = i.source_record_id
-         ORDER BY (i.event_date IS NULL), i.event_date DESC, r.cleaned_at DESC, i.idx ASC`,
+         ORDER BY r.cleaned_at DESC, i.idx ASC`,
       )
       .all() as unknown as Row[];
     const records = db.prepare("SELECT COUNT(*) AS n FROM cleaned_records").get() as unknown as { n: number };

@@ -130,12 +130,28 @@ aside nav { position: sticky; top: 76px; }
   color: var(--faint); font-size: 12.5px; margin-top: 14px;
 }
 
-.imp {
+.card-top .wt { margin-left: auto; }
+.wt {
   font-size: 11px; padding: 2px 8px; border-radius: 999px;
   border: 1px solid var(--line); white-space: nowrap; color: var(--muted);
 }
-.imp-high { color: var(--accent-strong); border-color: var(--accent-line); background: var(--accent-soft); }
-.imp-low { opacity: 0.65; }
+.wt-1 { color: #fff; background: var(--accent-strong); border-color: var(--accent-strong); font-weight: 600; }
+.wt-2 { color: var(--accent-strong); border-color: var(--accent-line); background: var(--accent-soft); }
+.wt-3 { opacity: 0.65; }
+
+.seg { margin-left: auto; display: flex; border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; }
+.seg-btn {
+  border: none; background: var(--panel); color: var(--muted); font-size: 13px;
+  padding: 5px 13px; cursor: pointer; font-family: inherit;
+}
+.seg-btn + .seg-btn { border-left: 1px solid var(--line); }
+.seg-btn.on { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
+
+.group-head {
+  grid-column: 1 / -1; font-size: 13px; font-weight: 600; color: var(--muted);
+  margin-top: 8px; padding-bottom: 2px;
+}
+.group-head:first-child { margin-top: 0; }
 
 .card {
   border: 1px solid var(--line); border-radius: 16px; background: var(--panel);

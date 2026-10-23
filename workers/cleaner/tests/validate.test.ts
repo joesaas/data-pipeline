@@ -22,7 +22,6 @@ describe("validateCleanedItems", () => {
     });
     assert.equal(dropped, 0);
     assert.equal(items[0].category, "未分类");
-    assert.equal(items[0].importance, "medium");
     assert.equal(items[0].event_date, null);
   });
   it("drops items without a title and bad sources", () => {
@@ -41,7 +40,6 @@ describe("validateCleanedItems", () => {
       items: [{ title: "t", summary: "s", event_date: "2026-10-21T13:36:00Z", importance: "HIGH" }],
     });
     assert.equal(items[0].event_date, "2026-10-21");
-    assert.equal(items[0].importance, "medium");
   });
   it("throws when items is not an array", () => {
     assert.throws(() => validateCleanedItems({ nope: 1 }));

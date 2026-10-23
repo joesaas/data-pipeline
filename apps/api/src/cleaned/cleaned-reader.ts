@@ -6,6 +6,8 @@ export interface CleanedSourceView {
   url: string;
 }
 
+import { computeWeight, eventParts, weightTier } from "@data-pipeline/shared";
+
 export interface CleanedItemView {
   id: string;
   source_record_id: string;
@@ -16,8 +18,14 @@ export interface CleanedItemView {
   category: string;
   tags: string[];
   event_date: string | null;
+  event_year: number | null;
+  event_month: number | null;
+  event_day: number | null;
   sources: CleanedSourceView[];
-  importance: string;
+  source_agent: string;
+  /** time-decay weight from cleaned_at (publish time), computed at read */
+  weight: number;
+  weight_tier: number;
   cleaned_at: string;
   provider: string;
   model: string;
@@ -42,7 +50,7 @@ interface ItemRow {
   tags: string;
   event_date: string | null;
   sources: string;
-  importance: string;
+  source_agent: string;
   cleaned_at: string;
   provider: string;
   model: string;
@@ -58,19 +66,33 @@ function parseJsonArray<T>(text: string): T[] {
 }
 
 function toView(row: ItemRow): CleanedItemView {
+  const parts = eventParts(row.event_date);
+  const weight = computeWeight(row.cleaned_at);
   return {
     ...row,
+    event_year: parts?.event_year ?? null,
+    event_month: parts?.event_month ?? null,
+    event_day: parts?.event_day ?? null,
+    weight,
+    weight_tier: weightTier(weight),
     tags: parseJsonArray<string>(row.tags),
     sources: parseJsonArray<CleanedSourceView>(row.sources),
   };
 }
 
-const SELECT = `
+// source_agent exists only after the cleaner's v2 migration ran; older
+// databases (cleaner not yet restarted) read as "" instead of erroring.
+function selectSql(db: DatabaseSync): string {
+  const cols = db.prepare("PRAGMA table_info(cleaned_records)").all() as { name: string }[];
+  const agentExpr = cols.some((c) => c.name === "source_agent") ? "r.source_agent" : "''";
+  return `
   SELECT i.id, i.source_record_id, i.idx, i.title, i.summary, i.detail,
-         i.category, i.tags, i.event_date, i.sources, i.importance,
+         i.category, i.tags, i.event_date, i.sources,
+         ${agentExpr} AS source_agent,
          r.cleaned_at, r.provider, r.model
   FROM cleaned_items i
   JOIN cleaned_records r ON r.source_record_id = i.source_record_id`;
+}
 
 /**
  * Read-only access to the cleaner's SQLite output (workers/cleaner/data).
@@ -93,7 +115,6 @@ export class CleanedReader {
 
   listItems(filter: {
     category?: string;
-    importance?: string;
     q?: string;
     limit: number;
     offset: number;
@@ -107,10 +128,6 @@ export class CleanedReader {
         where.push("i.category = ?");
         params.push(filter.category);
       }
-      if (filter.importance) {
-        where.push("i.importance = ?");
-        params.push(filter.importance);
-      }
       if (filter.q) {
         where.push("(i.title LIKE ? OR i.summary LIKE ?)");
         params.push(`%${filter.q}%`, `%${filter.q}%`);
@@ -121,8 +138,8 @@ export class CleanedReader {
         .get(...params) as { n: number };
       const rows = db
         .prepare(
-          `${SELECT} ${whereSql}
-           ORDER BY (i.event_date IS NULL), i.event_date DESC, r.cleaned_at DESC, i.idx ASC
+          `${selectSql(db)} ${whereSql}
+           ORDER BY r.cleaned_at DESC, i.idx ASC
            LIMIT ? OFFSET ?`,
         )
         .all(...params, filter.limit, filter.offset) as ItemRow[];
@@ -136,7 +153,7 @@ export class CleanedReader {
     const db = this.open();
     if (!db) return null;
     try {
-      const row = db.prepare(`${SELECT} WHERE i.id = ?`).get(id) as ItemRow | undefined;
+      const row = db.prepare(`${selectSql(db)} WHERE i.id = ?`).get(id) as ItemRow | undefined;
       return row ? toView(row) : null;
     } finally {
       db.close();

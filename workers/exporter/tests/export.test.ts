@@ -12,17 +12,18 @@ function seedDb(file: string): void {
   db.exec(`
     CREATE TABLE cleaned_records (
       source_record_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, cleaned_at TEXT NOT NULL,
-      provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, item_count INTEGER NOT NULL);
+      provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, item_count INTEGER NOT NULL,
+      source_agent TEXT NOT NULL DEFAULT '');
     CREATE TABLE cleaned_items (
       id TEXT PRIMARY KEY, source_record_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL,
       summary TEXT NOT NULL, detail TEXT, category TEXT NOT NULL, tags TEXT NOT NULL,
-      event_date TEXT, sources TEXT NOT NULL, importance TEXT NOT NULL);
+      event_date TEXT, sources TEXT NOT NULL);
   `);
-  db.prepare("INSERT INTO cleaned_records VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run("rec-1", "h1", "2026-10-22T12:00:00.000Z", "openai-compatible", "openai/gpt-4o-mini", "clean-v1", 1);
-  db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+  db.prepare("INSERT INTO cleaned_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run("rec-1", "h1", "2026-10-22T12:00:00.000Z", "openai-compatible", "openai/gpt-4o-mini", "clean-v2", 1, "muse");
+  db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .run("item-1", "rec-1", 0, "标题 <script>alert(1)</script>", "摘要 & 说明", null, "Web3 DeFi",
-      JSON.stringify(["Solana"]), "2026-10-21", JSON.stringify([{ name: "Solana", url: "https://solana.com" }]), "high");
+      JSON.stringify(["Solana"]), "2026-10-21", JSON.stringify([{ name: "Solana", url: "https://solana.com" }]));
   db.close();
 }
 
@@ -47,6 +48,10 @@ describe("exportSite", () => {
     assert.ok(index.includes("标题 &lt;script&gt;"), "titles must be HTML-escaped");
     assert.ok(!index.includes("<script>alert(1)</script>"), "no raw injection");
     assert.ok(index.includes('href="item/item-1/"'));
+    assert.ok(index.includes("权重"), "weight badge rendered");
+    assert.ok(index.includes("data-gran-group"), "date granularity switch rendered");
+    assert.ok(index.includes("muse"), "source_agent rendered");
+    assert.ok(!index.includes("重要性"), "importance is gone");
     const detail = readFileSync(join(result.releaseDir, "item/item-1/index.html"), "utf8");
     assert.ok(detail.includes("openai/gpt-4o-mini"));
     assert.ok(detail.includes("/data-pipeline/api/v1/records/rec-1"));

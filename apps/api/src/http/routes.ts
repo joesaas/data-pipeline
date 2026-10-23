@@ -60,7 +60,7 @@ export function registerRoutes(
         list: `GET ${base}/api/v1/records?source_agent=&tag=&limit=&offset=&order=updated_asc&updated_after=&after_id=`,
         get: `GET ${base}/api/v1/records/:id`,
         delete: `DELETE ${base}/api/v1/records/:id`,
-        cleaned_items: `GET ${base}/api/v1/cleaned/items?category=&importance=&q=&limit=&offset=`,
+        cleaned_items: `GET ${base}/api/v1/cleaned/items?category=&q=&limit=&offset=`,
         cleaned_item: `GET ${base}/api/v1/cleaned/items/:id`,
         cleaned_stats: `GET ${base}/api/v1/cleaned/stats`,
       },
@@ -130,7 +130,6 @@ export function registerRoutes(
     const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
     const { items, total } = cleaned.listItems({
       category: typeof req.query.category === "string" && req.query.category ? req.query.category : undefined,
-      importance: typeof req.query.importance === "string" && req.query.importance ? req.query.importance : undefined,
       q: typeof req.query.q === "string" && req.query.q ? req.query.q : undefined,
       limit,
       offset,

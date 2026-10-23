@@ -47,8 +47,7 @@ export class CleanerStore {
         category TEXT NOT NULL,
         tags TEXT NOT NULL,
         event_date TEXT,
-        sources TEXT NOT NULL,
-        importance TEXT NOT NULL
+        sources TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_items_record ON cleaned_items(source_record_id);
       CREATE TABLE IF NOT EXISTS cleaner_meta (
@@ -60,6 +59,49 @@ export class CleanerStore {
       );
       CREATE INDEX IF NOT EXISTS idx_llm_calls_at ON llm_calls(called_at);
     `);
+    this.migrateV2();
+  }
+
+  /**
+   * Schema v2 (2026-10-23), idempotent:
+   *  - cleaned_records gains source_agent (provenance of the raw record).
+   *  - cleaned_items loses the importance column (table rebuild; the
+   *    column was NOT NULL, so it cannot simply be dropped in place).
+   */
+  private migrateV2(): void {
+    const recCols = this.db.prepare("PRAGMA table_info(cleaned_records)").all() as { name: string }[];
+    if (!recCols.some((c) => c.name === "source_agent")) {
+      this.db.exec("ALTER TABLE cleaned_records ADD COLUMN source_agent TEXT NOT NULL DEFAULT ''");
+    }
+    const itemCols = this.db.prepare("PRAGMA table_info(cleaned_items)").all() as { name: string }[];
+    if (itemCols.some((c) => c.name === "importance")) {
+      this.db.exec("BEGIN");
+      try {
+        this.db.exec(`
+          CREATE TABLE cleaned_items_v2 (
+            id TEXT PRIMARY KEY,
+            source_record_id TEXT NOT NULL,
+            idx INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            detail TEXT,
+            category TEXT NOT NULL,
+            tags TEXT NOT NULL,
+            event_date TEXT,
+            sources TEXT NOT NULL
+          );
+          INSERT INTO cleaned_items_v2 (id, source_record_id, idx, title, summary, detail, category, tags, event_date, sources)
+            SELECT id, source_record_id, idx, title, summary, detail, category, tags, event_date, sources FROM cleaned_items;
+          DROP TABLE cleaned_items;
+          ALTER TABLE cleaned_items_v2 RENAME TO cleaned_items;
+          CREATE INDEX idx_items_record ON cleaned_items(source_record_id);
+        `);
+        this.db.exec("COMMIT");
+      } catch (err) {
+        this.db.exec("ROLLBACK");
+        throw err;
+      }
+    }
   }
 
   static defaultPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -79,18 +121,19 @@ export class CleanerStore {
     try {
       this.db
         .prepare(
-          `INSERT INTO cleaned_records (source_record_id, content_hash, cleaned_at, provider, model, prompt_version, item_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO cleaned_records (source_record_id, content_hash, cleaned_at, provider, model, prompt_version, item_count, source_agent)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(source_record_id) DO UPDATE SET
              content_hash = excluded.content_hash, cleaned_at = excluded.cleaned_at,
              provider = excluded.provider, model = excluded.model,
-             prompt_version = excluded.prompt_version, item_count = excluded.item_count`,
+             prompt_version = excluded.prompt_version, item_count = excluded.item_count,
+             source_agent = excluded.source_agent`,
         )
-        .run(record.id, record.content_hash, meta.cleanedAt, meta.provider, meta.model, meta.promptVersion, items.length);
+        .run(record.id, record.content_hash, meta.cleanedAt, meta.provider, meta.model, meta.promptVersion, items.length, record.source_agent ?? "");
       this.db.prepare("DELETE FROM cleaned_items WHERE source_record_id = ?").run(record.id);
       const insert = this.db.prepare(
-        `INSERT INTO cleaned_items (id, source_record_id, idx, title, summary, detail, category, tags, event_date, sources, importance)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO cleaned_items (id, source_record_id, idx, title, summary, detail, category, tags, event_date, sources)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       items.forEach((item, idx) => {
         const id = createHash("sha256").update(`${record.id}:${idx}:${item.title}`).digest("hex");
@@ -105,7 +148,6 @@ export class CleanerStore {
           JSON.stringify(item.tags),
           item.event_date,
           JSON.stringify(item.sources),
-          item.importance,
         );
       });
       this.db.exec("COMMIT");
