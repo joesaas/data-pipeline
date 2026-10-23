@@ -50,7 +50,7 @@ data-pipeline 运维脚本
 用法：./deploy.sh <操作> [服务]
 
 
-deploy [服务] 全流程：拉代码 -> 装依赖 -> 构建 -> 重启 -> 状态
+deploy [服务] 全流程：拉代码 -> 装依赖 -> 构建 -> 重启 -> 导出静态站 -> 状态
 update 只拉最新代码（git pull）
 build 只装依赖并构建（npm install + npm run build，均为轻量 tsc）
 
@@ -201,6 +201,7 @@ deploy)
 cmd_update
 cmd_build
 cmd_restart "${2:-}"
+cmd_export
 cmd_status
 ;;
 start) cmd_start "${2:-}";;
