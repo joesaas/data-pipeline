@@ -90,10 +90,14 @@ LLM 走 OpenAI 兼容接口，只认三个环境变量：`LLM_API_KEY`、`LLM_BA
 发布是原子的：每代写进 `web-dist/releases/<时间戳>/`，再把 `web-dist/current` 符号链接一翻切换（保留最近 3 代）；导出失败只记日志，不影响清洗结果，也不动线上那一代。nginx 指向符号链接即可：
 
 ```nginx
-location /data-ui/ {
+location /news/ {
     alias /home/ec2-user/app/data-pipeline/web-dist/current/;
     try_files $uri $uri/ =404;
     add_header Cache-Control "no-cache";
+}
+# 旧路径 /data-ui/ 永久跳转到 /news/（含子路径）
+location /data-ui/ {
+    rewrite ^/data-ui/(.*)$ /news/$1 permanent;
 }
 ```
 

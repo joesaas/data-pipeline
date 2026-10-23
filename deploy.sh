@@ -11,7 +11,7 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 PUBLIC_BASE="${PUBLIC_BASE:-https://agent101.uk/data-pipeline}"
-PUBLIC_UI="${PUBLIC_UI:-https://agent101.uk/data-ui/}"
+PUBLIC_UI="${PUBLIC_UI:-https://agent101.uk/news/}"
 
 if [ -t 1  ]; then
 B=$'\033[1m'; G=$'\033[32m'; R=$'\033[31m'; Y=$'\033[33m'; N=$'\033[0m'
