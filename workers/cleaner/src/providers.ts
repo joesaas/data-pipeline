@@ -11,7 +11,7 @@
  *   as LLM output.
  */
 import type { CleanedItem, RawRecord } from "@data-pipeline/shared";
-import { extractJson, validateCleanedItems } from "./validate.js";
+import { extractJson, SOURCE_CATEGORY, validateCleanedItems } from "./validate.js";
 
 export interface LlmProvider {
   readonly name: string;
@@ -38,7 +38,9 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const text = await this.chat(systemPrompt, user, attempt === 0);
-        const { items } = validateCleanedItems(extractJson(text));
+        const { items } = validateCleanedItems(extractJson(text), {
+          forceCategory: SOURCE_CATEGORY[record.source_agent],
+        });
         return items;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));

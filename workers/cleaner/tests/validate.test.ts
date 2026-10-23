@@ -53,6 +53,14 @@ describe("validateCleanedItems", () => {
     assert.equal(items[1].category, "GitHub 热点项目");
     assert.equal(items[2].category, "Web3 DeFi");
   });
+  it("forceCategory overrides whatever the model said", () => {
+    const { items } = validateCleanedItems(
+      { items: [{ title: "a", summary: "s" }, { title: "b", summary: "s", category: "AI Agent" }] },
+      { forceCategory: "GitHub 热点项目" },
+    );
+    assert.equal(items[0].category, "GitHub 热点项目");
+    assert.equal(items[1].category, "GitHub 热点项目");
+  });
   it("throws when items is not an array", () => {
     assert.throws(() => validateCleanedItems({ nope: 1 }));
   });

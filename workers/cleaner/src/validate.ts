@@ -30,6 +30,16 @@ const CATEGORY_ALIASES: Record<string, string> = {
   "热门开源项目": "GitHub 热点项目",
 };
 
+/**
+ * Some sources are single-topic by construction: every item in a record
+ * from them belongs to one canonical category, whatever the LLM says.
+ * (A trending-repos brief's items never mention the category per item,
+ * so the model leaves it empty and everything lands in 未分类.)
+ */
+export const SOURCE_CATEGORY: Record<string, string> = {
+  "github-trending": "GitHub 热点项目",
+};
+
 export function canonicalCategory(raw: string): string {
   const c = raw.trim();
   if (!c) return "未分类";
@@ -47,7 +57,7 @@ function validDate(v: unknown): string | null {
 }
 
 /** Validate and coerce raw model output into CleanedItems; invalid items are dropped, never fatal. */
-export function validateCleanedItems(raw: unknown): ValidationOutcome {
+export function validateCleanedItems(raw: unknown, opts?: { forceCategory?: string }): ValidationOutcome {
   const root = raw as { items?: unknown };
   if (!root || !Array.isArray(root.items)) throw new Error("model output has no items array");
   const items: CleanedItem[] = [];
@@ -76,7 +86,7 @@ export function validateCleanedItems(raw: unknown): ValidationOutcome {
       title,
       summary,
       ...(detail ? { detail } : {}),
-      category: canonicalCategory(asString(e.category)),
+      category: opts?.forceCategory ?? canonicalCategory(asString(e.category)),
       tags,
       event_date: validDate(e.event_date),
       sources,
