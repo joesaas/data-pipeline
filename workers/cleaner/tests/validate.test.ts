@@ -57,6 +57,10 @@ describe("validateCleanedItems", () => {
     const { items } = validateCleanedItems({ items: [{ title: "a", summary: "s", category: "DeFi Protocol" }] });
     assert.equal(items[0].category, "Web3 DeFi");
   });
+  it("folds security variants into 安全", () => {
+    const { items } = validateCleanedItems({ items: [{ title: "a", summary: "s", category: "网络安全" }] });
+    assert.equal(items[0].category, "安全");
+  });
   it("forceCategory overrides whatever the model said", () => {
     const { items } = validateCleanedItems(
       { items: [{ title: "a", summary: "s" }, { title: "b", summary: "s", category: "AI Agent" }] },

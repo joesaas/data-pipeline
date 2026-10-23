@@ -127,6 +127,13 @@ const CATEGORY_ALIASES: Record<string, string> = {
   "defi 协议": "Web3 DeFi",
   "defi协议": "Web3 DeFi",
   "web3 defi protocol": "Web3 DeFi",
+  security: "安全",
+  "网络安全": "安全",
+  "信息安全": "安全",
+  "安全动态": "安全",
+  "安全资讯": "安全",
+  "安全事件": "安全",
+  "智能合约安全": "安全",
 };
 
 export function canonicalCategory(raw: string): string {

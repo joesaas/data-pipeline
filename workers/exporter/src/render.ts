@@ -29,6 +29,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   "DeFi Protocol": "#3b82f6",
   "区块链技术": "#f59e0b",
   "GitHub 热点项目": "#8250df",
+  "安全": "#dc2626",
 };
 const FALLBACK_PALETTE = ["#8b5cf6", "#06b6d4", "#f97316", "#22c55e", "#ec4899", "#6366f1"];
 
