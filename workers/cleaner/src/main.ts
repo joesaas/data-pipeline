@@ -64,6 +64,7 @@ const deps = {
   store,
   systemPrompt: loadCleanPrompt(),
   translatePrompt: loadTranslatePrompt(),
+  dedupeWindowDays: Math.max(1, Number(process.env.CLEANER_DEDUPE_WINDOW_DAYS ?? 7)),
   limit,
   maxPerRun,
   rateLimiter,

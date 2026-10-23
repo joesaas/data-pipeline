@@ -6,6 +6,7 @@ import type { LlmRateLimiter } from "./ratelimit.js";
 import type { CleanerStore } from "./store.js";
 import { PROMPT_VERSION } from "./prompt.js";
 import { needsTranslation, TRANSLATE_PROMPT_VERSION } from "./translate.js";
+import { dedupeItems } from "./dedupe.js";
 
 export interface BatchStats {
   fetched: number;
@@ -16,6 +17,7 @@ export interface BatchStats {
   deferred: number;
   items: number;
   translated: number;
+  deduped: number;
 }
 
 export interface BatchDeps {
@@ -25,6 +27,8 @@ export interface BatchDeps {
   systemPrompt: string;
   /** System prompt for the round's single batched translation call. */
   translatePrompt: string;
+  /** Cross-record dedupe window in days (default 7). */
+  dedupeWindowDays?: number;
   limit: number;
   maxPerRun: number;
   /** Budget for real LLM calls; mock provider calls are never charged. */
@@ -56,6 +60,7 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
     deferred: 0,
     items: 0,
     translated: 0,
+    deduped: 0,
   };
   const startCursor = deps.store.getCursor();
   const records: RawRecord[] = await deps.client.fetchSince(startCursor, deps.limit);
@@ -94,8 +99,16 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
       break;
     }
     try {
-      const items = await deps.provider.clean(record, deps.systemPrompt);
-      if (items.length === 0) throw new Error("provider returned no items");
+      const cleaned = await deps.provider.clean(record, deps.systemPrompt);
+      if (cleaned.length === 0) throw new Error("provider returned no items");
+      const { kept: items, dropped } = dedupeItems(
+        cleaned,
+        deps.store.recentItemKeys(deps.dedupeWindowDays ?? 7, record.id),
+      );
+      for (const d of dropped) {
+        log(`[cleaner] deduped "${d.item.title}" from ${record.id}: ${d.reason}`);
+      }
+      stats.deduped += dropped.length;
       deps.store.save(
         record,
         {
@@ -109,7 +122,7 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
       deps.store.setAttempts(record.id, 0);
       stats.cleaned += 1;
       stats.items += items.length;
-      log(`[cleaner] cleaned ${record.id}: ${items.length} items via ${deps.provider.name}/${deps.provider.model}`);
+      log(`[cleaner] cleaned ${record.id}: ${items.length} items via ${deps.provider.name}/${deps.provider.model}${dropped.length ? ` (${dropped.length} duplicates dropped)` : ""}`);
       advance(record);
     } catch (err) {
       const attempts = deps.store.getAttempts(record.id) + 1;
@@ -133,7 +146,7 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
   }
   await translatePending(deps, stats, log);
   log(
-    `[cleaner] batch done: fetched=${stats.fetched} cleaned=${stats.cleaned} items=${stats.items} skipped=${stats.skipped} rejected=${stats.rejected} failed=${stats.failed} deferred=${stats.deferred} translated=${stats.translated}`,
+    `[cleaner] batch done: fetched=${stats.fetched} cleaned=${stats.cleaned} items=${stats.items} skipped=${stats.skipped} rejected=${stats.rejected} failed=${stats.failed} deferred=${stats.deferred} translated=${stats.translated} deduped=${stats.deduped}`,
   );
   return stats;
 }

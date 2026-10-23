@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { RawRecord } from "@data-pipeline/shared";
+import type { CleanedItem, RawRecord } from "@data-pipeline/shared";
 import { runBatch } from "../src/batch.js";
 import type { RecordCursor } from "../src/client.js";
 import { MockProvider } from "../src/providers.js";
@@ -133,9 +133,10 @@ describe("runBatch cursor + budget discipline", () => {
 describe("runBatch translation phase", () => {
   const EN_BRIEF = `## A. DeFi Protocol\n\n### 1. Protocol launches v2 on mainnet\n${"The protocol shipped a major upgrade with new vaults and lower fees for all users. ".repeat(2)}`;
 
+  const EN_BRIEF2 = `## A. DeFi Protocol\n\n### 1. Another protocol ships governance upgrade\n${"A different protocol passed a governance proposal changing its fee model this week. ".repeat(2)}`;
   function enDeps(store: CleanerStore, translateCalls: { n: number; sizes: number[] }) {
     return {
-      client: stubClient([record("e1", "eh1", EN_BRIEF), { ...record("e2", "eh2", EN_BRIEF), updated_at: "2026-10-22T00:00:01Z" }]),
+      client: stubClient([record("e1", "eh1", EN_BRIEF), { ...record("e2", "eh2", EN_BRIEF2), updated_at: "2026-10-22T00:00:01Z" }]),
       provider: {
         name: "openai-compatible",
         model: "fake",
@@ -183,6 +184,38 @@ describe("runBatch translation phase", () => {
     });
     assert.equal(stats.translated, 0);
     assert.equal(store.listUntranslated(10).length, 1); // left pending, not marked
+    store.close();
+  });
+});
+
+describe("runBatch cross-record dedupe", () => {
+  it("drops items already stored from another record (title or source url)", async () => {
+    const store = new CleanerStore(":memory:");
+    const itemsA: CleanedItem[] = [
+      { title: "Protocol X launches v2 on mainnet", summary: "s", category: "Web3 DeFi", tags: [], event_date: null, sources: [{ name: "X", url: "https://x.blog/v2" }] },
+    ];
+    const itemsB: CleanedItem[] = [
+      { title: "Protocol X launches v2 on mainnet!", summary: "s", category: "Web3 DeFi", tags: [], event_date: null, sources: [] },
+      { title: "Totally different headline", summary: "s", category: "Web3 DeFi", tags: [], event_date: null, sources: [{ name: "X", url: "https://x.blog/v2" }] },
+      { title: "Unique news item here", summary: "s", category: "AI Agent", tags: [], event_date: null, sources: [] },
+    ];
+    const providerFor = (items: CleanedItem[]) => ({
+      name: "openai-compatible",
+      model: "fake",
+      clean: async () => items,
+      translate: async () => new Map(),
+    });
+    const base = { store, systemPrompt: "x", translatePrompt: "t", limit: 100, maxPerRun: 20, log: () => {} };
+    const first = await runBatch({ ...base, client: stubClient([record("d1", "dh1", BRIEF)]), provider: providerFor(itemsA) });
+    assert.equal(first.items, 1);
+    const second = await runBatch({
+      ...base,
+      client: stubClient([{ ...record("d2", "dh2", BRIEF), updated_at: "2026-10-22T00:00:09Z" }]),
+      provider: providerFor(itemsB),
+    });
+    assert.equal(second.deduped, 2);
+    assert.equal(second.items, 1);
+    assert.equal(store.listUntranslated(10).length, 2); // 1 kept from each record
     store.close();
   });
 });

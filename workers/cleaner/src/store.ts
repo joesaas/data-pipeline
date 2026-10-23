@@ -191,6 +191,30 @@ export class CleanerStore {
     }
   }
 
+  /**
+   * Dedupe keys of items stored in the last `windowDays` days, excluding
+   * one record (the one being cleaned — its stored items are about to be
+   * replaced by save(), so they must not dedupe against themselves).
+   */
+  recentItemKeys(windowDays: number, excludeRecordId: string): { title: string; sourceUrls: string[] }[] {
+    const cutoff = new Date(Date.now() - windowDays * 86_400_000).toISOString();
+    const rows = this.db
+      .prepare(
+        `SELECT i.title, i.sources FROM cleaned_items i
+         JOIN cleaned_records r ON r.source_record_id = i.source_record_id
+         WHERE r.cleaned_at >= ? AND i.source_record_id != ?`,
+      )
+      .all(cutoff, excludeRecordId) as { title: string; sources: string }[];
+    return rows.map((r) => {
+      let urls: string[] = [];
+      try {
+        const parsed = JSON.parse(r.sources) as { url?: unknown }[];
+        if (Array.isArray(parsed)) urls = parsed.map((s) => String(s?.url ?? "")).filter(Boolean);
+      } catch { /* malformed sources: title key still applies */ }
+      return { title: r.title, sourceUrls: urls };
+    });
+  }
+
   // ---- fetch cursor: (updated_at, id) of the last record the cleaner has
   // fully dealt with. Records after it are fetched next round; the cursor
   // never jumps over an unprocessed record (failure / rate limit stop the
