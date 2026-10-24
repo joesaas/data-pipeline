@@ -12,6 +12,7 @@
 | `apps/api/` | 收集服务（原根目录 `src/` 整体搬入，逻辑未改） |
 | `workers/cleaner/` | 清洗服务：拉记录 → 质量门 → LLM 清洗 → 结构化条目落自己的 SQLite；pm2 定时服务或单次跑批，见下节 |
 | `workers/cursor-trigger/` | Cursor 触发服务：pm2 定时服务，每小时（可配）POST 一次 Cursor automation webhook；URL 与 token 只走根 `.env` |
+| `workers/job-runner/` | 多定时 job 常驻进程：一个 pm2 进程托管多个定时 job（Bree worker 线程隔离）；新轻量定时任务进这里，不再新增 pm2 服务，见 `workers/job-runner/README.md` |
 | `workers/exporter/` | 静态站点导出：把清洗结果渲染成纯静态站（列表页 + 详情页 + items.json），nginx 直供，见「静态站点」节 |
 | `packages/shared/` | 共享契约（仅类型）：`RawRecord` 线格式与 `CleanedItem` 草案 schema |
 | `skills/` | pipe-push 各运行时变体（见下） |

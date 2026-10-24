@@ -6,6 +6,7 @@
 # api -> pm2 进程 data-pipeline（收集 API）
 # cleaner -> pm2 进程 data-cleaner（定时清洗 + 自动导出静态站）
 # cursor -> pm2 进程 data-cursor-trigger（定时调用 Cursor automation webhook）
+# runner -> pm2 进程 data-job-runner（多定时 job 常驻进程；新轻量定时任务进这里，不再新增 pm2 服务）
 # 静态站由 cleaner 自动导出、nginx 直供，没有常驻 web 进程。
 
 set -uo pipefail
@@ -29,8 +30,8 @@ need() { command -v "$1" >/dev/null 2>&1 || die "找不到命令：$1（先装�
 # 先校验服务别名（die 必须在主 shell 里执行，不能放进命令替换的子 shell）
 validate_svc() {
   case "${1:-}" in
-    ""|all|api|cleaner|cursor) return 0 ;;
-    *) die "未知服务：${1}（可用：api / cleaner / cursor / all）" ;;
+    ""|all|api|cleaner|cursor|runner) return 0 ;;
+    *) die "未知服务：${1}（可用：api / cleaner / cursor / runner / all）" ;;
   esac
 }
 
@@ -41,7 +42,8 @@ case "${1:-}" in
 api) echo "data-pipeline";;
 cleaner) echo "data-cleaner";;
 cursor) echo "data-cursor-trigger";;
-*) die "未知服务：$1（可用：api / cleaner / cursor / all）";;
+runner) echo "data-job-runner";;
+*) die "未知服务：$1（可用：api / cleaner / cursor / runner / all）";;
 esac
 }
 
@@ -56,7 +58,7 @@ deploy [服务] 全流程：拉代码 -> 装依赖 -> 构建 -> 重启 -> 导出
 update 只拉最新代码（git pull）
 build 只装依赖并构建（npm install + npm run build，均为轻量 tsc）
 
-服务可填 api / cleaner / cursor / all（省略 = all）
+服务可填 api / cleaner / cursor / runner / all（省略 = all）
 start [服务] 启动（用 ecosystem.config.cjs）
 stop [服务] 停止
 restart [服务] 重启（进程不存在时自动改为启动）
@@ -87,7 +89,7 @@ cmd_build() {
 need npm
 info "安装依赖…"
 npm install || die "npm install 失败"
-info "构建（shared -> api -> exporter -> cleaner -> cursor-trigger）…"
+info "构建（shared -> api -> exporter -> cleaner -> cursor-trigger -> job-runner）…"
 npm run build || die "构建失败"
 ok "构建完成"
 }
@@ -135,7 +137,7 @@ fi
 else
 info "重启全部服务…"
 # 逐个重启 ecosystem 里定义的进程；不存在的跳过并提示
-for n in data-pipeline data-cleaner data-cursor-trigger; do
+for n in data-pipeline data-cleaner data-cursor-trigger data-job-runner; do
 if pm2 describe "$n" >/dev/null 2>&1; then
 pm2 restart "$n" || die "重启 $n 失败"
 else

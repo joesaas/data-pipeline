@@ -42,5 +42,16 @@ module.exports = {
         // must never be hard-coded anywhere in this repo.
       },
     },
+    {
+      name: "data-job-runner",
+      cwd: root,
+      script: "workers/job-runner/dist/src/main.js",
+      autorestart: true,
+      env: {
+        // Job-specific secrets (if a future job needs any) live in the repo
+        // root .env only, never here and never in code. The runner itself
+        // needs no secrets: it only schedules jobs.
+      },
+    },
   ],
 };
