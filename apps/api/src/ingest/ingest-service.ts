@@ -20,6 +20,17 @@ function deriveTitle(content: string): string | null {
   return cleaned.slice(0, 120) || null;
 }
 
+/** JSON with object keys sorted recursively, for order-insensitive
+ *  comparison of tags/metadata between a stored record and a re-push. */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
+}
+
 /** Validation + dedupe/upsert semantics. Depends only on StorageDriver. */
 export class IngestService {
   constructor(
@@ -85,7 +96,22 @@ export class IngestService {
     if (payload.external_id) {
       const existing = this.driver.findRecordByExternalId(identity, payload.external_id);
       if (existing) {
-        if (existing.content_hash === contentHash) {
+        // external_id addresses the record: a re-push that changes ANY
+        // field — content, prompt, tags, metadata, title, source —
+        // replaces it. Only a byte-identical re-push is deduped.
+        // (tags/metadata-only updates are how stateful consumers, e.g.
+        // the muse-inbox task mailbox, move a record through its
+        // lifecycle without touching prompt/content.)
+        const identical =
+          existing.content_hash === contentHash &&
+          existing.prompt === base.prompt &&
+          existing.title === base.title &&
+          existing.content_format === base.content_format &&
+          existing.source_agent === base.source_agent &&
+          existing.skill_version === base.skill_version &&
+          stableStringify(existing.tags) === stableStringify(base.tags) &&
+          stableStringify(existing.metadata) === stableStringify(base.metadata);
+        if (identical) {
           return { id: existing.id, status: "deduped", created_at: existing.created_at };
         }
         const updated: StoredRecord = {

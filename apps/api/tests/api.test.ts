@@ -108,6 +108,35 @@ describe("api: auth off (default)", () => {
     assert.equal(gone.status, 404);
   });
 
+  it("a tags/metadata-only re-push replaces (mailbox state transitions), identical re-push dedupes", async () => {
+    const body = {
+      prompt: "do x",
+      content: "material",
+      external_id: "stateful-1",
+      source_agent: "muse-inbox",
+      tags: ["inbox", "status:pending"],
+      metadata: { sender: "drill", attempts: 0 },
+    };
+    const a = await post(ctx.base, "/api/v1/records", body);
+    assert.equal(a.body.status, "created");
+
+    // key order shuffled, everything else identical -> still deduped
+    const shuffled = { ...body, metadata: { attempts: 0, sender: "drill" } };
+    const b = await post(ctx.base, "/api/v1/records", shuffled);
+    assert.equal(b.body.status, "deduped");
+
+    // same prompt/content, new tags+metadata -> replaced, state moved
+    const claimed = { ...body, tags: ["inbox", "status:running"], metadata: { sender: "drill", attempts: 1 } };
+    const c = await post(ctx.base, "/api/v1/records", claimed);
+    assert.equal(c.body.status, "replaced");
+    assert.equal(c.body.id, a.body.id);
+    const got = await fetch(`${ctx.base}/api/v1/records/${a.body.id}`);
+    const rec = (await got.json()) as { tags: string[]; metadata: { attempts: number }; content: string };
+    assert.deepEqual(rec.tags, ["inbox", "status:running"]);
+    assert.equal(rec.metadata.attempts, 1);
+    assert.equal(rec.content, "material");
+  });
+
   it("validation errors name the field", async () => {
     const bad = await post(ctx.base, "/api/v1/records", { content: "x" });
     assert.equal(bad.status, 400);
