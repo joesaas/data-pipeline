@@ -29,5 +29,18 @@ module.exports = {
         // LLM_MODEL: "openai/gpt-4o-mini",
       },
     },
+    {
+      name: "data-cursor-trigger",
+      cwd: root,
+      script: "workers/cursor-trigger/dist/src/main.js",
+      autorestart: true,
+      env: {
+        // CURSOR_WEBHOOK_URL / CURSOR_AUTOMATION_TOKEN / CURSOR_TRIGGER_INTERVAL_MINUTES
+        // intentionally NOT set here: pm2 env beats .env (real env wins by
+        // design), so all three live in the repo root .env only. In-code
+        // default interval is 60 minutes when neither sets it. The token
+        // must never be hard-coded anywhere in this repo.
+      },
+    },
   ],
 };
