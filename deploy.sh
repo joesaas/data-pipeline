@@ -80,6 +80,11 @@ EOF
 }
 
 cmd_update() {
+# package-lock.json 是生成文件：每次部署的 npm install 都可能改写它。
+# 若不先丢弃，远端一改 lock，git pull 就会死在这里（2026-10-24 已连踩两次）。
+# 生成文件丢了可由 npm install 重建；只丢它，不动其它本地改动。
+info "丢弃本地生成的 package-lock.json 改动…"
+git checkout -- package-lock.json 2>/dev/null || true
 info "拉取最新代码…"
 git pull --ff-only || die "git pull 失败（有本地改动先处理，或检查 deploy key）"
 ok "代码已更新到 $(git rev-parse --short HEAD)"
