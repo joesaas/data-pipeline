@@ -59,7 +59,7 @@ const provider = createLlmProvider(process.env);
 const store = new CleanerStore(CleanerStore.defaultPath());
 const rateLimiter = new LlmRateLimiter(store, llmRateLimits);
 const deps = {
-  client: createRecordsClient(baseUrl),
+  client: createRecordsClient(baseUrl, fetch, process.env.DATA_PIPELINE_API_KEY?.trim() || undefined),
   provider,
   store,
   systemPrompt: loadCleanPrompt(),

@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { StoredRecord, StoredToken } from "../domain/types.js";
+import { ADMIN_IDENTITY } from "../domain/types.js";
 import type { StorageDriver } from "./storage-driver.js";
+
+/** Identity scoping: admin sees every record; anyone else only their own. */
+function inScope(identity: string, rec: StoredRecord): boolean {
+  return identity === ADMIN_IDENTITY || rec.token_id === identity;
+}
 
 /**
  * File implementation of StorageDriver: one JSON file per record under
@@ -44,14 +50,14 @@ export class FileDriver implements StorageDriver {
 
   findRecordByExternalId(identity: string, externalId: string): StoredRecord | null {
     return (
-      this.readAllRecords().find((r) => r.token_id === identity && r.external_id === externalId) ??
+      this.readAllRecords().find((r) => inScope(identity, r) && r.external_id === externalId) ??
       null
     );
   }
 
   findRecordByHash(identity: string, contentHash: string): StoredRecord | null {
     const matches = this.readAllRecords()
-      .filter((r) => r.token_id === identity && r.content_hash === contentHash)
+      .filter((r) => inScope(identity, r) && r.content_hash === contentHash)
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
     return matches[0] ?? null;
   }
@@ -60,7 +66,7 @@ export class FileDriver implements StorageDriver {
     const path = join(this.recordsDir, `${id}.json`);
     if (!existsSync(path)) return null;
     const rec = JSON.parse(readFileSync(path, "utf8")) as StoredRecord;
-    return rec.token_id === identity ? rec : null;
+    return inScope(identity, rec) ? rec : null;
   }
 
   listRecords(
@@ -75,7 +81,7 @@ export class FileDriver implements StorageDriver {
       order?: "created_desc" | "updated_asc";
     },
   ): { items: StoredRecord[]; total: number } {
-    let items = this.readAllRecords().filter((r) => r.token_id === identity);
+    let items = this.readAllRecords().filter((r) => inScope(identity, r));
     if (filter.source_agent) items = items.filter((r) => r.source_agent === filter.source_agent);
     if (filter.tag) items = items.filter((r) => r.tags.includes(filter.tag as string));
     if (filter.order === "updated_asc") {

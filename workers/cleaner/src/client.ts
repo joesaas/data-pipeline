@@ -10,7 +10,7 @@ export interface RecordsClient {
   fetchSince(cursor: RecordCursor | null, limit: number): Promise<RawRecord[]>;
 }
 
-export function createRecordsClient(baseUrl: string, fetchFn: typeof fetch = fetch): RecordsClient {
+export function createRecordsClient(baseUrl: string, fetchFn: typeof fetch = fetch, apiKey?: string): RecordsClient {
   const base = baseUrl.replace(/\/$/, "");
   return {
     async fetchSince(cursor: RecordCursor | null, limit: number): Promise<RawRecord[]> {
@@ -23,7 +23,10 @@ export function createRecordsClient(baseUrl: string, fetchFn: typeof fetch = fet
           params.set("updated_after", after.updated_at);
           params.set("after_id", after.id);
         }
-        const res = await fetchFn(`${base}/api/v1/records?${params.toString()}`);
+        const res = await fetchFn(
+          `${base}/api/v1/records?${params.toString()}`,
+          apiKey ? { headers: { "X-API-Key": apiKey } } : undefined,
+        );
         if (!res.ok) throw new Error(`GET records failed: ${res.status} ${res.statusText}`);
         const page = (await res.json()) as RecordsPage;
         out.push(...page.items);

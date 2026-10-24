@@ -41,6 +41,17 @@ export interface BatchDeps {
 const MAX_ATTEMPTS = 5;
 
 /**
+ * Source agents whose records are not news content and must never be
+ * cleaned into the site: the Muse task mailbox and its results
+ * (see the mailbox design doc). Skipped deterministically, like the
+ * source-category pinning — never left to the quality gate or the LLM.
+ */
+export const SKIPPED_SOURCE_AGENTS: ReadonlySet<string> = new Set([
+  "muse-inbox",
+  "muse-inbox-result",
+]);
+
+/**
  * One cleaning pass over the records after the stored cursor, ascending.
  *
  * Cursor discipline: the cursor advances only past records that reached a
@@ -77,6 +88,12 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
       log(`[cleaner] max-per-run reached (${deps.maxPerRun}), ${remaining} record(s) deferred to the next cycle`);
       stats.deferred += remaining;
       break;
+    }
+    if (SKIPPED_SOURCE_AGENTS.has(record.source_agent)) {
+      stats.skipped += 1;
+      log(`[cleaner] skipped ${record.id}: source_agent=${record.source_agent} is not news content (skip list)`);
+      advance(record);
+      continue;
     }
     const quality = checkQuality(record);
     if (!quality.ok) {

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { StoredRecord, StoredToken } from "../domain/types.js";
+import { ADMIN_IDENTITY } from "../domain/types.js";
 import type { StorageDriver } from "./storage-driver.js";
 
 interface RecordRow {
@@ -27,6 +28,11 @@ interface TokenRow {
   key_hash: string;
   created_at: string;
   revoked_at: string | null;
+  role: string | null;
+}
+
+function rowToToken(r: TokenRow): StoredToken {
+  return { ...r, role: r.role === "admin" ? "admin" : "user" };
 }
 
 function rowToRecord(r: RecordRow): StoredRecord {
@@ -71,9 +77,15 @@ export class SqliteDriver implements StorageDriver {
         name TEXT NOT NULL,
         key_hash TEXT NOT NULL UNIQUE,
         created_at TEXT NOT NULL,
-        revoked_at TEXT
+        revoked_at TEXT,
+        role TEXT NOT NULL DEFAULT 'user'
       );
     `);
+    // Migration for databases created before token roles existed.
+    const tokenCols = this.db.prepare("PRAGMA table_info(tokens)").all() as { name: string }[];
+    if (!tokenCols.some((c) => c.name === "role")) {
+      this.db.exec("ALTER TABLE tokens ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
+    }
   }
 
   insertRecord(rec: StoredRecord): void {
@@ -105,23 +117,33 @@ export class SqliteDriver implements StorageDriver {
   }
 
   findRecordByExternalId(identity: string, externalId: string): StoredRecord | null {
-    const row = this.db
-      .prepare("SELECT * FROM records WHERE token_id = ? AND external_id = ?")
-      .get(identity, externalId) as RecordRow | undefined;
+    const row = (
+      identity === ADMIN_IDENTITY
+        ? this.db.prepare("SELECT * FROM records WHERE external_id = ?").get(externalId)
+        : this.db.prepare("SELECT * FROM records WHERE token_id = ? AND external_id = ?").get(identity, externalId)
+    ) as RecordRow | undefined;
     return row ? rowToRecord(row) : null;
   }
 
   findRecordByHash(identity: string, contentHash: string): StoredRecord | null {
-    const row = this.db
-      .prepare("SELECT * FROM records WHERE token_id = ? AND content_hash = ? ORDER BY created_at ASC LIMIT 1")
-      .get(identity, contentHash) as RecordRow | undefined;
+    const row = (
+      identity === ADMIN_IDENTITY
+        ? this.db
+            .prepare("SELECT * FROM records WHERE content_hash = ? ORDER BY created_at ASC LIMIT 1")
+            .get(contentHash)
+        : this.db
+            .prepare("SELECT * FROM records WHERE token_id = ? AND content_hash = ? ORDER BY created_at ASC LIMIT 1")
+            .get(identity, contentHash)
+    ) as RecordRow | undefined;
     return row ? rowToRecord(row) : null;
   }
 
   getRecord(identity: string, id: string): StoredRecord | null {
-    const row = this.db
-      .prepare("SELECT * FROM records WHERE token_id = ? AND id = ?")
-      .get(identity, id) as RecordRow | undefined;
+    const row = (
+      identity === ADMIN_IDENTITY
+        ? this.db.prepare("SELECT * FROM records WHERE id = ?").get(id)
+        : this.db.prepare("SELECT * FROM records WHERE token_id = ? AND id = ?").get(identity, id)
+    ) as RecordRow | undefined;
     return row ? rowToRecord(row) : null;
   }
 
@@ -137,8 +159,8 @@ export class SqliteDriver implements StorageDriver {
       order?: "created_desc" | "updated_asc";
     },
   ): { items: StoredRecord[]; total: number } {
-    let where = "WHERE token_id = ?";
-    const params: unknown[] = [identity];
+    let where = identity === ADMIN_IDENTITY ? "WHERE 1 = 1" : "WHERE token_id = ?";
+    const params: unknown[] = identity === ADMIN_IDENTITY ? [] : [identity];
     if (filter.source_agent) {
       where += " AND source_agent = ?";
       params.push(filter.source_agent);
@@ -164,23 +186,24 @@ export class SqliteDriver implements StorageDriver {
   }
 
   deleteRecord(identity: string, id: string): boolean {
-    const res = this.db
-      .prepare("DELETE FROM records WHERE token_id = ? AND id = ?")
-      .run(identity, id);
+    const res =
+      identity === ADMIN_IDENTITY
+        ? this.db.prepare("DELETE FROM records WHERE id = ?").run(id)
+        : this.db.prepare("DELETE FROM records WHERE token_id = ? AND id = ?").run(identity, id);
     return Number(res.changes) > 0;
   }
 
   createToken(tok: StoredToken): void {
     this.db
-      .prepare("INSERT INTO tokens (id, name, key_hash, created_at, revoked_at) VALUES (?, ?, ?, ?, ?)")
-      .run(tok.id, tok.name, tok.key_hash, tok.created_at, tok.revoked_at);
+      .prepare("INSERT INTO tokens (id, name, key_hash, created_at, revoked_at, role) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(tok.id, tok.name, tok.key_hash, tok.created_at, tok.revoked_at, tok.role ?? "user");
   }
 
   findTokenByHash(keyHash: string): StoredToken | null {
     const row = this.db
       .prepare("SELECT * FROM tokens WHERE key_hash = ?")
       .get(keyHash) as TokenRow | undefined;
-    return row ?? null;
+    return row ? rowToToken(row) : null;
   }
 
   revokeToken(id: string): boolean {

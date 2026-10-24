@@ -30,13 +30,27 @@ export interface StoredRecord {
   updated_at: string;
 }
 
+export type TokenRole = "user" | "admin";
+
 export interface StoredToken {
   id: string;
   name: string;
   key_hash: string;
   created_at: string;
   revoked_at: string | null;
+  /** "admin" tokens resolve to ADMIN_IDENTITY and may read every
+   *  identity's records (the cleaner reads all pushers' records).
+   *  Optional for backward compatibility: absent means "user". */
+  role?: TokenRole;
 }
+
+/**
+ * Identity an admin token resolves to. Records are siloed per identity;
+ * drivers treat this identity as unscoped for reads (find / get / list /
+ * delete). An admin identity is a reader, not a bucket: nothing is ever
+ * pushed under it in normal operation.
+ */
+export const ADMIN_IDENTITY = "__admin__";
 
 export type PushStatus = "created" | "replaced" | "deduped";
 

@@ -139,4 +139,25 @@ describe("api: auth on", () => {
     const ok = await post(ctx.base, "/api/v1/records", { prompt: "p", content: "c" }, { "x-api-key": key });
     assert.equal(ok.status, 201);
   });
+
+  it("an admin token reads records pushed under another identity", async () => {
+    const dir2 = mkdtempSync(join(tmpdir(), "dp-api-admin-"));
+    const probe = createApp(baseConfig(dir2, { authRequired: true }));
+    const userKey = probe.auth.createToken("pusher").plainKey;
+    const adminKey = probe.auth.createToken("cleaner", "admin").plainKey;
+    probe.driver.close();
+    const ctx2 = await start(baseConfig(dir2, { authRequired: true }));
+    try {
+      const pushed = await post(ctx2.base, "/api/v1/records", { prompt: "p", content: "cross-identity" }, { "x-api-key": userKey });
+      assert.equal(pushed.status, 201);
+      const asUser = await fetch(`${ctx2.base}/api/v1/records`, { headers: { "x-api-key": userKey } }).then((r) => r.json());
+      assert.equal(asUser.total, 1);
+      const asAdmin = await fetch(`${ctx2.base}/api/v1/records`, { headers: { "x-api-key": adminKey } }).then((r) => r.json());
+      assert.equal(asAdmin.total, 1);
+      assert.equal(asAdmin.items[0].content, "cross-identity");
+    } finally {
+      ctx2.close();
+      rmSync(dir2, { recursive: true, force: true });
+    }
+  });
 });

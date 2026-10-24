@@ -67,6 +67,29 @@ describe("runBatch", () => {
     assert.equal(stats.rejected, 1);
     store.close();
   });
+
+  it("skips mailbox records (muse-inbox / muse-inbox-result) without cleaning them", async () => {
+    const store = new CleanerStore(":memory:");
+    const inbox = { ...record("t1", "ht1", BRIEF), source_agent: "muse-inbox", updated_at: "2026-10-22T00:00:01Z" };
+    const result = { ...record("t2", "ht2", BRIEF), source_agent: "muse-inbox-result", updated_at: "2026-10-22T00:00:02Z" };
+    const news = { ...record("n1", "hn1", BRIEF), updated_at: "2026-10-22T00:00:03Z" };
+    const deps = {
+      client: stubClient([inbox, result, news]),
+      provider: new MockProvider(),
+      store,
+      systemPrompt: "x",
+      translatePrompt: "t",
+      limit: 100,
+      maxPerRun: 20,
+      log: () => {},
+    };
+    const stats = await runBatch(deps);
+    assert.equal(stats.skipped, 2);
+    assert.equal(stats.cleaned, 1); // only the news record
+    const second = await runBatch(deps);
+    assert.equal(second.fetched, 0); // cursor advanced past all three
+    store.close();
+  });
 });
 
 describe("runBatch cursor + budget discipline", () => {

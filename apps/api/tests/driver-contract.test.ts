@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { IngestService } from "../src/ingest/ingest-service.js";
+import { ADMIN_IDENTITY } from "../src/domain/types.js";
 import { FileDriver } from "../src/storage/file-driver.js";
 import { SqliteDriver } from "../src/storage/sqlite-driver.js";
 import type { StorageDriver } from "../src/storage/storage-driver.js";
@@ -56,6 +57,15 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       const a = ingest.push("token-a", { prompt: "p", content: "secret", external_id: "x" });
       assert.equal(driver.getRecord("token-b", a.id), null);
       assert.equal(driver.listRecords("token-b", { limit: 10, offset: 0 }).total, 0);
+    });
+
+    it("lets the admin identity read across identities, without merging buckets", () => {
+      const a = ingest.push("token-a", { prompt: "p", content: "admin-visible", external_id: "adm1" });
+      assert.equal(driver.getRecord(ADMIN_IDENTITY, a.id)?.content, "admin-visible");
+      assert.equal(driver.findRecordByExternalId(ADMIN_IDENTITY, "adm1")?.id, a.id);
+      assert.ok(driver.listRecords(ADMIN_IDENTITY, { limit: 100, offset: 0 }).total >= 1);
+      // Isolation still holds for non-admin identities.
+      assert.equal(driver.getRecord("token-b", a.id), null);
     });
 
     it("lists with filters and deletes", () => {
