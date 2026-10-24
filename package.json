@@ -17,7 +17,7 @@
     "test": "npm run build && npm run test --workspaces --if-present",
     "start": "npm run start -w @data-pipeline/api",
     "dev": "npm run dev -w @data-pipeline/api",
-    "create-token": "npm run create-token -w @data-pipeline/api",
+    "create-token": "npm run create-token -w @data-pipeline/api --",
     "clean": "npm run build -w @data-pipeline/shared -w @data-pipeline/exporter -w @data-pipeline/cleaner && node workers/cleaner/dist/src/main.js --once",
     "export": "npm run build -w @data-pipeline/exporter && node workers/exporter/dist/src/main.js"
   },
