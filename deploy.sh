@@ -88,6 +88,13 @@ git checkout -- package-lock.json 2>/dev/null || true
 info "拉取最新代码…"
 git pull --ff-only || die "git pull 失败（有本地改动先处理，或检查 deploy key）"
 ok "代码已更新到 $(git rev-parse --short HEAD)"
+# 推送工具不保留可执行位（远端 deploy.sh 恒为 100644，2026-10-25 实测），
+# 每次拉取后必须自己把位补回来，否则下次 ./deploy.sh 直接 Permission denied。
+# 先关 core.fileMode：否则补上的位会被 git 视作本地改动，下次 pull 到
+# deploy.sh 有改动时直接冲突失败。config 只写本仓库本地配置，不影响远端。
+git config core.fileMode false 2>/dev/null || true
+chmod +x deploy.sh || die "chmod +x deploy.sh 失败（下次 ./deploy.sh 将无法执行）"
+chmod +x scripts/*.sh 2>/dev/null || true
 }
 
 cmd_build() {

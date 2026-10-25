@@ -92,6 +92,10 @@ while true; do
     fi
     log "change detected: $local_head -> $remote; deploying"
     rotate_log
+    # 推送工具不保留可执行位（远端 deploy.sh 恒为 100644）：没有这一行，
+    # 只要上次推送动过 deploy.sh，这里的部署就会以 126 Permission denied
+    # 失败——旧 auto-deploy 会无限重试，新版熔断会在 3 次后停手。
+    chmod +x ./deploy.sh 2>/dev/null || true
     if ./deploy.sh deploy >>"$LOG" 2>&1; then
       log "deploy ok -> $(git rev-parse --short HEAD)"
       write_state "" 0
