@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildRequest, resolveConfig, triggerOnce } from "../src/trigger.js";
+import { buildRequest, resolveConfig, resolveWebhookConfig, triggerOnce } from "../src/trigger.js";
 
 const ENV = {
   CURSOR_WEBHOOK_URL: "https://api2.cursor.sh/automations/webhook/test-id",
@@ -27,6 +27,23 @@ describe("resolveConfig", () => {
   });
   it("rejects a malformed webhook URL", () => {
     assert.throws(() => resolveConfig({ ...ENV, CURSOR_WEBHOOK_URL: "not a url" }), /CURSOR_WEBHOOK_URL is not a valid/);
+  });
+});
+
+describe("resolveWebhookConfig", () => {
+  it("prefers the database config per field, falls back to env", () => {
+    const db = { url: "https://db.example/hook", token: "db-token" };
+    const cfg = resolveWebhookConfig(ENV, db);
+    assert.equal(cfg.url, "https://db.example/hook");
+    assert.equal(cfg.token, "db-token");
+    const mixed = resolveWebhookConfig(ENV, { url: "https://db.example/hook", token: "" });
+    assert.equal(mixed.url, "https://db.example/hook");
+    assert.equal(mixed.token, "crsr_test_token");
+    const envOnly = resolveWebhookConfig(ENV, null);
+    assert.equal(envOnly.url, ENV.CURSOR_WEBHOOK_URL);
+  });
+  it("throws when neither source has the values", () => {
+    assert.throws(() => resolveWebhookConfig({}, null), /missing webhook config/);
   });
 });
 

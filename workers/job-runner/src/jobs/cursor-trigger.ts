@@ -1,6 +1,8 @@
 /**
  * cursor-trigger job — migrated from the standalone data-cursor-trigger
- * service (same webhook request shape, same secrets-from-environment rule).
+ * service (same webhook request shape, same prompt/state rules). The
+ * endpoint itself now comes from the API database first (console-managed
+ * webhook_configs table), with the environment as fallback.
  *
  * Bree ticks this file every minute; the file itself decides whether the
  * configured interval has elapsed (see cursor-state.ts), so the cadence
@@ -21,7 +23,7 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadDefaultEnv } from "../load-env.js";
-import { resolveConfig, triggerOnce } from "../trigger.js";
+import { resolveWebhookConfig, triggerOnce } from "../trigger.js";
 import {
   loadState,
   resolveIntervalMinutes,
@@ -29,6 +31,7 @@ import {
   shouldTrigger,
   stateFilePath,
 } from "../cursor-state.js";
+import { apiDbPath, loadWebhookConfigFromDb } from "../webhook-config.js";
 
 const envFile = loadDefaultEnv();
 const statePath = stateFilePath(envFile, dirname(fileURLToPath(import.meta.url)));
@@ -43,7 +46,11 @@ if (!shouldTrigger(state, intervalMinutes, now)) {
   );
 } else {
   try {
-    const config = resolveConfig(process.env);
+    // Database config (console-managed) wins; .env is only the fallback.
+    // The read happens on every trigger attempt, so a console save takes
+    // effect on the next tick with no runner restart.
+    const dbConfig = loadWebhookConfigFromDb(apiDbPath(envFile));
+    const config = resolveWebhookConfig(process.env, dbConfig);
     const result = await triggerOnce(
       { ...config, prompt: state.prompt ?? undefined },
       now,
@@ -51,7 +58,7 @@ if (!shouldTrigger(state, intervalMinutes, now)) {
     saveState(statePath, { ...state, lastTriggeredAt: now.toISOString() });
     const origin = new URL(config.url).origin;
     console.log(
-      `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… interval=${intervalMinutes}m prompt=${state.prompt ? "set" : "unset"}`,
+      `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… interval=${intervalMinutes}m prompt=${state.prompt ? "set" : "unset"} cfg=${dbConfig ? "db" : "env"}`,
     );
   } catch (err) {
     console.error(

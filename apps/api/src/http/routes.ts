@@ -74,6 +74,8 @@ export function registerRoutes(
         admin_cursor_trigger: `POST ${base}/api/v1/admin/jobs/cursor-trigger/trigger`,
         admin_cursor_interval: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/interval`,
         admin_cursor_webhook: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/webhook`,
+        admin_cursor_webhook_import: `POST ${base}/api/v1/admin/jobs/cursor-trigger/webhook/import`,
+        admin_cursor_webhook_delete: `DELETE ${base}/api/v1/admin/jobs/cursor-trigger/webhook`,
         admin_cursor_restart: `POST ${base}/api/v1/admin/jobs/cursor-trigger/restart`,
         admin_cursor_prompt: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/prompt`,
       },
@@ -193,6 +195,12 @@ export function registerRoutes(
   );
   router.put("/api/v1/admin/jobs/cursor-trigger/webhook", (req, res) =>
     admin.setCursorWebhook(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/jobs/cursor-trigger/webhook/import", (req, res) =>
+    admin.importCursorWebhook(adminDeps, req, res),
+  );
+  router.delete("/api/v1/admin/jobs/cursor-trigger/webhook", (req, res) =>
+    admin.deleteCursorWebhook(adminDeps, req, res),
   );
   router.post("/api/v1/admin/jobs/cursor-trigger/restart", (req, res) =>
     admin.restartJobRunner(adminDeps, req, res),

@@ -100,13 +100,15 @@
         </div>
         <p class="hint">
           定时任务现在跑在 job-runner 里：每 1 分钟 tick 一次，到 interval 才真正发一次 webhook。
-          webhook 地址和 token 只存在服务器根 .env 里——这里可以设置它们，但永远不显示已有值。
+          webhook 配置存在数据库 webhook_configs 表里——这里可以设置它，但 token 永远不显示。
         </p>
         <div v-if="cursor" class="grid">
           <div><label>上次触发</label><div>{{ cursor.lastTriggeredAt ? fmtTime(cursor.lastTriggeredAt) : "从未" }}</div></div>
           <div><label>当前区间</label><div>{{ cursor.effectiveIntervalMinutes }} 分钟</div></div>
           <div><label>下次触发约</label><div>{{ cursor.nextDueAt ? fmtTime(cursor.nextDueAt) : "下一 tick 即触发" }}</div></div>
-          <div><label>webhook 配置</label><div>{{ cursor.webhookConfigured ? "已配置" : "未配置（检查服务器 .env）" }}</div></div>
+          <div><label>webhook 配置</label><div>{{ cursor.webhookConfigured ? "已配置" : "未配置" }}</div></div>
+          <div><label>配置来源</label><div>{{ cursor.webhookSource === "db" ? "数据库" : cursor.webhookSource === "env" ? "服务器 .env（回落）" : "—" }}</div></div>
+          <div><label>数据库配置更新于</label><div>{{ cursor.webhookUpdatedAt ? fmtTime(cursor.webhookUpdatedAt) : "—" }}</div></div>
           <div><label>区间来源</label><div>{{ cursor.intervalMinutes !== null ? "控制台设置" : "环境变量 / 默认 60 分钟" }}</div></div>
           <div><label>runner 脚本</label><div>{{ cursor.runnerScriptPresent ? "存在" : "缺失（job-runner 未构建？）" }}</div></div>
         </div>
@@ -119,9 +121,17 @@
           <input v-model="webhookToken" type="password" placeholder="Webhook token（留空则不改）" class="input" autocomplete="off" />
           <button class="btn primary" :disabled="busy">保存 webhook 配置</button>
         </form>
-        <p class="hint">只写不回显：保存后这里不显示已有值；只填要改的项，空着不动。保存后定时任务需重启 job-runner 才用新配置，手动触发则立即用新配置。</p>
+        <p class="hint">只写不回显：保存后这里不显示已有值；只填要改的项，空着不动。保存到数据库后，下次触发即生效，无需重启。</p>
         <p v-if="webhookOk" class="ok">{{ webhookOk }}</p>
         <p v-if="webhookError" class="err">{{ webhookError }}</p>
+        <div class="row">
+          <button v-if="cursor?.webhookInEnv && cursor?.webhookSource !== 'db'" class="btn" :disabled="busy" @click="importWebhook">
+            从 .env 导入到数据库
+          </button>
+          <button v-if="cursor?.webhookSource === 'db'" class="btn" :disabled="busy" @click="deleteWebhook">
+            清除数据库配置（回落到 .env，如有）
+          </button>
+        </div>
         <form class="create" @submit.prevent="savePrompt">
           <textarea v-model="promptInput" rows="8" placeholder="每次触发时 body 里带的 prompt（留空则只发 ping）" class="input"></textarea>
           <button class="btn primary" :disabled="busy">保存 prompt</button>
@@ -131,10 +141,10 @@
         <p v-if="promptError" class="err">{{ promptError }}</p>
         <div class="row">
           <button class="btn" :disabled="busy || restarting" @click="restartRunner">
-            {{ restarting ? "重启中…" : "重启 job-runner（使新配置对定时任务生效）" }}
+            {{ restarting ? "重启中…" : "重启 job-runner" }}
           </button>
         </div>
-        <p class="hint">重启不会导致重复触发：触发状态文件还在，门控按上次触发时间继续算。</p>
+        <p class="hint">数据库保存的配置与状态文件设置无需重启即生效；只有直接改服务器 .env 才需要重启 job-runner。重启不会导致重复触发：触发状态文件还在，门控按上次触发时间继续算。</p>
         <pre v-if="restartResult" class="out">{{ restartResult }}</pre>
         <div class="row">
           <button class="btn primary" :disabled="busy || triggering" @click="trigger">
@@ -321,7 +331,37 @@ async function saveWebhook() {
     intervalInput.value = cursor.value.effectiveIntervalMinutes;
     webhookUrl.value = "";
     webhookToken.value = "";
-    webhookOk.value = "已保存到服务器 .env（值不会回显）。定时任务需重启 job-runner 后生效，手动触发立即用新配置。";
+    webhookOk.value = "已保存到数据库，下次触发即生效，无需重启。";
+  } catch (e) {
+    webhookError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function importWebhook() {
+  busy.value = true;
+  webhookError.value = "";
+  webhookOk.value = "";
+  try {
+    cursor.value = await adminApi.cursorWebhookImport(key.value);
+    intervalInput.value = cursor.value.effectiveIntervalMinutes;
+    webhookOk.value = "已从 .env 导入到数据库，下次触发即用数据库配置；.env 里的旧行可删可留（数据库优先）。";
+  } catch (e) {
+    webhookError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function deleteWebhook() {
+  busy.value = true;
+  webhookError.value = "";
+  webhookOk.value = "";
+  try {
+    cursor.value = await adminApi.cursorWebhookDelete(key.value);
+    intervalInput.value = cursor.value.effectiveIntervalMinutes;
+    webhookOk.value = "数据库配置已清除；触发将回落到 .env（如有），否则报未配置。";
   } catch (e) {
     webhookError.value = e.message;
   } finally {

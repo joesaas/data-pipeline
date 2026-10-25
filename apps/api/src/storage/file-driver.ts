@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { StoredRecord, StoredToken } from "../domain/types.js";
+import type { StoredRecord, StoredToken, StoredWebhookConfig, WebhookConfigMeta } from "../domain/types.js";
 import { ADMIN_IDENTITY } from "../domain/types.js";
 import type { StorageDriver } from "./storage-driver.js";
 
@@ -18,12 +18,15 @@ function inScope(identity: string, rec: StoredRecord): boolean {
 export class FileDriver implements StorageDriver {
   private recordsDir: string;
   private tokensPath: string;
+  private webhookConfigsPath: string;
 
   constructor(dir: string) {
     this.recordsDir = join(dir, "records");
     this.tokensPath = join(dir, "tokens.json");
+    this.webhookConfigsPath = join(dir, "webhook-configs.json");
     mkdirSync(this.recordsDir, { recursive: true });
     if (!existsSync(this.tokensPath)) writeFileSync(this.tokensPath, "[]");
+    if (!existsSync(this.webhookConfigsPath)) writeFileSync(this.webhookConfigsPath, "[]");
   }
 
   private readAllRecords(): StoredRecord[] {
@@ -127,6 +130,40 @@ export class FileDriver implements StorageDriver {
     if (!tok) return false;
     tok.revoked_at = new Date().toISOString();
     this.writeTokens(tokens);
+    return true;
+  }
+
+  private readWebhookConfigs(): StoredWebhookConfig[] {
+    return JSON.parse(readFileSync(this.webhookConfigsPath, "utf8")) as StoredWebhookConfig[];
+  }
+
+  private writeWebhookConfigs(cfgs: StoredWebhookConfig[]): void {
+    writeFileSync(this.webhookConfigsPath, JSON.stringify(cfgs, null, 1));
+  }
+
+  getWebhookConfig(name: string): StoredWebhookConfig | null {
+    return this.readWebhookConfigs().find((c) => c.name === name) ?? null;
+  }
+
+  listWebhookConfigs(): WebhookConfigMeta[] {
+    return this.readWebhookConfigs()
+      .map(({ name, url, updated_at }) => ({ name, url, updated_at }))
+      .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.name.localeCompare(b.name));
+  }
+
+  saveWebhookConfig(cfg: StoredWebhookConfig): void {
+    const cfgs = this.readWebhookConfigs();
+    const i = cfgs.findIndex((c) => c.name === cfg.name);
+    if (i >= 0) cfgs[i] = cfg;
+    else cfgs.push(cfg);
+    this.writeWebhookConfigs(cfgs);
+  }
+
+  deleteWebhookConfig(name: string): boolean {
+    const cfgs = this.readWebhookConfigs();
+    const kept = cfgs.filter((c) => c.name !== name);
+    if (kept.length === cfgs.length) return false;
+    this.writeWebhookConfigs(kept);
     return true;
   }
 

@@ -1,4 +1,4 @@
-import type { StoredRecord, StoredToken } from "../domain/types.js";
+import type { StoredRecord, StoredToken, StoredWebhookConfig, WebhookConfigMeta } from "../domain/types.js";
 
 /**
  * The single storage interface (design doc §4). The ingest service depends
@@ -33,5 +33,15 @@ export interface StorageDriver {
   /** All tokens, oldest first. Never includes plaintext keys (only hashes are stored). */
   listTokens(): StoredToken[];
   revokeToken(id: string): boolean;
+
+  /** Webhook configurations (e.g. the cursor-trigger endpoint). Tokens are
+   *  plaintext by necessity (Bearer auth) and are never exposed: only
+   *  getWebhookConfig returns one, and only to server-side callers. */
+  getWebhookConfig(name: string): StoredWebhookConfig | null;
+  /** Metadata views (no tokens), oldest-updated first. */
+  listWebhookConfigs(): WebhookConfigMeta[];
+  /** Insert or replace by name. */
+  saveWebhookConfig(cfg: StoredWebhookConfig): void;
+  deleteWebhookConfig(name: string): boolean;
   close(): void;
 }

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { StoredRecord, StoredToken } from "../domain/types.js";
+import type { StoredRecord, StoredToken, StoredWebhookConfig, WebhookConfigMeta } from "../domain/types.js";
 import { ADMIN_IDENTITY } from "../domain/types.js";
 import type { StorageDriver } from "./storage-driver.js";
 
@@ -79,6 +79,12 @@ export class SqliteDriver implements StorageDriver {
         created_at TEXT NOT NULL,
         revoked_at TEXT,
         role TEXT NOT NULL DEFAULT 'user'
+      );
+      CREATE TABLE IF NOT EXISTS webhook_configs (
+        name TEXT PRIMARY KEY,
+        url TEXT NOT NULL,
+        token TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       );
     `);
     // Migration for databases created before token roles existed.
@@ -217,6 +223,33 @@ export class SqliteDriver implements StorageDriver {
     const res = this.db
       .prepare("UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
       .run(new Date().toISOString(), id);
+    return Number(res.changes) > 0;
+  }
+
+  getWebhookConfig(name: string): StoredWebhookConfig | null {
+    const row = this.db
+      .prepare("SELECT name, url, token, updated_at FROM webhook_configs WHERE name = ?")
+      .get(name) as StoredWebhookConfig | undefined;
+    return row ?? null;
+  }
+
+  listWebhookConfigs(): WebhookConfigMeta[] {
+    return this.db
+      .prepare("SELECT name, url, updated_at FROM webhook_configs ORDER BY updated_at ASC, name ASC")
+      .all() as WebhookConfigMeta[];
+  }
+
+  saveWebhookConfig(cfg: StoredWebhookConfig): void {
+    this.db
+      .prepare(
+        `INSERT INTO webhook_configs (name, url, token, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET url = excluded.url, token = excluded.token, updated_at = excluded.updated_at`,
+      )
+      .run(cfg.name, cfg.url, cfg.token, cfg.updated_at);
+  }
+
+  deleteWebhookConfig(name: string): boolean {
+    const res = this.db.prepare("DELETE FROM webhook_configs WHERE name = ?").run(name);
     return Number(res.changes) > 0;
   }
 

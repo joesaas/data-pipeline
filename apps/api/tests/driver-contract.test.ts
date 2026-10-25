@@ -119,6 +119,34 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.throws(() => ingest.push("anonymous", { content: "x" }), /prompt is required/);
       assert.throws(() => ingest.push("anonymous", { prompt: "x", content: "" }), /content is required/);
     });
+
+    it("webhook configs: save upserts, get returns the token, list hides it, delete removes", () => {
+      assert.equal(driver.getWebhookConfig("cursor-trigger"), null);
+      driver.saveWebhookConfig({
+        name: "cursor-trigger",
+        url: "https://hooks.example/hook",
+        token: "tok-1",
+        updated_at: "2026-10-25T00:00:00.000Z",
+      });
+      assert.equal(driver.getWebhookConfig("cursor-trigger")?.token, "tok-1");
+      driver.saveWebhookConfig({
+        name: "cursor-trigger",
+        url: "https://hooks.example/hook2",
+        token: "tok-2",
+        updated_at: "2026-10-25T01:00:00.000Z",
+      });
+      const row = driver.getWebhookConfig("cursor-trigger");
+      assert.equal(row?.url, "https://hooks.example/hook2");
+      assert.equal(row?.token, "tok-2");
+      const listed = driver.listWebhookConfigs();
+      assert.equal(listed.length, 1);
+      assert.equal(listed[0].name, "cursor-trigger");
+      assert.equal(listed[0].url, "https://hooks.example/hook2");
+      assert.equal("token" in listed[0], false);
+      assert.equal(driver.deleteWebhookConfig("cursor-trigger"), true);
+      assert.equal(driver.deleteWebhookConfig("cursor-trigger"), false);
+      assert.equal(driver.getWebhookConfig("cursor-trigger"), null);
+    });
   });
 }
 

@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { after, before, describe, it } from "node:test";
 import { createApp } from "../src/app.js";
 import type { AppConfig } from "../src/config.js";
@@ -48,6 +49,19 @@ async function start(config: AppConfig): Promise<{
 }
 
 type Ctx = Awaited<ReturnType<typeof start>>;
+
+/** Read the cursor-trigger webhook row straight from the test app's sqlite file. */
+function readWebhookRow(dir: string): { url: string; token: string } | null {
+  const db = new DatabaseSync(join(dir, "data", "data.db"), { readOnly: true });
+  try {
+    const row = db
+      .prepare("SELECT url, token FROM webhook_configs WHERE name = ?")
+      .get("cursor-trigger") as { url: string; token: string } | undefined;
+    return row ?? null;
+  } finally {
+    db.close();
+  }
+}
 
 async function req(
   ctx: Ctx,
@@ -248,7 +262,7 @@ describe("admin routes", () => {
     }
   });
 
-  it("webhook save writes .env, preserves other lines, never echoes values", async () => {
+  it("webhook save writes the database row, leaves .env untouched, never echoes values", async () => {
     const envPath = join(dir, ".env");
     writeFileSync(
       envPath,
@@ -263,18 +277,19 @@ describe("admin routes", () => {
     );
     assert.equal(r.status, 200);
     assert.equal(r.body.webhookConfigured, true);
+    assert.equal(r.body.webhookSource, "db");
     assert.equal(JSON.stringify(r.body).includes("new-token-123"), false);
-    const after = readFileSync(envPath, "utf8");
-    assert.match(after, /^# keep me$/m);
-    assert.match(after, /^OTHER_KEEP=hello$/m);
-    assert.match(after, /^CURSOR_WEBHOOK_URL=https:\/\/hooks\.example\/new$/m);
-    assert.match(after, /^CURSOR_AUTOMATION_TOKEN=new-token-123$/m);
-    assert.equal(after.includes("old-token"), false);
+    // .env is no longer the store: it must be byte-identical afterwards.
+    assert.equal(
+      readFileSync(envPath, "utf8"),
+      "# keep me\nOTHER_KEEP=hello\nCURSOR_WEBHOOK_URL=https://old.example/hook\nCURSOR_AUTOMATION_TOKEN=old-token\n",
+    );
+    const row = readWebhookRow(dir);
+    assert.equal(row?.url, "https://hooks.example/new");
+    assert.equal(row?.token, "new-token-123");
   });
 
   it("webhook save is partial and validates input", async () => {
-    const envPath = join(dir, ".env");
-    writeFileSync(envPath, "CURSOR_WEBHOOK_URL=https://keep.example/hook\n");
     const partial = await req(
       ctx,
       "PUT",
@@ -283,8 +298,10 @@ describe("admin routes", () => {
       { webhookToken: "only-token" },
     );
     assert.equal(partial.status, 200);
-    assert.match(readFileSync(envPath, "utf8"), /^CURSOR_WEBHOOK_URL=https:\/\/keep\.example\/hook$/m);
-    assert.match(readFileSync(envPath, "utf8"), /^CURSOR_AUTOMATION_TOKEN=only-token$/m);
+    // URL kept from the previous test's row; token replaced.
+    const row = readWebhookRow(dir);
+    assert.equal(row?.url, "https://hooks.example/new");
+    assert.equal(row?.token, "only-token");
     for (const bad of [
       {},
       { webhookUrl: "not a url" },
@@ -312,6 +329,53 @@ describe("admin routes", () => {
       ).status,
       401,
     );
+  });
+
+  it("webhook import copies .env into the database, delete falls back to .env then nothing", async () => {
+    // Clear the row from the previous tests, then import from .env.
+    const cleared = await req(
+      ctx,
+      "DELETE",
+      "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhook",
+      ctx.adminKey,
+    );
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.webhookSource, "env");
+    assert.equal(cleared.body.webhookInEnv, true);
+    writeFileSync(
+      join(dir, ".env"),
+      "CURSOR_WEBHOOK_URL=https://import.example/hook\nCURSOR_AUTOMATION_TOKEN=import-token\n",
+    );
+    const imported = await req(
+      ctx,
+      "POST",
+      "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhook/import",
+      ctx.adminKey,
+    );
+    assert.equal(imported.status, 200);
+    assert.equal(imported.body.webhookSource, "db");
+    const row = readWebhookRow(dir);
+    assert.equal(row?.url, "https://import.example/hook");
+    assert.equal(row?.token, "import-token");
+    // Delete again: back to .env fallback, then to nothing once .env is cleared.
+    const deleted = await req(
+      ctx,
+      "DELETE",
+      "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhook",
+      ctx.adminKey,
+    );
+    assert.equal(deleted.body.webhookSource, "env");
+    assert.equal(readWebhookRow(dir), null);
+    writeFileSync(join(dir, ".env"), "OTHER_KEEP=hello\n");
+    const status = await req(
+      ctx,
+      "GET",
+      "/data-pipeline/api/v1/admin/jobs/cursor-trigger",
+      ctx.adminKey,
+    );
+    assert.equal(status.body.webhookConfigured, false);
+    assert.equal(status.body.webhookSource, null);
+    assert.equal(status.body.webhookInEnv, false);
   });
 
   it("manual trigger scrubs stale inherited CURSOR_* so the child reloads .env", async () => {

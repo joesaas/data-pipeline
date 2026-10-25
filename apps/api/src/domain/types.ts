@@ -45,6 +45,26 @@ export interface StoredToken {
 }
 
 /**
+ * A webhook configuration (e.g. the cursor-trigger automation endpoint).
+ * The token is stored in plaintext by necessity — it must be sent as a
+ * Bearer token on every trigger — so it is never returned to clients:
+ * listings and status reports carry the metadata view only.
+ */
+export interface StoredWebhookConfig {
+  name: string;
+  url: string;
+  token: string;
+  updated_at: string;
+}
+
+/** Public view of a webhook configuration: everything except the token. */
+export interface WebhookConfigMeta {
+  name: string;
+  url: string;
+  updated_at: string;
+}
+
+/**
  * Identity an admin token resolves to. Records are siloed per identity;
  * drivers treat this identity as unscoped for reads (find / get / list /
  * delete). An admin identity is a reader, not a bucket: nothing is ever
