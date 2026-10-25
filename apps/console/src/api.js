@@ -59,4 +59,16 @@ export const adminApi = {
   setWebhookActive: (key, id, active) =>
     api("POST", `/api/v1/admin/webhooks/${id}/active`, key, { active }),
   testWebhook: (key, id) => api("POST", `/api/v1/admin/webhooks/${id}/test`, key, {}),
+  // Records: no admin-only route exists, and none is needed — the
+  // ordinary records endpoints already serve an admin key cross-bucket
+  // (ADMIN_IDENTITY reads every identity's records, deletes any row).
+  listRecords: (key, { source_agent, tag, limit, offset }) => {
+    const q = new URLSearchParams();
+    if (source_agent) q.set("source_agent", source_agent);
+    if (tag) q.set("tag", tag);
+    q.set("limit", String(limit));
+    q.set("offset", String(offset));
+    return api("GET", `/api/v1/records?${q}`, key);
+  },
+  deleteRecord: (key, id) => api("DELETE", `/api/v1/records/${id}`, key),
 };

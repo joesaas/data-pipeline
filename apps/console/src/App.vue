@@ -36,6 +36,7 @@
       <nav class="tabs">
         <button :class="{ active: tab === 'tokens' }" @click="tab = 'tokens'">Tokens</button>
         <button :class="{ active: tab === 'webhooks' }" @click="tab = 'webhooks'">Webhooks</button>
+        <button :class="{ active: tab === 'records' }" @click="tab = 'records'">Records</button>
       </nav>
 
       <!-- Tokens -->
@@ -166,6 +167,81 @@
         <p v-if="webhookError" class="err">{{ webhookError }}</p>
         <pre v-if="webhookTestResult" class="out">{{ webhookTestResult }}</pre>
       </section>
+
+      <!-- Records -->
+      <section v-if="tab === 'records'" class="card">
+        <div class="row space">
+          <h2>Records</h2>
+          <button class="btn" :disabled="busy" @click="refreshRecords">刷新</button>
+        </div>
+        <p class="hint">
+          这里是数据库 records 表的全部记录（admin 跨桶可见，桶名按 token_id 对应到 Tokens 页的名字）。
+          记录只能从 push 接口进来，控制台不新建、不编辑，只能看详情和删除。列表只显示标题等摘要，
+          prompt 与 content 正文只在详情页展开。
+        </p>
+        <form class="create" @submit.prevent="applyRecordsFilter">
+          <input v-model="recordsFilterAgent" placeholder="按来源筛选，如 muse" class="input" />
+          <input v-model="recordsFilterTag" placeholder="按标签筛选，如 inbox" class="input" />
+          <button class="btn primary" :disabled="busy">筛选</button>
+          <button class="btn" type="button" :disabled="busy" @click="clearRecordsFilter">清除筛选</button>
+        </form>
+        <div v-if="recordsView === 'list'">
+          <table v-if="records.length">
+            <thead>
+              <tr><th>标题</th><th>来源</th><th>桶</th><th>external_id</th><th>标签</th><th>内容字数</th><th>更新时间</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in records" :key="r.id" @click="openRecord(r)">
+                <td class="short">{{ r.title || "(无标题)" }}</td>
+                <td>{{ r.source_agent }}</td>
+                <td>{{ tokenName(r.token_id) }}</td>
+                <td class="mono short">{{ r.external_id || "—" }}</td>
+                <td class="short">{{ (r.tags || []).join(", ") || "—" }}</td>
+                <td>{{ (r.content || "").length }}</td>
+                <td>{{ fmtTime(r.updated_at) }}</td>
+                <td @click.stop>
+                  <button class="btn small" :disabled="busy" @click="openRecord(r)">详情</button>
+                  <button class="btn danger small" :disabled="busy" @click="deleteRecord(r)">删除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="hint">没有符合条件的记录。</p>
+          <div class="row space">
+            <span class="hint">共 {{ recordsTotal }} 条，当前第 {{ recordsOffset + 1 }}–{{ recordsOffset + records.length }} 条</span>
+            <span class="row">
+              <button class="btn small" :disabled="busy || recordsOffset === 0" @click="recordsPage(-1)">上一页</button>
+              <button class="btn small" :disabled="busy || recordsOffset + records.length >= recordsTotal" @click="recordsPage(1)">下一页</button>
+            </span>
+          </div>
+        </div>
+        <div v-if="recordsView === 'detail' && selectedRecord">
+          <h4>{{ selectedRecord.title || "(无标题)" }}</h4>
+          <div class="grid">
+            <div><label>id</label><div class="mono short">{{ selectedRecord.id }}</div></div>
+            <div><label>桶</label><div>{{ tokenName(selectedRecord.token_id) }}（{{ selectedRecord.token_id }}）</div></div>
+            <div><label>external_id</label><div class="mono short">{{ selectedRecord.external_id || "—" }}</div></div>
+            <div><label>来源</label><div>{{ selectedRecord.source_agent }}</div></div>
+            <div><label>skill_version</label><div>{{ selectedRecord.skill_version || "—" }}</div></div>
+            <div><label>content_format</label><div>{{ selectedRecord.content_format }}</div></div>
+            <div><label>标签</label><div>{{ (selectedRecord.tags || []).join(", ") || "—" }}</div></div>
+            <div><label>创建时间</label><div>{{ fmtTime(selectedRecord.created_at) }}</div></div>
+            <div><label>更新时间</label><div>{{ fmtTime(selectedRecord.updated_at) }}</div></div>
+          </div>
+          <h4>metadata</h4>
+          <pre class="out">{{ JSON.stringify(selectedRecord.metadata || {}, null, 2) }}</pre>
+          <h4>prompt</h4>
+          <pre class="out">{{ selectedRecord.prompt }}</pre>
+          <h4>content</h4>
+          <pre class="out">{{ selectedRecord.content }}</pre>
+          <div class="row">
+            <button class="btn" @click="recordsView = 'list'">返回列表</button>
+            <button class="btn danger" :disabled="busy" @click="deleteRecord(selectedRecord)">删除这条</button>
+          </div>
+        </div>
+        <p v-if="recordsOk" class="ok">{{ recordsOk }}</p>
+        <p v-if="recordsError" class="err">{{ recordsError }}</p>
+      </section>
     </template>
   </div>
 </template>
@@ -204,6 +280,17 @@ const webhookOk = ref("");
 const webhookError = ref("");
 const webhookTestResult = ref("");
 
+const records = ref([]);
+const recordsTotal = ref(0);
+const recordsOffset = ref(0);
+const recordsPageSize = 20;
+const recordsFilterAgent = ref("");
+const recordsFilterTag = ref("");
+const recordsView = ref("list");
+const selectedRecord = ref(null);
+const recordsOk = ref("");
+const recordsError = ref("");
+
 function fmtTime(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -218,7 +305,7 @@ async function login() {
     saveKey(keyInput.value.trim());
     key.value = keyInput.value.trim();
     keyInput.value = "";
-    await Promise.all([refreshTokens(), refreshWebhooks()]);
+    await Promise.all([refreshTokens(), refreshWebhooks(), refreshRecords()]);
   } catch (e) {
     loginError.value = e.status === 401 ? "钥匙无效（401）" : e.status === 403 ? "这把不是 admin 钥匙（403）" : e.message;
   } finally {
@@ -231,6 +318,15 @@ function logout() {
   key.value = "";
   tokens.value = [];
   webhooks.value = [];
+  records.value = [];
+  recordsTotal.value = 0;
+  selectedRecord.value = null;
+  recordsView.value = "list";
+}
+
+function tokenName(tokenId) {
+  const t = tokens.value.find((x) => x.id === tokenId);
+  return t ? t.name : tokenId;
 }
 
 async function refreshTokens() {
@@ -408,6 +504,74 @@ async function testWebhook(w) {
   }
 }
 
+async function refreshRecords() {
+  recordsError.value = "";
+  try {
+    const data = await adminApi.listRecords(key.value, {
+      source_agent: recordsFilterAgent.value.trim() || undefined,
+      tag: recordsFilterTag.value.trim() || undefined,
+      limit: recordsPageSize,
+      offset: recordsOffset.value,
+    });
+    records.value = data.items;
+    recordsTotal.value = data.total;
+    if (selectedRecord.value) {
+      selectedRecord.value =
+        records.value.find((r) => r.id === selectedRecord.value.id) ?? null;
+      if (!selectedRecord.value && recordsView.value === "detail") recordsView.value = "list";
+    }
+  } catch (e) {
+    recordsError.value = e.message;
+  }
+}
+
+function openRecord(r) {
+  selectedRecord.value = r;
+  recordsView.value = "detail";
+}
+
+function applyRecordsFilter() {
+  recordsOffset.value = 0;
+  recordsView.value = "list";
+  refreshRecords();
+}
+
+function clearRecordsFilter() {
+  recordsFilterAgent.value = "";
+  recordsFilterTag.value = "";
+  recordsOffset.value = 0;
+  recordsView.value = "list";
+  refreshRecords();
+}
+
+function recordsPage(dir) {
+  const next = recordsOffset.value + dir * recordsPageSize;
+  if (next < 0 || (dir > 0 && recordsOffset.value + records.value.length >= recordsTotal.value)) return;
+  recordsOffset.value = next;
+  recordsView.value = "list";
+  refreshRecords();
+}
+
+async function deleteRecord(r) {
+  if (!window.confirm(`删除记录「${r.title || r.id}」？删除后不可恢复。`)) return;
+  recordsError.value = "";
+  recordsOk.value = "";
+  busy.value = true;
+  try {
+    await adminApi.deleteRecord(key.value, r.id);
+    recordsView.value = "list";
+    selectedRecord.value = null;
+    recordsOk.value = "记录已删除。";
+    // Deleting the last row of a page would leave an empty page; step back one page then.
+    if (records.value.length === 1 && recordsOffset.value > 0) recordsOffset.value -= recordsPageSize;
+    await refreshRecords();
+  } catch (e) {
+    recordsError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
 onMounted(async () => {
   try {
     await adminApi.health();
@@ -416,7 +580,7 @@ onMounted(async () => {
     healthOk.value = false;
   }
   if (key.value) {
-    await Promise.all([refreshTokens(), refreshWebhooks()]);
+    await Promise.all([refreshTokens(), refreshWebhooks(), refreshRecords()]);
   }
 });
 </script>

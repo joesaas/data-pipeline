@@ -13,6 +13,14 @@ Vue 3 + Vite 单页应用，构建产物由 API 进程静态托管（`/console` 
   完整值），行内删除带确认框。定时触发只发标为“定时”的那条 webhook；
   测试一次只发这一条，不改定时设置、不动触发节奏（测试不写触发状态文件）。
   列表操作即时生效。没有标为定时的行时，定时触发当轮跳过。
+- Records：数据库 records 表的列表（标题、来源、桶、external_id、标签、
+  内容字数、更新时间；每页 20 条，支持按来源与标签筛选、上一页/下一页），
+  点行或点详情进详情页（id、桶、external_id、来源、skill_version、
+  content_format、标签、创建/更新时间、metadata、prompt、content 全文），
+  列表与详情均可删除（带确认框）。记录只能从 push 接口进来，控制台不新
+  建、不编辑。这一页没有新增 admin 接口：它直接调已有的
+  `GET /api/v1/records` 与 `DELETE /api/v1/records/:id`，admin 钥匙本来就
+  跨桶读全部记录、删任意一条；桶名按 token_id 对应 Tokens 页的名字显示。
 
 后台定时触发（job-runner 里的 cursor-trigger 任务，每 1 分钟 tick、按状态
 文件自我门控）仍在跑：触发地址取 webhooks 表里标为定时的那行，区间与
