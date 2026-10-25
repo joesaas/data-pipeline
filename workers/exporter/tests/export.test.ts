@@ -55,9 +55,12 @@ describe("exportSite", () => {
     assert.ok(!index.includes("文档站"), "docs-site link is gone from the topbar");
     assert.ok(index.includes('data-src="https://solana.com"'), "list source pill carries the source URL");
     assert.ok(index.includes('id="refreshBtn"'), "refresh button rendered");
+    assert.ok(index.includes('href="https://x.com/agentci_101"'), "contact link rendered on index");
+    assert.ok(index.includes("联系方式"), "contact footer rendered on index");
     const detail = readFileSync(join(result.releaseDir, "item/item-1/index.html"), "utf8");
     assert.ok(detail.includes("openai/gpt-4o-mini"));
     assert.ok(detail.includes("/data-pipeline/api/v1/records/rec-1"));
+    assert.ok(detail.includes('href="https://x.com/agentci_101"'), "contact link rendered on detail page");
     const json = JSON.parse(readFileSync(join(result.releaseDir, "items.json"), "utf8")) as { items: unknown[] };
     assert.equal(json.items.length, 1);
     assert.ok(existsSync(join(result.releaseDir, "styles.css")));

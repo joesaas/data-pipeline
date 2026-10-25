@@ -57,6 +57,12 @@ const BOOK_ICON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" s
 
 const REFRESH_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`;
 
+/** Contact link: the site's only contact channel (2026-10-25). It lives in
+ *  the sticky topbar (visible without scrolling) and in the page footer,
+ *  on both the index and every detail page, because head() is shared. */
+const CONTACT_URL = "https://x.com/agentci_101";
+const CONTACT_LINK = `<a href="${CONTACT_URL}" target="_blank" rel="noreferrer">X @agentci_101</a>`;
+
 function head(title: string, cssHref: string, base = "./", showSearch = false, cssVersion = ""): string {
   const versioned = cssVersion ? `${cssHref}?v=${cssVersion}` : cssHref;
   return `<!doctype html>
@@ -72,9 +78,12 @@ function head(title: string, cssHref: string, base = "./", showSearch = false, c
   <a class="logo" href="${base}"><span class="mark">${BOOK_ICON}</span>Agent 101<span>&nbsp;资讯</span></a>
   ${showSearch ? `<div class="head-search"><input id="q" placeholder="搜索标题、摘要或标签…" /></div>` : ""}
   <div class="spacer"></div>
+  <a class="head-link" href="${CONTACT_URL}" target="_blank" rel="noreferrer">联系我们</a>
 </header>
 <main>`;
 }
+
+const FOOTER = `<footer class="site-footer">联系方式：${CONTACT_LINK}</footer>`;
 
 const PAGE_JS = `
 <script>
@@ -301,6 +310,7 @@ ${sidebar}
 </section>
 </div>
 </main>
+${FOOTER}
 ${PAGE_JS}
 </body>
 </html>
@@ -337,6 +347,7 @@ ${detail}
 ${sources}
 <p class="muted" style="margin-top:24px">由 ${esc(item.provider)} / ${esc(item.model)} 于 ${esc(fmtDateTime(item.cleaned_at))} 清洗${item.source_agent ? ` · 推送 agent ${esc(item.source_agent)}` : ""} · 原始记录 <a href="${esc(publicApiPath)}/api/v1/records/${encodeURIComponent(item.source_record_id)}" target="_blank" rel="noreferrer" style="color:var(--accent-strong)">${esc(item.source_record_id.slice(0, 8))}…</a></p>
 </main>
+${FOOTER}
 </body>
 </html>
 `;
