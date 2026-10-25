@@ -4,8 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import type { Request, Response } from "express";
 import type { AppConfig } from "../config.js";
 import type { AuthService } from "../auth/auth.js";
-import { ADMIN_IDENTITY, type StoredToken, type StoredWebhook, type TokenRole, type WebhookMeta } from "../domain/types.js";
-import { parseCron } from "@data-pipeline/shared";
+import { ADMIN_IDENTITY, type DuePullTask, type StoredPullTask, type StoredToken, type StoredWebhook, type TokenRole, type WebhookMeta } from "../domain/types.js";
+import { isPullTaskDue, parseCron, previousCronOccurrence } from "@data-pipeline/shared";
 import type { StorageDriver } from "../storage/storage-driver.js";
 
 /**
@@ -427,6 +427,239 @@ export function testWebhook(deps: AdminDeps, req: Request, res: Response): void 
     return;
   }
   runTriggerChild(deps, res, { webhookOverride: String(row.id) });
+}
+
+/**
+ * Shared child-spawn for test fires: runs the cursor-trigger job once,
+ * exactly like the scheduler does (same code, same environment).
+ * A second concurrent request is rejected by the caller's 409 guard, not
+ * here, so the guard stays in front of the (possibly slow) row lookups.
+ */
+// --- Pull tasks (Muse polling, the counterpart to webhook push) -----------
+
+function parsePullTaskId(req: Request, res: Response): number | null {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "pull task id must be a positive integer", field: "id" });
+    return null;
+  }
+  return id;
+}
+
+function parsePullTaskName(raw: unknown): { name: string } | { error: string } {
+  if (typeof raw !== "string") return { error: "name is required (max 100 chars)" };
+  const name = raw.trim();
+  if (!name || name.length > 100) return { error: "name is required (max 100 chars)" };
+  return { name };
+}
+
+function parsePullTaskPrompt(raw: unknown): { prompt: string } | { error: string } {
+  if (typeof raw !== "string") return { error: "prompt is required" };
+  const prompt = raw.trim();
+  if (!prompt || prompt.length > 200_000) return { error: "prompt is required (max 200000 chars)" };
+  return { prompt };
+}
+
+function parsePullTaskCron(raw: unknown): { cron: string } | { error: string } {
+  if (typeof raw !== "string") return { error: "cron is required" };
+  const cron = raw.trim();
+  if (!cron || !parseCron(cron)) {
+    return { error: 'cron must be a valid 5-field cron expression "minute hour day month weekday" (e.g. "0 9 * * *"), evaluated in Asia/Shanghai time' };
+  }
+  return { cron };
+}
+
+export function listPullTasks(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  res.json(deps.driver.listPullTasks());
+}
+
+export function createPullTask(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const body = (req.body ?? {}) as { name?: unknown; prompt?: unknown; cron?: unknown };
+  const name = parsePullTaskName(body.name);
+  if ("error" in name) {
+    res.status(400).json({ error: name.error, field: "name" });
+    return;
+  }
+  if (deps.driver.listPullTasks().some((t) => t.name === name.name)) {
+    res.status(409).json({ error: "pull task already exists", field: "name" });
+    return;
+  }
+  const prompt = parsePullTaskPrompt(body.prompt);
+  if ("error" in prompt) {
+    res.status(400).json({ error: prompt.error, field: "prompt" });
+    return;
+  }
+  const cron = parsePullTaskCron(body.cron);
+  if ("error" in cron) {
+    res.status(400).json({ error: cron.error, field: "cron" });
+    return;
+  }
+  const now = new Date().toISOString();
+  // A new task is never active by default, like a new webhook: the
+  // poller must not start running a task the moment it is created.
+  const saved = deps.driver.savePullTask({
+    id: 0,
+    name: name.name,
+    prompt: prompt.prompt,
+    cron: cron.cron,
+    is_active: false,
+    last_run_at: null,
+    created_at: now,
+    updated_at: now,
+  });
+  res.status(201).json(saved);
+}
+
+export function getPullTask(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parsePullTaskId(req, res);
+  if (id === null) return;
+  const row = deps.driver.getPullTask(id);
+  if (!row) {
+    res.status(404).json({ error: "pull task not found" });
+    return;
+  }
+  res.json(row);
+}
+
+export function updatePullTask(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parsePullTaskId(req, res);
+  if (id === null) return;
+  const existing = deps.driver.getPullTask(id);
+  if (!existing) {
+    res.status(404).json({ error: "pull task not found" });
+    return;
+  }
+  const body = (req.body ?? {}) as { prompt?: unknown; cron?: unknown };
+  let prompt = existing.prompt;
+  let cron = existing.cron;
+  if ("prompt" in body) {
+    const parsed = parsePullTaskPrompt(body.prompt);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error, field: "prompt" });
+      return;
+    }
+    prompt = parsed.prompt;
+  }
+  if ("cron" in body) {
+    const parsed = parsePullTaskCron(body.cron);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error, field: "cron" });
+      return;
+    }
+    cron = parsed.cron;
+  }
+  const row = deps.driver.savePullTask({
+    ...existing,
+    prompt,
+    cron,
+    updated_at: new Date().toISOString(),
+  });
+  res.json(row);
+}
+
+export function deletePullTask(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parsePullTaskId(req, res);
+  if (id === null) return;
+  if (!deps.driver.deletePullTask(id)) {
+    res.status(404).json({ error: "pull task not found" });
+    return;
+  }
+  res.json({ ok: true });
+}
+
+export function setPullTaskActive(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parsePullTaskId(req, res);
+  if (id === null) return;
+  const target = deps.driver.getPullTask(id);
+  if (!target) {
+    res.status(404).json({ error: "pull task not found" });
+    return;
+  }
+  const body = (req.body ?? {}) as { active?: unknown };
+  if (typeof body.active !== "boolean") {
+    res.status(400).json({ error: "active must be a boolean", field: "active" });
+    return;
+  }
+  // Unlike webhooks, activating one pull task never deactivates others:
+  // each task runs on its own cron.
+  const row = deps.driver.savePullTask({
+    ...target,
+    is_active: body.active,
+    updated_at: new Date().toISOString(),
+  });
+  res.json(row);
+}
+
+/**
+ * The poller's endpoint: active tasks whose most recent cron occurrence
+ * is later than their last reported run. `?at=<ISO>` overrides "now"
+ * (for testing); it defaults to the server clock. This endpoint claims
+ * nothing — a task stays due until the poller reports a run via
+ * markPullTaskRun, so a crashed run is retried on the next poll instead
+ * of being silently dropped.
+ */
+export function listDuePullTasks(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  let now = new Date();
+  const at = req.query.at;
+  if (typeof at === "string" && at) {
+    const parsed = new Date(at);
+    if (Number.isNaN(parsed.getTime())) {
+      res.status(400).json({ error: "at must be an ISO timestamp", field: "at" });
+      return;
+    }
+    now = parsed;
+  }
+  const due: DuePullTask[] = [];
+  for (const task of deps.driver.listPullTasks()) {
+    if (!task.is_active) continue;
+    const parsed = parseCron(task.cron);
+    if (!parsed) continue;
+    if (!isPullTaskDue(parsed, now, task.last_run_at)) continue;
+    const prev = previousCronOccurrence(parsed, now);
+    if (!prev) continue;
+    due.push({ ...task, due_at: prev.toISOString() });
+  }
+  res.json(due);
+}
+
+/**
+ * The poller reports a completed run: the task's last_run_at advances to
+ * the reported time (usually "now" at report time, but the body may carry
+ * the run's own timestamp). Only after this call does the task stop
+ * being due for that occurrence — so the poller must call it only after
+ * its draft is safely written, never before executing.
+ */
+export function markPullTaskRun(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parsePullTaskId(req, res);
+  if (id === null) return;
+  const target = deps.driver.getPullTask(id);
+  if (!target) {
+    res.status(404).json({ error: "pull task not found" });
+    return;
+  }
+  const body = (req.body ?? {}) as { last_run_at?: unknown };
+  let lastRunAt = new Date().toISOString();
+  if (body.last_run_at !== undefined) {
+    if (typeof body.last_run_at !== "string" || Number.isNaN(Date.parse(body.last_run_at))) {
+      res.status(400).json({ error: "last_run_at must be an ISO timestamp", field: "last_run_at" });
+      return;
+    }
+    lastRunAt = new Date(body.last_run_at).toISOString();
+  }
+  const row = deps.driver.savePullTask({
+    ...target,
+    last_run_at: lastRunAt,
+    updated_at: new Date().toISOString(),
+  });
+  res.json(row);
 }
 
 /**

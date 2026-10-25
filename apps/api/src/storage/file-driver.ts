@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  StoredPullTask,
   StoredRecord,
   StoredToken,
   StoredWebhook,
@@ -26,14 +27,17 @@ export class FileDriver implements StorageDriver {
   private tokensPath: string;
   private webhooksPath: string;
   private webhookPayloadsPath: string;
+  private pullTasksPath: string;
 
   constructor(dir: string) {
     this.recordsDir = join(dir, "records");
     this.tokensPath = join(dir, "tokens.json");
     this.webhooksPath = join(dir, "webhooks.json");
     this.webhookPayloadsPath = join(dir, "webhook-payloads.json");
+    this.pullTasksPath = join(dir, "pull-tasks.json");
     mkdirSync(this.recordsDir, { recursive: true });
     if (!existsSync(this.tokensPath)) writeFileSync(this.tokensPath, "[]");
+    if (!existsSync(this.pullTasksPath)) writeFileSync(this.pullTasksPath, "[]");
     // One-time migration from the old webhook-configs.json (name-keyed)
     // to webhooks.json (id-keyed); the old file is removed once migrated.
     const legacyPath = join(dir, "webhook-configs.json");
@@ -219,6 +223,48 @@ export class FileDriver implements StorageDriver {
     const kept = rows.filter((w) => w.id !== id);
     if (kept.length === rows.length) return false;
     this.writeWebhooks(kept);
+    return true;
+  }
+
+  private readPullTasks(): StoredPullTask[] {
+    return JSON.parse(readFileSync(this.pullTasksPath, "utf8")) as StoredPullTask[];
+  }
+
+  private writePullTasks(rows: StoredPullTask[]): void {
+    writeFileSync(this.pullTasksPath, JSON.stringify(rows, null, 1));
+  }
+
+  getPullTask(id: number): StoredPullTask | null {
+    return this.readPullTasks().find((t) => t.id === id) ?? null;
+  }
+
+  listPullTasks(): StoredPullTask[] {
+    return this.readPullTasks().sort(
+      (a, b) => a.updated_at.localeCompare(b.updated_at) || a.id - b.id,
+    );
+  }
+
+  savePullTask(t: StoredPullTask): StoredPullTask {
+    const rows = this.readPullTasks();
+    if (t.id > 0) {
+      const i = rows.findIndex((x) => x.id === t.id);
+      if (i >= 0) rows[i] = t;
+      else rows.push(t);
+      this.writePullTasks(rows);
+      return t;
+    }
+    const next = rows.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+    const saved = { ...t, id: next };
+    rows.push(saved);
+    this.writePullTasks(rows);
+    return saved;
+  }
+
+  deletePullTask(id: number): boolean {
+    const rows = this.readPullTasks();
+    const kept = rows.filter((t) => t.id !== id);
+    if (kept.length === rows.length) return false;
+    this.writePullTasks(kept);
     return true;
   }
 

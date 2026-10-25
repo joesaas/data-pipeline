@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  StoredPullTask,
   StoredRecord,
   StoredToken,
   StoredWebhook,
@@ -102,6 +103,16 @@ export class SqliteDriver implements StorageDriver {
         name TEXT NOT NULL,
         content TEXT NOT NULL,
         is_active INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS pull_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        prompt TEXT NOT NULL,
+        cron TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 0,
+        last_run_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -325,6 +336,51 @@ export class SqliteDriver implements StorageDriver {
 
   deleteWebhook(id: number): boolean {
     const res = this.db.prepare("DELETE FROM webhooks WHERE id = ?").run(id);
+    return Number(res.changes) > 0;
+  }
+
+  getPullTask(id: number): StoredPullTask | null {
+    type RawRow = Omit<StoredPullTask, "is_active"> & { is_active: number };
+    const row = this.db
+      .prepare("SELECT id, name, prompt, cron, is_active, last_run_at, created_at, updated_at FROM pull_tasks WHERE id = ?")
+      .get(id) as RawRow | undefined;
+    if (!row) return null;
+    const { is_active, ...rest } = row;
+    return { ...rest, last_run_at: rest.last_run_at ?? null, is_active: is_active === 1 };
+  }
+
+  listPullTasks(): StoredPullTask[] {
+    type RawRow = Omit<StoredPullTask, "is_active"> & { is_active: number };
+    const rows = this.db
+      .prepare("SELECT id, name, prompt, cron, is_active, last_run_at, created_at, updated_at FROM pull_tasks ORDER BY updated_at ASC, id ASC")
+      .all() as RawRow[];
+    return rows.map(({ is_active, ...rest }) => ({
+      ...rest,
+      last_run_at: rest.last_run_at ?? null,
+      is_active: is_active === 1,
+    }));
+  }
+
+  savePullTask(t: StoredPullTask): StoredPullTask {
+    if (t.id > 0) {
+      this.db
+        .prepare(
+          `INSERT INTO pull_tasks (id, name, prompt, cron, is_active, last_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET name = excluded.name, prompt = excluded.prompt, cron = excluded.cron, is_active = excluded.is_active, last_run_at = excluded.last_run_at, updated_at = excluded.updated_at`,
+        )
+        .run(t.id, t.name, t.prompt, t.cron, t.is_active ? 1 : 0, t.last_run_at, t.created_at, t.updated_at);
+      return this.getPullTask(t.id) as StoredPullTask;
+    }
+    const res = this.db
+      .prepare(
+        "INSERT INTO pull_tasks (name, prompt, cron, is_active, last_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(t.name, t.prompt, t.cron, t.is_active ? 1 : 0, t.last_run_at, t.created_at, t.updated_at);
+    return this.getPullTask(Number(res.lastInsertRowid)) as StoredPullTask;
+  }
+
+  deletePullTask(id: number): boolean {
+    const res = this.db.prepare("DELETE FROM pull_tasks WHERE id = ?").run(id);
     return Number(res.changes) > 0;
   }
 

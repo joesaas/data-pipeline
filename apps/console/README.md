@@ -42,6 +42,19 @@ Vue 3 + Vite 单页应用，构建产物由 API 进程静态托管（`/console` 
   份数据，控制台不新建、不编辑、不删除。注意：若线上 News 页为空而新闻站
   有数据，说明 API 进程读到的 cleaner 数据库路径不对（查
   CLEANED_DB_FILE / cleaner 数据目录），不是控制台的问题。
+- 拉取任务（Muse 轮询，webhook 推模式的对偶）：Muse 没有入站 webhook，
+  没法被推，只能反过来每 10 分钟轮询 `GET /api/v1/admin/pull-tasks/due`
+  拿当轮到点的任务，逐条执行 prompt，成稿先写收件箱 review/ 把关（和
+  hourly 简报同一道门，不直推 pending），放行后才推 API。控制台配每条
+  任务的名字、prompt、cron（5 段必填，按北京时间 Asia/Shanghai 算）：
+  列表（名字、cron、启用、上次执行、更新时间）+ 详情（cron、prompt 全文）
+  + 编辑（名字不可改，prompt 与 cron 是完整值）+ 启用/停用 + 删除。
+  新任务默认不启用。到期判断是“上一个 cron 时刻晚于上次执行时间”，所
+  以轮询迟到几分钟会补跑，不会跳过；执行完轮询方调
+  `POST /api/v1/admin/pull-tasks/:id/run` 标记上次执行，只有标记后该任
+  务才不再到期——执行中途崩了会下轮重试。和 Webhooks 不同：多条拉取任
+  务可以同时启用，启用一条不会停掉另一条。刷新走四页通用规则（刷新中
+  旋转 + 上次刷新时间戳 + 切 tab 自动重拉 + 序号防旧覆盖 + no-store）。
 
 后台定时触发（job-runner 里的 cursor-trigger 任务，每 1 分钟 tick、按状态
 文件自我门控）仍在跑：触发地址取 webhooks 表里标为定时的那行，区间与

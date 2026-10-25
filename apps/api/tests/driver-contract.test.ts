@@ -168,6 +168,35 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.equal(driver.getWebhook(created.id), null);
     });
 
+    it("pull tasks: save assigns ids and upserts, list, delete removes", () => {
+      const created = driver.savePullTask({
+        id: 0,
+        name: "pull-a",
+        prompt: "do it",
+        cron: "0 9 * * *",
+        is_active: false,
+        last_run_at: null,
+        created_at: "2026-10-25T00:00:00.000Z",
+        updated_at: "2026-10-25T00:00:00.000Z",
+      });
+      assert.ok(created.id > 0);
+      assert.equal(driver.getPullTask(created.id)?.prompt, "do it");
+      assert.equal(driver.getPullTask(created.id)?.last_run_at, null);
+      driver.savePullTask({
+        ...created,
+        is_active: true,
+        last_run_at: "2026-10-25T01:00:00.000Z",
+        updated_at: "2026-10-25T01:00:00.000Z",
+      });
+      const row = driver.getPullTask(created.id);
+      assert.equal(row?.is_active, true);
+      assert.equal(row?.last_run_at, "2026-10-25T01:00:00.000Z");
+      assert.equal(driver.listPullTasks().length, 1);
+      assert.equal(driver.deletePullTask(created.id), true);
+      assert.equal(driver.deletePullTask(created.id), false);
+      assert.equal(driver.getPullTask(created.id), null);
+    });
+
     it("webhook payloads: save upserts, list newest-updated first, delete removes", () => {
       assert.deepEqual(driver.listWebhookPayloads(), []);
       driver.saveWebhookPayload({

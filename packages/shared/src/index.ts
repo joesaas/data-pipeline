@@ -301,18 +301,23 @@ interface CronParts {
 
 const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+// One formatter, reused: previousCronOccurrence steps back minute by
+// minute (up to 7 days), and building a fresh Intl formatter per minute
+// would make that loop needlessly slow.
+const CRON_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: CRON_TIMEZONE,
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "numeric",
+  minute: "numeric",
+  hourCycle: "h23",
+  weekday: "short",
+});
+
 /** Calendar parts of a Date in the cron timezone (Asia/Shanghai). */
 export function cronParts(date: Date): CronParts {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: CRON_TIMEZONE,
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    hourCycle: "h23",
-    weekday: "short",
-  }).formatToParts(date);
+  const parts = CRON_FORMATTER.formatToParts(date);
   const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
   return {
     minute: Number(get("minute")),
@@ -356,4 +361,43 @@ export function isCronDue(cron: ParsedCron, now: Date, lastTriggeredAt: string |
   const last = new Date(lastTriggeredAt);
   if (Number.isNaN(last.getTime())) return true;
   return cronMinuteKey(last) !== cronMinuteKey(now);
+}
+
+/* ------------------------------------------------------------------ */
+/* Pull-task due logic (2026-10-25, Muse polling). Unlike the          */
+/* job-runner, which ticks every minute and can demand "this exact      */
+/* minute", a Muse poll runs every 10 minutes and would miss almost     */
+/* every clock-time cron under minute-exact logic. So a pull task is    */
+/* due when its most recent scheduled occurrence is later than its      */
+/* last run: a task that came due between polls fires late, once,      */
+/* instead of being skipped. The lookback is capped at 7 days — a       */
+/* cron rarer than that (e.g. Feb 29) simply waits for its next         */
+/* occurrence instead of firing immediately on first sight.             */
+/* ------------------------------------------------------------------ */
+
+/** Most recent minute at or before `now` matching the expression, or null when none within the lookback. */
+export function previousCronOccurrence(
+  cron: ParsedCron,
+  now: Date,
+  maxBackMinutes = 7 * 24 * 60,
+): Date | null {
+  // Floor to the minute start in absolute time (minute boundaries align
+  // with Shanghai minutes: the offset is whole hours, no DST).
+  let t = Math.floor(now.getTime() / 60_000) * 60_000;
+  for (let i = 0; i <= maxBackMinutes; i++) {
+    const d = new Date(t);
+    if (matchesCron(cron, d)) return d;
+    t -= 60_000;
+  }
+  return null;
+}
+
+/** True when a pull task should run now: active callers check is_active separately. */
+export function isPullTaskDue(cron: ParsedCron, now: Date, lastRunAt: string | null): boolean {
+  const prev = previousCronOccurrence(cron, now);
+  if (!prev) return false;
+  if (!lastRunAt) return true;
+  const last = Date.parse(lastRunAt);
+  if (Number.isNaN(last)) return true;
+  return prev.getTime() > last;
 }

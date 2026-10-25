@@ -83,6 +83,36 @@ export interface WebhookMeta {
 }
 
 /**
+ * One Muse pull task (2026-10-25, pull model — the counterpart to the
+ * webhook push model). Muse has no inbound webhook, so it polls: the
+ * console holds tasks, a Muse cron reads the due list, executes each
+ * task's prompt, and pushes the result to the records API. Unlike
+ * webhooks, many pull tasks may be active at once — each runs on its
+ * own cron, so activating one never deactivates another.
+ * `cron` is required (a task without a schedule never runs) and is a
+ * 5-field cron expression in Asia/Shanghai time. `last_run_at` is the
+ * ISO timestamp of the last execution the poller reported (via the
+ * last-run endpoint); the due check compares it against the task's
+ * most recent cron occurrence, so a task that came due between polls
+ * fires late instead of being skipped.
+ */
+export interface StoredPullTask {
+  id: number;
+  name: string;
+  prompt: string;
+  cron: string;
+  is_active: boolean;
+  last_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A pull task as the due endpoint returns it: the stored row plus the scheduled occurrence it is due for. */
+export interface DuePullTask extends StoredPullTask {
+  due_at: string;
+}
+
+/**
  * One saved webhook payload template. The content is a user-authored JSON
  * object (it usually contains the `prompt`); at most one row is active,
  * and the scheduled trigger sends the active one. Content is not a secret.

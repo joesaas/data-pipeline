@@ -1,4 +1,5 @@
 import type {
+  StoredPullTask,
   StoredRecord,
   StoredToken,
   StoredWebhook,
@@ -49,6 +50,14 @@ export interface StorageDriver {
   /** Insert (id <= 0 assigns the next id) or replace by id. Returns the stored row. */
   saveWebhook(w: StoredWebhook): StoredWebhook;
   deleteWebhook(id: number): boolean;
+
+  /** Muse pull tasks (console-configured, Muse polls the due list). */
+  getPullTask(id: number): StoredPullTask | null;
+  /** All pull tasks, oldest-updated first. */
+  listPullTasks(): StoredPullTask[];
+  /** Insert (id <= 0 assigns the next id) or replace by id. Returns the stored row. */
+  savePullTask(t: StoredPullTask): StoredPullTask;
+  deletePullTask(id: number): boolean;
 
   /** Saved payload templates the trigger job still reads for its active
    *  row (the console no longer manages this list). */

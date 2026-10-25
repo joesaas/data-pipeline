@@ -77,6 +77,14 @@ export function registerRoutes(
         admin_webhook_delete: `DELETE ${base}/api/v1/admin/webhooks/:id`,
         admin_webhook_active: `POST ${base}/api/v1/admin/webhooks/:id/active`,
         admin_webhook_test: `POST ${base}/api/v1/admin/webhooks/:id/test`,
+        admin_pull_tasks: `GET ${base}/api/v1/admin/pull-tasks`,
+        admin_pull_task_create: `POST ${base}/api/v1/admin/pull-tasks`,
+        admin_pull_task_detail: `GET ${base}/api/v1/admin/pull-tasks/:id`,
+        admin_pull_task_update: `PUT ${base}/api/v1/admin/pull-tasks/:id`,
+        admin_pull_task_delete: `DELETE ${base}/api/v1/admin/pull-tasks/:id`,
+        admin_pull_task_active: `POST ${base}/api/v1/admin/pull-tasks/:id/active`,
+        admin_pull_tasks_due: `GET ${base}/api/v1/admin/pull-tasks/due`,
+        admin_pull_task_run: `POST ${base}/api/v1/admin/pull-tasks/:id/run`,
       },
       console: `${base}/console`,
       docs: "https://github.com/joesaas/data-pipeline",
@@ -195,6 +203,26 @@ export function registerRoutes(
   );
   router.post("/api/v1/admin/webhooks/:id/test", (req, res) =>
     admin.testWebhook(adminDeps, req, res),
+  );
+  // Pull tasks (Muse polling). The /due route must be registered before
+  // /:id, or "due" would be parsed as an id and 400.
+  router.get("/api/v1/admin/pull-tasks/due", (req, res) =>
+    admin.listDuePullTasks(adminDeps, req, res),
+  );
+  router.get("/api/v1/admin/pull-tasks", (req, res) => admin.listPullTasks(adminDeps, req, res));
+  router.post("/api/v1/admin/pull-tasks", (req, res) => admin.createPullTask(adminDeps, req, res));
+  router.get("/api/v1/admin/pull-tasks/:id", (req, res) => admin.getPullTask(adminDeps, req, res));
+  router.put("/api/v1/admin/pull-tasks/:id", (req, res) =>
+    admin.updatePullTask(adminDeps, req, res),
+  );
+  router.delete("/api/v1/admin/pull-tasks/:id", (req, res) =>
+    admin.deletePullTask(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/pull-tasks/:id/active", (req, res) =>
+    admin.setPullTaskActive(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/pull-tasks/:id/run", (req, res) =>
+    admin.markPullTaskRun(adminDeps, req, res),
   );
 
   if (config.basePath) app.use(config.basePath, router);

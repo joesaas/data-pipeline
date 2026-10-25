@@ -3,8 +3,10 @@ import { describe, it } from "node:test";
 import {
   cronMinuteKey,
   isCronDue,
+  isPullTaskDue,
   matchesCron,
   parseCron,
+  previousCronOccurrence,
 } from "@data-pipeline/shared";
 
 // Shanghai is UTC+8 with no DST, so these UTC instants have exact
@@ -94,5 +96,36 @@ describe("cron: due + same-minute suppression", () => {
   it("cronMinuteKey is Shanghai wall-clock time", () => {
     assert.equal(cronMinuteKey(SUN_09_SHANGHAI), "10/25 09:00");
     assert.equal(cronMinuteKey(SUN_09_UTC), "10/25 17:00");
+  });
+});
+
+describe("cron: pull-task due (previous occurrence beats last run)", () => {
+  it("finds the most recent occurrence, in Shanghai time", () => {
+    const cron = parseCron("0 9 * * *")!;
+    // Now is 09:07 Shanghai: previous occurrence is today 09:00 Shanghai.
+    assert.equal(
+      previousCronOccurrence(cron, new Date("2026-10-25T01:07:00.000Z"))?.toISOString(),
+      "2026-10-25T01:00:00.000Z",
+    );
+    // Now is 08:30 Shanghai: previous occurrence is yesterday 09:00 Shanghai.
+    assert.equal(
+      previousCronOccurrence(cron, new Date("2026-10-25T00:30:00.000Z"))?.toISOString(),
+      "2026-10-24T01:00:00.000Z",
+    );
+  });
+
+  it("due when the previous occurrence is after the last run, even minutes late", () => {
+    const cron = parseCron("0 9 * * *")!;
+    const now = new Date("2026-10-25T01:07:00.000Z"); // 09:07 Shanghai
+    assert.equal(isPullTaskDue(cron, now, null), true);
+    assert.equal(isPullTaskDue(cron, now, "2026-10-24T01:05:00.000Z"), true);
+    // Ran at 09:02 Shanghai, after today's 09:00 occurrence: not due again.
+    assert.equal(isPullTaskDue(cron, now, "2026-10-25T01:02:00.000Z"), false);
+  });
+
+  it("a cron rarer than the 7-day lookback is not immediately due", () => {
+    const cron = parseCron("0 0 29 2 *")!;
+    assert.equal(previousCronOccurrence(cron, SUN_09_SHANGHAI, 60), null);
+    assert.equal(isPullTaskDue(cron, SUN_09_SHANGHAI, null), false);
   });
 });

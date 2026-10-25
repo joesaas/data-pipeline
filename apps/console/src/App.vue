@@ -38,6 +38,7 @@
         <button :class="{ active: tab === 'webhooks' }" @click="openWebhooksTab">Webhooks</button>
         <button :class="{ active: tab === 'records' }" @click="openRecordsTab">Records</button>
         <button :class="{ active: tab === 'news' }" @click="openNewsTab">News</button>
+        <button :class="{ active: tab === 'pulltasks' }" @click="openPullTasksTab">拉取任务</button>
       </nav>
 
       <!-- Tokens -->
@@ -378,6 +379,98 @@
         </div>
         <p v-if="newsError" class="err">{{ newsError }}</p>
       </section>
+
+      <!-- Pull tasks -->
+      <section v-if="tab === 'pulltasks'" class="card">
+        <div class="row space">
+          <h2>拉取任务</h2>
+          <button class="btn" :disabled="pullTasksRefreshing" @click="refreshPullTasks">
+            <span v-if="pullTasksRefreshing" class="spin">⟳</span>
+            {{ pullTasksRefreshing ? "刷新中…" : "刷新" }}
+          </button>
+        </div>
+        <p class="hint">
+          Muse 没有入站 webhook，没法被推，只能反过来拉：这里配的每条任务是一份 prompt +
+          一份 cron（5 段，按北京时间），Muse 每 10 分钟轮询一次，到点的任务就执行，
+          成稿先写 review 把关（不直推），放行后才进 pending 推 API。
+          和 Webhooks 不同：多条任务可以同时启用，各跑各的 cron，启用一条不会停掉另一条。
+          新任务默认不启用；执行时间以上次 cron 时刻为准，轮询迟到几分钟会补跑，不会跳过。
+        </p>
+        <p class="hint">
+          上次刷新：{{ pullTasksLastRefreshed || "尚未刷新" }}
+          <span v-if="pullTasksRefreshing"> · 正在从服务器拉取最新数据…</span>
+          <span v-else-if="pullTasks.length"> · 当前共 {{ pullTasks.length }} 条</span>
+        </p>
+        <div v-if="pullTaskView === 'list'">
+          <table v-if="pullTasks.length">
+            <thead>
+              <tr><th>名字</th><th>cron</th><th>启用</th><th>上次执行</th><th>更新时间</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="t in pullTasks" :key="t.id" @click="openPullTask(t)">
+                <td>{{ t.name }}</td>
+                <td class="mono short">{{ t.cron }}</td>
+                <td><span v-if="t.is_active" class="badge">启用</span><span v-else>—</span></td>
+                <td>{{ t.last_run_at ? fmtTime(t.last_run_at) : "从未执行" }}</td>
+                <td>{{ fmtTime(t.updated_at) }}</td>
+                <td @click.stop>
+                  <button class="btn small" :disabled="busy" @click="openPullTask(t)">详情</button>
+                  <button class="btn small" :disabled="busy" @click="startEditPullTask(t)">编辑</button>
+                  <button v-if="!t.is_active" class="btn small" :disabled="busy" @click="setPullTaskActive(t, true)">启用</button>
+                  <button v-else class="btn small" :disabled="busy" @click="setPullTaskActive(t, false)">停用</button>
+                  <button class="btn danger small" :disabled="busy" @click="deletePullTask(t)">删除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="hint">还没有拉取任务，在下方新建一个。</p>
+          <form class="create" @submit.prevent="createPullTask">
+            <input v-model="newPullTaskName" placeholder="新任务名字，如：ai-agent-日报" class="input" />
+            <input v-model="newPullTaskCron" placeholder="cron（北京时间，如 0 9 * * *）" class="input" />
+            <div class="row">
+              <button class="btn small" type="button" @click="newPullTaskCron = '*/30 * * * *'">每 30 分钟</button>
+              <button class="btn small" type="button" @click="newPullTaskCron = '0 * * * *'">每小时</button>
+              <button class="btn small" type="button" @click="newPullTaskCron = '0 9 * * *'">每天 9 点</button>
+              <button class="btn small" type="button" @click="newPullTaskCron = '0 9 * * 1-5'">工作日 9 点</button>
+            </div>
+            <textarea v-model="newPullTaskPrompt" rows="6" placeholder="prompt：Muse 到点执行这份指令，成稿写 review 把关" class="input"></textarea>
+            <button class="btn primary" :disabled="busy">新建（默认不启用）</button>
+          </form>
+        </div>
+        <div v-if="pullTaskView === 'detail' && selectedPullTask">
+          <h4>{{ selectedPullTask.name }} <span v-if="selectedPullTask.is_active" class="badge">启用</span></h4>
+          <div class="hint">更新于 {{ fmtTime(selectedPullTask.updated_at) }} · 上次执行 {{ selectedPullTask.last_run_at ? fmtTime(selectedPullTask.last_run_at) : "从未执行" }}</div>
+          <div class="grid">
+            <div><label>cron（北京时间）</label><div class="mono">{{ selectedPullTask.cron }}</div></div>
+          </div>
+          <h4>prompt</h4>
+          <pre class="out">{{ selectedPullTask.prompt }}</pre>
+          <div class="row">
+            <button class="btn" @click="pullTaskView = 'list'">返回列表</button>
+            <button class="btn" :disabled="busy" @click="startEditPullTask(selectedPullTask)">编辑</button>
+            <button v-if="!selectedPullTask.is_active" class="btn" :disabled="busy" @click="setPullTaskActive(selectedPullTask, true)">启用</button>
+            <button v-else class="btn" :disabled="busy" @click="setPullTaskActive(selectedPullTask, false)">停用</button>
+            <button class="btn danger" :disabled="busy" @click="deletePullTask(selectedPullTask)">删除</button>
+          </div>
+        </div>
+        <form v-if="pullTaskView === 'edit'" class="create" @submit.prevent="savePullTaskForm">
+          <div class="hint">正在编辑 {{ editPullTaskName }}（名字不可改）。prompt 与 cron 都是完整值，改后保存即生效，下次轮询按新 cron 执行。</div>
+          <input v-model="editPullTaskCron" placeholder="cron（北京时间，如 0 9 * * *）" class="input" />
+          <div class="row">
+            <button class="btn small" type="button" @click="editPullTaskCron = '*/30 * * * *'">每 30 分钟</button>
+            <button class="btn small" type="button" @click="editPullTaskCron = '0 * * * *'">每小时</button>
+            <button class="btn small" type="button" @click="editPullTaskCron = '0 9 * * *'">每天 9 点</button>
+            <button class="btn small" type="button" @click="editPullTaskCron = '0 9 * * 1-5'">工作日 9 点</button>
+          </div>
+          <textarea v-model="editPullTaskPrompt" rows="10" placeholder="prompt" class="input"></textarea>
+          <div class="row">
+            <button class="btn primary" :disabled="busy">保存</button>
+            <button class="btn" type="button" @click="pullTaskView = 'list'">取消</button>
+          </div>
+        </form>
+        <p v-if="pullTaskOk" class="ok">{{ pullTaskOk }}</p>
+        <p v-if="pullTaskError" class="err">{{ pullTaskError }}</p>
+      </section>
     </template>
   </div>
 </template>
@@ -452,6 +545,22 @@ const newsRefreshing = ref(false);
 const newsLastRefreshed = ref("");
 let newsRefreshSeq = 0;
 
+const pullTasks = ref([]);
+const pullTaskView = ref("list");
+const selectedPullTask = ref(null);
+const newPullTaskName = ref("");
+const newPullTaskPrompt = ref("");
+const newPullTaskCron = ref("");
+const editPullTaskId = ref(null);
+const editPullTaskName = ref("");
+const editPullTaskPrompt = ref("");
+const editPullTaskCron = ref("");
+const pullTaskOk = ref("");
+const pullTaskError = ref("");
+const pullTasksRefreshing = ref(false);
+const pullTasksLastRefreshed = ref("");
+let pullTasksRefreshSeq = 0;
+
 function fmtTime(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -466,7 +575,7 @@ async function login() {
     saveKey(keyInput.value.trim());
     key.value = keyInput.value.trim();
     keyInput.value = "";
-    await Promise.all([refreshTokens(), refreshWebhooks(), refreshRecords(), refreshNews()]);
+    await Promise.all([refreshTokens(), refreshWebhooks(), refreshRecords(), refreshNews(), refreshPullTasks()]);
   } catch (e) {
     loginError.value = e.status === 401 ? "钥匙无效（401）" : e.status === 403 ? "这把不是 admin 钥匙（403）" : e.message;
   } finally {
@@ -492,6 +601,10 @@ function logout() {
   selectedNews.value = null;
   newsView.value = "list";
   newsLastRefreshed.value = "";
+  pullTasks.value = [];
+  selectedPullTask.value = null;
+  pullTaskView.value = "list";
+  pullTasksLastRefreshed.value = "";
 }
 
 function openTokensTab() {
@@ -783,6 +896,118 @@ function openNewsTab() {
   refreshNews();
 }
 
+function openPullTasksTab() {
+  tab.value = "pulltasks";
+  refreshPullTasks();
+}
+
+async function refreshPullTasks() {
+  const seq = ++pullTasksRefreshSeq;
+  pullTasksRefreshing.value = true;
+  pullTaskError.value = "";
+  try {
+    const items = await adminApi.listPullTasks(key.value);
+    if (seq === pullTasksRefreshSeq) {
+      pullTasks.value = items;
+      pullTasksLastRefreshed.value = new Date().toLocaleString();
+    }
+  } catch (e) {
+    if (seq === pullTasksRefreshSeq) pullTaskError.value = e.message;
+  } finally {
+    if (seq === pullTasksRefreshSeq) pullTasksRefreshing.value = false;
+  }
+}
+
+function openPullTask(t) {
+  selectedPullTask.value = t;
+  pullTaskView.value = "detail";
+}
+
+async function createPullTask() {
+  pullTaskOk.value = "";
+  pullTaskError.value = "";
+  busy.value = true;
+  try {
+    await adminApi.createPullTask(key.value, {
+      name: newPullTaskName.value.trim(),
+      prompt: newPullTaskPrompt.value,
+      cron: newPullTaskCron.value.trim(),
+    });
+    newPullTaskName.value = "";
+    newPullTaskPrompt.value = "";
+    newPullTaskCron.value = "";
+    pullTaskOk.value = "任务已新建（默认不启用，点启用后 Muse 下次轮询到点才执行）。";
+    await refreshPullTasks();
+  } catch (e) {
+    pullTaskError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+function startEditPullTask(t) {
+  editPullTaskId.value = t.id;
+  editPullTaskName.value = t.name;
+  editPullTaskPrompt.value = t.prompt;
+  editPullTaskCron.value = t.cron;
+  selectedPullTask.value = t;
+  pullTaskView.value = "edit";
+}
+
+async function savePullTaskForm() {
+  pullTaskOk.value = "";
+  pullTaskError.value = "";
+  busy.value = true;
+  try {
+    const row = await adminApi.updatePullTask(key.value, editPullTaskId.value, {
+      prompt: editPullTaskPrompt.value,
+      cron: editPullTaskCron.value.trim(),
+    });
+    selectedPullTask.value = row;
+    pullTaskView.value = "detail";
+    pullTaskOk.value = "已保存。";
+    await refreshPullTasks();
+  } catch (e) {
+    pullTaskError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function setPullTaskActive(t, active) {
+  pullTaskOk.value = "";
+  pullTaskError.value = "";
+  busy.value = true;
+  try {
+    const row = await adminApi.setPullTaskActive(key.value, t.id, active);
+    if (selectedPullTask.value && selectedPullTask.value.id === t.id) selectedPullTask.value = row;
+    pullTaskOk.value = active ? "已启用：Muse 下次轮询到点即执行。" : "已停用：Muse 轮询会跳过它。";
+    await refreshPullTasks();
+  } catch (e) {
+    pullTaskError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function deletePullTask(t) {
+  if (!window.confirm(`删除拉取任务「${t.name}」？删除后不可恢复。`)) return;
+  pullTaskOk.value = "";
+  pullTaskError.value = "";
+  busy.value = true;
+  try {
+    await adminApi.deletePullTask(key.value, t.id);
+    pullTaskView.value = "list";
+    selectedPullTask.value = null;
+    pullTaskOk.value = "任务已删除。";
+    await refreshPullTasks();
+  } catch (e) {
+    pullTaskError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
 function openNews(n) {
   selectedNews.value = n;
   newsView.value = "detail";
@@ -865,7 +1090,7 @@ onMounted(async () => {
     healthOk.value = false;
   }
   if (key.value) {
-    await Promise.all([refreshTokens(), refreshWebhooks(), refreshRecords(), refreshNews()]);
+    await Promise.all([refreshTokens(), refreshWebhooks(), refreshRecords(), refreshNews(), refreshPullTasks()]);
   }
 });
 </script>

@@ -336,6 +336,90 @@ describe("admin routes", () => {
     assert.equal((await req(ctx, "DELETE", `${W}/${id}`, ctx.adminKey)).status, 200);
   });
 
+  it("pull tasks: create/list/get/update/active/due/run, many may be active", async () => {
+    const P = "/data-pipeline/api/v1/admin/pull-tasks";
+    // Validation: prompt and cron are required, cron must parse.
+    assert.equal(
+      (await req(ctx, "POST", P, ctx.adminKey, { name: "t1", prompt: "do it" })).status,
+      400,
+    );
+    assert.equal(
+      (
+        await req(ctx, "POST", P, ctx.adminKey, {
+          name: "t1",
+          prompt: "do it",
+          cron: "0 9 * *",
+        })
+      ).status,
+      400,
+    );
+    const a = await req(ctx, "POST", P, ctx.adminKey, {
+      name: "every-minute",
+      prompt: "do it every minute",
+      cron: "* * * * *",
+    });
+    assert.equal(a.status, 201);
+    assert.equal(a.body.is_active, false);
+    assert.equal(a.body.last_run_at, null);
+    const idA = a.body.id as number;
+    const b = await req(ctx, "POST", P, ctx.adminKey, {
+      name: "also-every-minute",
+      prompt: "do it too",
+      cron: "* * * * *",
+    });
+    assert.equal(b.status, 201);
+    const idB = b.body.id as number;
+    assert.equal(
+      (
+        await req(ctx, "POST", P, ctx.adminKey, {
+          name: "every-minute",
+          prompt: "dup",
+          cron: "* * * * *",
+        })
+      ).status,
+      409,
+    );
+    // Nothing due while inactive.
+    assert.deepEqual(await req(ctx, "GET", `${P}/due`, ctx.adminKey).then((r) => r.body), []);
+    // Activate both: unlike webhooks, both stay active.
+    assert.equal(
+      (await req(ctx, "POST", `${P}/${idA}/active`, ctx.adminKey, { active: true })).body.is_active,
+      true,
+    );
+    assert.equal(
+      (await req(ctx, "POST", `${P}/${idB}/active`, ctx.adminKey, { active: true })).body.is_active,
+      true,
+    );
+    assert.equal((await req(ctx, "GET", `${P}/${idA}`, ctx.adminKey)).body.is_active, true);
+    // Both due now (every-minute cron, never run).
+    const due = (await req(ctx, "GET", `${P}/due`, ctx.adminKey)).body as unknown as Record<string, unknown>[];
+    assert.equal(due.length, 2);
+    assert.ok(due.every((t) => typeof t.due_at === "string"));
+    // Mark A run: A drops out of due, B stays due.
+    assert.equal(
+      (await req(ctx, "POST", `${P}/${idA}/run`, ctx.adminKey, {})).body.last_run_at !== null,
+      true,
+    );
+    const dueAfter = (await req(ctx, "GET", `${P}/due`, ctx.adminKey)).body as unknown as Record<string, unknown>[];
+    assert.deepEqual(dueAfter.map((t) => t.id), [idB]);
+    // Update prompt + cron; name is immutable (not in the update body).
+    const upd = await req(ctx, "PUT", `${P}/${idB}`, ctx.adminKey, {
+      prompt: "do it better",
+      cron: "0 9 * * *",
+    });
+    assert.equal(upd.status, 200);
+    assert.equal(upd.body.prompt, "do it better");
+    assert.equal(upd.body.cron, "0 9 * * *");
+    assert.equal((await req(ctx, "PUT", `${P}/${idB}`, ctx.adminKey, { cron: "nope" })).status, 400);
+    // Auth and unknown ids.
+    assert.equal((await req(ctx, "GET", P)).status, 401);
+    assert.equal((await req(ctx, "GET", P, ctx.userKey)).status, 403);
+    assert.equal((await req(ctx, "GET", `${P}/999999`, ctx.adminKey)).status, 404);
+    assert.equal((await req(ctx, "GET", `${P}/abc`, ctx.adminKey)).status, 400);
+    assert.equal((await req(ctx, "DELETE", `${P}/${idA}`, ctx.adminKey)).status, 200);
+    assert.equal((await req(ctx, "DELETE", `${P}/${idB}`, ctx.adminKey)).status, 200);
+  });
+
   it("webhooks: test unknown id 404s before spawn; missing runner script fails cleanly", async () => {
     const W = "/data-pipeline/api/v1/admin/webhooks";
     assert.equal((await req(ctx, "POST", `${W}/999999/test`, ctx.adminKey)).status, 404);
