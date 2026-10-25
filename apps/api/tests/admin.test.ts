@@ -281,6 +281,61 @@ describe("admin routes", () => {
     assert.equal((await req(ctx, "DELETE", `${W}/${id}`, ctx.adminKey)).status, 200);
   });
 
+  it("webhooks: cron is saved, echoed, cleared, and validated", async () => {
+    const W = "/data-pipeline/api/v1/admin/webhooks";
+    // Invalid cron expressions are rejected on create and on update.
+    assert.equal(
+      (
+        await req(ctx, "POST", W, ctx.adminKey, {
+          name: "cron-bad",
+          webhookUrl: "https://cron.example/hook",
+          webhookToken: "cron-token",
+          cron: "0 9 * *",
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await req(ctx, "POST", W, ctx.adminKey, {
+          name: "cron-bad",
+          webhookUrl: "https://cron.example/hook",
+          webhookToken: "cron-token",
+          cron: "0 25 * * *",
+        })
+      ).status,
+      400,
+    );
+    const created = await req(ctx, "POST", W, ctx.adminKey, {
+      name: "cron-ok",
+      webhookUrl: "https://cron.example/hook",
+      webhookToken: "cron-token",
+      cron: "0 9 * * 1-5",
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.cron, "0 9 * * 1-5");
+    const id = created.body.id as number;
+    // Detail and list echo cron; token still never returned.
+    assert.equal((await req(ctx, "GET", `${W}/${id}`, ctx.adminKey)).body.cron, "0 9 * * 1-5");
+    const items = (await req(ctx, "GET", W, ctx.adminKey)).body as unknown as Record<string, unknown>[];
+    assert.equal(items.find((w) => w.id === id)?.cron, "0 9 * * 1-5");
+    // Update without cron keeps it; an empty cron clears it.
+    assert.equal(
+      (await req(ctx, "PUT", `${W}/${id}`, ctx.adminKey, { webhookUrl: "https://cron2.example/hook" }))
+        .body.cron,
+      "0 9 * * 1-5",
+    );
+    assert.equal(
+      (await req(ctx, "PUT", `${W}/${id}`, ctx.adminKey, { cron: "  " })).body.cron,
+      null,
+    );
+    assert.equal(
+      (await req(ctx, "PUT", `${W}/${id}`, ctx.adminKey, { cron: "every day" })).status,
+      400,
+    );
+    assert.equal((await req(ctx, "DELETE", `${W}/${id}`, ctx.adminKey)).status, 200);
+  });
+
   it("webhooks: test unknown id 404s before spawn; missing runner script fails cleanly", async () => {
     const W = "/data-pipeline/api/v1/admin/webhooks";
     assert.equal((await req(ctx, "POST", `${W}/999999/test`, ctx.adminKey)).status, 404);

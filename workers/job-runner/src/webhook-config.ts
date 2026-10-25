@@ -33,6 +33,8 @@ export interface DbWebhook {
   url: string;
   token: string;
   payload: string | null;
+  /** Per-webhook cron expression, or null when the row has none (legacy interval gate). */
+  cron: string | null;
 }
 
 function readWebhookRow(
@@ -45,11 +47,20 @@ function readWebhookRow(
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
     db.exec("PRAGMA busy_timeout = 5000;");
+    // Old databases predate the cron column (the API migrates on its own
+    // startup, but the runner must not break if it ticks first): select
+    // cron only when the column exists, else read the row without it.
+    const cols = db.prepare("PRAGMA table_info(webhooks)").all() as { name: string }[];
+    const hasCron = cols.some((c) => c.name === "cron");
     const row = db
-      .prepare(`SELECT url, token, payload FROM webhooks ${where}`)
-      .get(...params) as { url: string; token: string; payload: string | null } | undefined;
+      .prepare(
+        `SELECT url, token, payload${hasCron ? ", cron" : ""} FROM webhooks ${where}`,
+      )
+      .get(...params) as
+      | { url: string; token: string; payload: string | null; cron?: string | null }
+      | undefined;
     if (!row || !row.url || !row.token) return null;
-    return { url: row.url, token: row.token, payload: row.payload ?? null };
+    return { url: row.url, token: row.token, payload: row.payload ?? null, cron: row.cron ?? null };
   } catch {
     return null;
   } finally {

@@ -170,3 +170,190 @@ export function parseTranslationZh(text: string | null | undefined): Translation
     return null;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Webhook cron schedules (2026-10-25, per-webhook cron, plan A).     */
+/* One schedule lives on one webhook row; empty means "no cron — use   */
+/* the legacy interval gate". This is the single parser for both the   */
+/* API (which validates what the console saves) and the job-runner    */
+/* (which decides whether a tick fires), so the two can never drift.  */
+/*                                                                    */
+/* Format: exactly 5 fields, "minute hour day-of-month month          */
+/* day-of-week", numbers only (no month/weekday names). Each field    */
+/* accepts "*", star-slash-step, "a-b", "a-b/step", "n/step" and     */
+/* comma lists. Day-of-week 0 and 7 both mean Sunday.                */
+/*                                                                    */
+/* Timezone is load-bearing and fixed: cron times are Asia/Shanghai   */
+/* (UTC+8, no DST). The server's own timezone is deliberately NOT     */
+/* used — an EC2 box on UTC would otherwise fire "0 9 * * *" at      */
+/* 17:00 Beijing time, an 8-hour surprise. The console says so too.   */
+/* Missed minutes are skipped, never caught up: a tick fires only     */
+/* when the current Shanghai minute itself matches the expression.    */
+/* ------------------------------------------------------------------ */
+
+export const CRON_TIMEZONE = "Asia/Shanghai";
+
+export interface ParsedCron {
+  minute: Set<number>;
+  hour: Set<number>;
+  dayOfMonth: Set<number>;
+  month: Set<number>;
+  dayOfWeek: Set<number>;
+  /** False when the field was "*" (unrestricted) — needed for the dom/dow OR rule. */
+  dayOfMonthRestricted: boolean;
+  dayOfWeekRestricted: boolean;
+  raw: string;
+}
+
+const CRON_RANGES: [number, number][] = [
+  [0, 59],
+  [0, 23],
+  [1, 31],
+  [1, 12],
+  [0, 7],
+];
+
+function parseCronField(field: string, min: number, max: number): Set<number> | null {
+  const out = new Set<number>();
+  for (const part of field.split(",")) {
+    if (!part) return null;
+    const [base, stepRaw] = part.split("/");
+    if (stepRaw !== undefined) {
+      if (!/^\d+$/.test(stepRaw)) return null;
+      const step = Number(stepRaw);
+      if (step <= 0) return null;
+      let lo: number;
+      let hi: number;
+      if (base === "*") {
+        lo = min;
+        hi = max;
+      } else if (/^\d+$/.test(base)) {
+        lo = Number(base);
+        hi = max;
+      } else {
+        const m = /^(\d+)-(\d+)$/.exec(base);
+        if (!m) return null;
+        lo = Number(m[1]);
+        hi = Number(m[2]);
+      }
+      if (lo < min || hi > max || lo > hi) return null;
+      for (let v = lo; v <= hi; v += step) out.add(v);
+      continue;
+    }
+    if (base === "*") {
+      for (let v = min; v <= max; v++) out.add(v);
+      continue;
+    }
+    const m = /^(\d+)-(\d+)$/.exec(base);
+    if (m) {
+      const lo = Number(m[1]);
+      const hi = Number(m[2]);
+      if (lo < min || hi > max || lo > hi) return null;
+      for (let v = lo; v <= hi; v++) out.add(v);
+      continue;
+    }
+    if (!/^\d+$/.test(base)) return null;
+    const v = Number(base);
+    if (v < min || v > max) return null;
+    out.add(v);
+  }
+  return out.size ? out : null;
+}
+
+/** Parse a 5-field cron expression; null when malformed. Empty input is not valid here — callers treat empty as "no cron". */
+export function parseCron(expr: string): ParsedCron | null {
+  const raw = expr.trim();
+  if (!raw) return null;
+  const fields = raw.split(/\s+/);
+  if (fields.length !== 5) return null;
+  const sets: Set<number>[] = [];
+  for (let i = 0; i < 5; i++) {
+    const [min, max] = CRON_RANGES[i];
+    const s = parseCronField(fields[i], min, max);
+    if (!s) return null;
+    sets.push(s);
+  }
+  const dow = new Set<number>();
+  for (const v of sets[4]) dow.add(v === 7 ? 0 : v);
+  return {
+    minute: sets[0],
+    hour: sets[1],
+    dayOfMonth: sets[2],
+    month: sets[3],
+    dayOfWeek: dow,
+    dayOfMonthRestricted: fields[2] !== "*",
+    dayOfWeekRestricted: fields[4] !== "*",
+    raw,
+  };
+}
+
+export function isValidCron(expr: string): boolean {
+  return parseCron(expr) !== null;
+}
+
+interface CronParts {
+  minute: number;
+  hour: number;
+  day: number;
+  month: number;
+  weekday: number;
+}
+
+const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Calendar parts of a Date in the cron timezone (Asia/Shanghai). */
+export function cronParts(date: Date): CronParts {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: CRON_TIMEZONE,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    hourCycle: "h23",
+    weekday: "short",
+  }).formatToParts(date);
+  const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
+  return {
+    minute: Number(get("minute")),
+    hour: Number(get("hour")),
+    day: Number(get("day")),
+    month: Number(get("month")),
+    weekday: WEEKDAY_NAMES.indexOf(get("weekday")),
+  };
+}
+
+/** "2026-10-25 09:00" in Shanghai time — the minute key used to suppress duplicate fires within one minute. */
+export function cronMinuteKey(date: Date): string {
+  const p = cronParts(date);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${p.month}/${p.day} ${pad(p.hour)}:${pad(p.minute)}`;
+}
+
+/** True when the expression matches this instant (Shanghai time). Standard dom/dow rule: when both are restricted, either matching fires. */
+export function matchesCron(cron: ParsedCron, date: Date): boolean {
+  const p = cronParts(date);
+  if (!cron.minute.has(p.minute) || !cron.hour.has(p.hour) || !cron.month.has(p.month)) {
+    return false;
+  }
+  const dom = cron.dayOfMonth.has(p.day);
+  const dow = cron.dayOfWeek.has(p.weekday);
+  if (!cron.dayOfMonthRestricted && !cron.dayOfWeekRestricted) return true;
+  if (cron.dayOfMonthRestricted && !cron.dayOfWeekRestricted) return dom;
+  if (!cron.dayOfMonthRestricted && cron.dayOfWeekRestricted) return dow;
+  return dom || dow;
+}
+
+/**
+ * True when a cron-scheduled tick should fire now: the current Shanghai
+ * minute matches, and the last successful fire was not in this same
+ * minute (the 1-minute tick must not double-fire one cron minute).
+ * A null/unparseable last fire means "fire if the minute matches".
+ */
+export function isCronDue(cron: ParsedCron, now: Date, lastTriggeredAt: string | null): boolean {
+  if (!matchesCron(cron, now)) return false;
+  if (!lastTriggeredAt) return true;
+  const last = new Date(lastTriggeredAt);
+  if (Number.isNaN(last.getTime())) return true;
+  return cronMinuteKey(last) !== cronMinuteKey(now);
+}

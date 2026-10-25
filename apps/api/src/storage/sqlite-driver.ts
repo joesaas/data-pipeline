@@ -92,6 +92,7 @@ export class SqliteDriver implements StorageDriver {
         url TEXT NOT NULL,
         token TEXT NOT NULL,
         payload TEXT,
+        cron TEXT,
         is_active INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -140,6 +141,12 @@ export class SqliteDriver implements StorageDriver {
     const tokenCols = this.db.prepare("PRAGMA table_info(tokens)").all() as { name: string }[];
     if (!tokenCols.some((c) => c.name === "role")) {
       this.db.exec("ALTER TABLE tokens ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
+    }
+    // Migration for databases created before per-webhook cron existed:
+    // CREATE TABLE IF NOT EXISTS never adds a column to an old table.
+    const webhookCols = this.db.prepare("PRAGMA table_info(webhooks)").all() as { name: string }[];
+    if (!webhookCols.some((c) => c.name === "cron")) {
+      this.db.exec("ALTER TABLE webhooks ADD COLUMN cron TEXT");
     }
   }
 
@@ -278,20 +285,21 @@ export class SqliteDriver implements StorageDriver {
   getWebhook(id: number): StoredWebhook | null {
     type RawRow = Omit<StoredWebhook, "is_active"> & { is_active: number };
     const row = this.db
-      .prepare("SELECT id, name, url, token, payload, is_active, created_at, updated_at FROM webhooks WHERE id = ?")
+      .prepare("SELECT id, name, url, token, payload, cron, is_active, created_at, updated_at FROM webhooks WHERE id = ?")
       .get(id) as RawRow | undefined;
     if (!row) return null;
     const { is_active, ...rest } = row;
-    return { ...rest, is_active: is_active === 1 };
+    return { ...rest, cron: rest.cron ?? null, is_active: is_active === 1 };
   }
 
   listWebhooks(): WebhookMeta[] {
     type RawRow = Omit<StoredWebhook, "is_active"> & { is_active: number };
     const rows = this.db
-      .prepare("SELECT id, name, url, token, payload, is_active, updated_at FROM webhooks ORDER BY updated_at ASC, id ASC")
+      .prepare("SELECT id, name, url, token, payload, cron, is_active, updated_at FROM webhooks ORDER BY updated_at ASC, id ASC")
       .all() as RawRow[];
     return rows.map(({ token, is_active, ...rest }) => ({
       ...rest,
+      cron: rest.cron ?? null,
       is_active: is_active === 1,
       hasToken: token.trim() !== "",
     }));
@@ -301,17 +309,17 @@ export class SqliteDriver implements StorageDriver {
     if (w.id > 0) {
       this.db
         .prepare(
-          `INSERT INTO webhooks (id, name, url, token, payload, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, token = excluded.token, payload = excluded.payload, is_active = excluded.is_active, updated_at = excluded.updated_at`,
+          `INSERT INTO webhooks (id, name, url, token, payload, cron, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, token = excluded.token, payload = excluded.payload, cron = excluded.cron, is_active = excluded.is_active, updated_at = excluded.updated_at`,
         )
-        .run(w.id, w.name, w.url, w.token, w.payload, w.is_active ? 1 : 0, w.created_at, w.updated_at);
+        .run(w.id, w.name, w.url, w.token, w.payload, w.cron ?? null, w.is_active ? 1 : 0, w.created_at, w.updated_at);
       return this.getWebhook(w.id) as StoredWebhook;
     }
     const res = this.db
       .prepare(
-        "INSERT INTO webhooks (name, url, token, payload, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO webhooks (name, url, token, payload, cron, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(w.name, w.url, w.token, w.payload, w.is_active ? 1 : 0, w.created_at, w.updated_at);
+      .run(w.name, w.url, w.token, w.payload, w.cron ?? null, w.is_active ? 1 : 0, w.created_at, w.updated_at);
     return this.getWebhook(Number(res.lastInsertRowid)) as StoredWebhook;
   }
 

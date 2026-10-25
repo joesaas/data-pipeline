@@ -64,6 +64,7 @@ describe("webhook-config", () => {
         url: "https://grok.example/hook",
         token: "grok-token",
         payload: JSON.stringify({ prompt: "grok template" }),
+        cron: null,
       });
       db.close();
     } finally {
@@ -96,6 +97,7 @@ describe("webhook-config", () => {
         url: "https://solo.example/hook",
         token: "solo-token",
         payload: null,
+        cron: null,
       });
       assert.equal(loadWebhookByIdFromDb(path, id + 100), null);
       assert.equal(loadWebhookByIdFromDb(join(dir, "missing.db"), id), null);
@@ -173,6 +175,7 @@ describe("webhook-config", () => {
         url: "https://wal.example/hook",
         token: "wal-token",
         payload: null,
+        cron: null,
       });
       writer.close();
     } finally {

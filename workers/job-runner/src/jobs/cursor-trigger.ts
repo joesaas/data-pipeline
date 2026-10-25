@@ -8,10 +8,18 @@
  * test-fire once instead, bypassing the interval gate and the state
  * write so a test never disturbs the schedule.
  *
- * Bree ticks this file every minute; the file itself decides whether the
- * configured interval has elapsed (see cursor-state.ts), so the cadence
- * stays adjustable without a runner restart. A tick inside the interval
- * exits immediately with only a log line.
+ * Bree ticks this file every minute; the file itself decides whether to
+ * fire. Two cadence modes, per active webhook row (plan A, 2026-10-25):
+ *   - cron set: the row's 5-field cron expression, evaluated in
+ *     Asia/Shanghai time (see @data-pipeline/shared). A tick fires only
+ *     when the current Shanghai minute matches and that minute has not
+ *     already fired; a missed minute is skipped, never caught up.
+ *   - cron empty: the legacy interval gate (see cursor-state.ts) — the
+ *     interval stays adjustable without a runner restart, and a tick
+ *     inside the interval exits immediately with only a log line.
+ * Either way the endpoint, payload template and cron are re-read from
+ * the database on every tick, so a console save takes effect on the
+ * next tick with no runner restart.
  *
  * Must exit on its own when done: no timers, no servers. A hung run is
  * killed by Bree's closeWorkerAfterMs and retried on the next tick.
@@ -25,6 +33,7 @@
  */
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cronMinuteKey, isCronDue, parseCron } from "@data-pipeline/shared";
 import { loadDefaultEnv } from "../load-env.js";
 import { resolveWebhookConfig, templateKind, triggerOnce } from "../trigger.js";
 import {
@@ -59,20 +68,40 @@ const isTest = webhookOverride !== null;
 
 const dbPath = apiDbPath(envFile);
 let dbConfig: DbWebhook | null = null;
+let scheduleLabel = `interval=${intervalMinutes}m`;
 if (isTest) {
   const id = Number(webhookOverride);
   dbConfig = Number.isInteger(id) && id > 0 ? loadWebhookByIdFromDb(dbPath, id) : null;
   if (!dbConfig) {
     throw new Error(`test webhook "${webhookOverride}" not found in the database`);
   }
-} else if (!shouldTrigger(state, intervalMinutes, now)) {
-  console.log(
-    `[job-runner] cursor-trigger: skip (last ok ${state.lastTriggeredAt}, interval ${intervalMinutes}m)`,
-  );
 } else {
-  dbConfig = loadActiveWebhookFromDb(dbPath);
-  if (!dbConfig) {
+  const active = loadActiveWebhookFromDb(dbPath);
+  if (!active) {
     console.log("[job-runner] cursor-trigger: skip (no active webhook in the webhooks table)");
+  } else if (active.cron?.trim()) {
+    scheduleLabel = `cron="${active.cron.trim()}"`;
+    const parsed = parseCron(active.cron.trim());
+    if (!parsed) {
+      // An invalid cron can only reach the database by a manual edit —
+      // the API rejects it on save. Skip loudly instead of firing on a
+      // schedule nobody meant, and never crash the runner over it.
+      console.log(
+        `[job-runner] cursor-trigger: skip (invalid cron "${active.cron.trim()}" — fix it in the console)`,
+      );
+    } else if (!isCronDue(parsed, now, state.lastTriggeredAt)) {
+      console.log(
+        `[job-runner] cursor-trigger: skip (cron not due, cron="${active.cron.trim()}", now Shanghai ${cronMinuteKey(now)})`,
+      );
+    } else {
+      dbConfig = active;
+    }
+  } else if (!shouldTrigger(state, intervalMinutes, now)) {
+    console.log(
+      `[job-runner] cursor-trigger: skip (last ok ${state.lastTriggeredAt}, interval ${intervalMinutes}m)`,
+    );
+  } else {
+    dbConfig = active;
   }
 }
 
@@ -94,7 +123,7 @@ if (dbConfig) {
     const kind = templateKind(full);
     const bodyKind = kind ? `payload(${kind})` : state.prompt ? "prompt" : "ping";
     console.log(
-      `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… interval=${intervalMinutes}m body=${bodyKind}${isTest ? " test" : ""}`,
+      `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… ${scheduleLabel} body=${bodyKind}${isTest ? " test" : ""}`,
     );
   } catch (err) {
     console.error(

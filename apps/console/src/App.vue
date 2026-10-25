@@ -115,6 +115,8 @@
           每个 webhook 是一组接收地址（URL + token + 可选 payload 模板），存在数据库 webhooks 表里。
           后台定时触发只发标为“定时”的那条；任何一条都可以点“测试一次”单独发一次，不改定时设置、不动触发节奏。
           没有标为定时的行时，定时触发当轮跳过。token 永远不显示。
+          每条 webhook 可以自带 cron（5 段，分 时 日 月 周，按北京时间算）：填了 cron 的定时行按 cron 发，
+          没填的走原来的间隔门控；测试一次不受 cron 影响。
         </p>
         <p class="hint">
           上次刷新：{{ webhooksLastRefreshed || "尚未刷新" }}
@@ -124,13 +126,14 @@
         <div v-if="webhookView === 'list'">
           <table v-if="webhooks.length">
             <thead>
-              <tr><th>名字</th><th>URL</th><th>定时</th><th>更新时间</th><th></th></tr>
+              <tr><th>名字</th><th>URL</th><th>定时</th><th>cron</th><th>更新时间</th><th></th></tr>
             </thead>
             <tbody>
               <tr v-for="w in webhooks" :key="w.id" @click="openWebhook(w)">
                 <td>{{ w.name }}</td>
                 <td class="mono short">{{ w.url }}</td>
                 <td><span v-if="w.is_active" class="badge">定时</span><span v-else>—</span></td>
+                <td class="mono short">{{ w.cron || "间隔" }}</td>
                 <td>{{ fmtTime(w.updated_at) }}</td>
                 <td @click.stop>
                   <button class="btn small" :disabled="busy" @click="openWebhook(w)">详情</button>
@@ -148,6 +151,14 @@
             <input v-model="newWebhookName" placeholder="新 webhook 名字，如：grok-bot" class="input" />
             <input v-model="newWebhookUrl" placeholder="Webhook URL（https://…）" class="input" />
             <input v-model="newWebhookToken" type="password" placeholder="Webhook token" class="input" autocomplete="off" />
+            <input v-model="newWebhookCron" placeholder="cron（可选，北京时间，如 0 9 * * *，空着走间隔）" class="input" />
+            <div class="row">
+              <button class="btn small" type="button" @click="newWebhookCron = '*/30 * * * *'">每 30 分钟</button>
+              <button class="btn small" type="button" @click="newWebhookCron = '0 * * * *'">每小时</button>
+              <button class="btn small" type="button" @click="newWebhookCron = '0 9 * * *'">每天 9 点</button>
+              <button class="btn small" type="button" @click="newWebhookCron = '0 9 * * 1-5'">工作日 9 点</button>
+              <button class="btn small" type="button" @click="newWebhookCron = ''">清除（走间隔）</button>
+            </div>
             <textarea v-model="newWebhookPayload" rows="4" placeholder='payload 模板（可选，JSON 对象，如 {"prompt": "…"})' class="input"></textarea>
             <button class="btn primary" :disabled="busy">新建</button>
           </form>
@@ -158,6 +169,7 @@
           <div class="grid">
             <div><label>URL</label><div class="mono short">{{ selectedWebhook.url }}</div></div>
             <div><label>token</label><div>{{ selectedWebhook.hasToken ? "已配置（不显示）" : "未配置" }}</div></div>
+            <div><label>cron（北京时间）</label><div class="mono">{{ selectedWebhook.cron || "未设置（走间隔）" }}</div></div>
             <div><label>payload 模板</label><div>{{ selectedWebhook.payload ? "已设置" : "未设置" }}</div></div>
           </div>
           <pre v-if="selectedWebhook.payload" class="out">{{ selectedWebhook.payload }}</pre>
@@ -171,9 +183,17 @@
           </div>
         </div>
         <form v-if="webhookView === 'edit'" class="create" @submit.prevent="saveWebhookForm">
-          <div class="hint">正在编辑 {{ editWebhookName }}（名字不可改）。URL 与 token 留空则不改；payload 模板是完整值，留空即清除。</div>
+          <div class="hint">正在编辑 {{ editWebhookName }}（名字不可改）。URL 与 token 留空则不改；payload 模板与 cron 都是完整值，留空即清除（cron 清除后走间隔）。</div>
           <input v-model="editWebhookUrl" placeholder="Webhook URL（https://…，留空则不改）" class="input" />
           <input v-model="editWebhookToken" type="password" placeholder="Webhook token（留空则不改）" class="input" autocomplete="off" />
+          <input v-model="editWebhookCron" placeholder="cron（北京时间，如 0 9 * * *，留空则清除、走间隔）" class="input" />
+          <div class="row">
+            <button class="btn small" type="button" @click="editWebhookCron = '*/30 * * * *'">每 30 分钟</button>
+            <button class="btn small" type="button" @click="editWebhookCron = '0 * * * *'">每小时</button>
+            <button class="btn small" type="button" @click="editWebhookCron = '0 9 * * *'">每天 9 点</button>
+            <button class="btn small" type="button" @click="editWebhookCron = '0 9 * * 1-5'">工作日 9 点</button>
+            <button class="btn small" type="button" @click="editWebhookCron = ''">清除（走间隔）</button>
+          </div>
           <textarea v-model="editWebhookPayload" rows="10" placeholder='JSON 对象，如 {"prompt": "…"}（留空则清除模板）' class="input"></textarea>
           <div class="row">
             <button class="btn primary" :disabled="busy">保存</button>
@@ -389,11 +409,13 @@ const selectedWebhook = ref(null);
 const newWebhookName = ref("");
 const newWebhookUrl = ref("");
 const newWebhookToken = ref("");
+const newWebhookCron = ref("");
 const newWebhookPayload = ref("");
 const editWebhookId = ref(null);
 const editWebhookName = ref("");
 const editWebhookUrl = ref("");
 const editWebhookToken = ref("");
+const editWebhookCron = ref("");
 const editWebhookPayload = ref("");
 const webhookOk = ref("");
 const webhookError = ref("");
@@ -580,11 +602,13 @@ async function createWebhook() {
       name: newWebhookName.value,
       webhookUrl: newWebhookUrl.value,
       webhookToken: newWebhookToken.value,
+      cron: newWebhookCron.value,
       payload: newWebhookPayload.value,
     });
     newWebhookName.value = "";
     newWebhookUrl.value = "";
     newWebhookToken.value = "";
+    newWebhookCron.value = "";
     newWebhookPayload.value = "";
     webhookOk.value = "webhook 已新增（默认不定时）。";
     selectedWebhook.value = saved;
@@ -601,6 +625,7 @@ function startEditWebhook(w) {
   editWebhookName.value = w.name;
   editWebhookUrl.value = w.url;
   editWebhookToken.value = "";
+  editWebhookCron.value = w.cron ?? "";
   editWebhookPayload.value = w.payload ?? "";
   webhookView.value = "edit";
   webhookError.value = "";
@@ -613,10 +638,11 @@ async function saveWebhookForm() {
   busy.value = true;
   try {
     // URL/token are partial updates (empty = keep); the payload template
-    // is a full value (empty clears it).
+    // and cron are full values (empty clears them).
     const body = {};
     if (editWebhookUrl.value.trim()) body.webhookUrl = editWebhookUrl.value.trim();
     if (editWebhookToken.value.trim()) body.webhookToken = editWebhookToken.value.trim();
+    body.cron = editWebhookCron.value;
     body.payload = editWebhookPayload.value;
     const saved = await adminApi.updateWebhook(key.value, editWebhookId.value, body);
     webhookView.value = "list";

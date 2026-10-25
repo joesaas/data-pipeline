@@ -52,6 +52,9 @@ export interface StoredToken {
  * `payload` is the user-authored JSON body template for the trigger
  * request (it usually contains the `prompt`); null means "no template —
  * use the built-in body shape".
+ * `cron` is the per-webhook schedule (plan A, 2026-10-25): a 5-field cron
+ * expression evaluated in Asia/Shanghai time by the job-runner; null
+ * means "no cron — fire on the legacy interval gate instead".
  */
 export interface StoredWebhook {
   id: number;
@@ -59,6 +62,7 @@ export interface StoredWebhook {
   url: string;
   token: string;
   payload: string | null;
+  cron: string | null;
   /** True when this is the webhook the scheduled trigger fires. At most one row is active. */
   is_active: boolean;
   created_at: string;
@@ -71,6 +75,7 @@ export interface WebhookMeta {
   name: string;
   url: string;
   payload: string | null;
+  cron: string | null;
   is_active: boolean;
   /** Whether a token is stored (the value itself is never exposed). */
   hasToken: boolean;

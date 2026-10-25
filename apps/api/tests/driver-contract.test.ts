@@ -127,6 +127,7 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
         url: "https://hooks.example/hook",
         token: "tok-1",
         payload: null,
+        cron: null,
         is_active: false,
         created_at: "2026-10-25T00:00:00.000Z",
         updated_at: "2026-10-25T00:00:00.000Z",
@@ -134,12 +135,14 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.ok(created.id > 0);
       assert.equal(driver.getWebhook(created.id)?.token, "tok-1");
       assert.equal(driver.getWebhook(created.id)?.payload, null);
+      assert.equal(driver.getWebhook(created.id)?.cron, null);
       assert.equal(driver.getWebhook(created.id)?.is_active, false);
       driver.saveWebhook({
         ...created,
         url: "https://hooks.example/hook2",
         token: "tok-2",
         payload: JSON.stringify({ prompt: "do it" }),
+        cron: "0 9 * * 1-5",
         is_active: true,
         updated_at: "2026-10-25T01:00:00.000Z",
       });
@@ -147,6 +150,7 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.equal(row?.url, "https://hooks.example/hook2");
       assert.equal(row?.token, "tok-2");
       assert.equal(row?.payload, JSON.stringify({ prompt: "do it" }));
+      assert.equal(row?.cron, "0 9 * * 1-5");
       assert.equal(row?.is_active, true);
       assert.equal(row?.created_at, "2026-10-25T00:00:00.000Z");
       const listed = driver.listWebhooks();
@@ -155,6 +159,7 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.equal(listed[0].name, "hook-a");
       assert.equal(listed[0].url, "https://hooks.example/hook2");
       assert.equal(listed[0].payload, JSON.stringify({ prompt: "do it" }));
+      assert.equal(listed[0].cron, "0 9 * * 1-5");
       assert.equal(listed[0].is_active, true);
       assert.equal(listed[0].hasToken, true);
       assert.equal("token" in listed[0], false);

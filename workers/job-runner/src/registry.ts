@@ -46,7 +46,7 @@ export const JOBS: JobDef[] = [
     interval: "1m",
     maxRunMs: "1m",
     description:
-      "POSTs the automation webhook when its interval has elapsed. Ticks every minute and self-gates on cursor-state (interval from the state file, else CURSOR_TRIGGER_INTERVAL_MINUTES, default 60m); the 1m here is the tick, not the trigger cadence. The endpoint is the active row of the webhooks table — no active row means the tick skips.",
+      "POSTs the automation webhook when its schedule is due. Ticks every minute and self-gates: the active webhooks row's cron (Asia/Shanghai time) when set, else cursor-state interval (state file, else CURSOR_TRIGGER_INTERVAL_MINUTES, default 60m); the 1m here is the tick, not the trigger cadence. The endpoint is the active row of the webhooks table — no active row means the tick skips.",
   },
 ];
 

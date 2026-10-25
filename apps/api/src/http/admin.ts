@@ -5,6 +5,7 @@ import type { Request, Response } from "express";
 import type { AppConfig } from "../config.js";
 import type { AuthService } from "../auth/auth.js";
 import { ADMIN_IDENTITY, type StoredToken, type StoredWebhook, type TokenRole, type WebhookMeta } from "../domain/types.js";
+import { parseCron } from "@data-pipeline/shared";
 import type { StorageDriver } from "../storage/storage-driver.js";
 
 /**
@@ -146,10 +147,30 @@ function webhookMeta(row: StoredWebhook): WebhookMeta {
     name: row.name,
     url: row.url,
     payload: row.payload,
+    cron: row.cron ?? null,
     is_active: row.is_active,
     hasToken: row.token.trim() !== "",
     updated_at: row.updated_at,
   };
+}
+
+/**
+ * Cron is a full value, like payload: absent means "not in this request"
+ * (create: null, update: keep), an empty string clears it, anything else
+ * must parse as a 5-field cron expression. Returns null, or an error
+ * string to send as 400. The single shared parser guarantees the console
+ * can never save a schedule the job-runner would not understand.
+ */
+function parseCronField(raw: unknown, present: boolean): { cron: string | null } | { error: string } {
+  if (!present) return { cron: null };
+  if (typeof raw !== "string") return { error: "cron must be a string (empty clears it)" };
+  const trimmed = raw.trim();
+  if (!trimmed) return { cron: null };
+  if (trimmed.length > 100) return { error: "cron must be at most 100 chars" };
+  if (!parseCron(trimmed)) {
+    return { error: 'cron must be a valid 5-field cron expression "minute hour day month weekday" (e.g. "0 9 * * *"), evaluated in Asia/Shanghai time' };
+  }
+  return { cron: trimmed };
 }
 
 /** Mark one webhook scheduled and clear every other (at most one active). */
@@ -179,6 +200,7 @@ export function createWebhook(deps: AdminDeps, req: Request, res: Response): voi
     webhookUrl?: unknown;
     webhookToken?: unknown;
     payload?: unknown;
+    cron?: unknown;
   };
   const name = parsePayloadName(body.name);
   if ("error" in name) {
@@ -215,6 +237,11 @@ export function createWebhook(deps: AdminDeps, req: Request, res: Response): voi
       payload = parsed.content;
     }
   }
+  const cronParsed = parseCronField(body.cron, "cron" in body);
+  if ("error" in cronParsed) {
+    res.status(400).json({ error: cronParsed.error, field: "cron" });
+    return;
+  }
   const now = new Date().toISOString();
   // A new row is never scheduled by default: the timed trigger keeps
   // firing the row that was scheduled before, until one is set active.
@@ -224,6 +251,7 @@ export function createWebhook(deps: AdminDeps, req: Request, res: Response): voi
     url: urlRaw,
     token: tokenRaw,
     payload,
+    cron: cronParsed.cron,
     is_active: false,
     created_at: now,
     updated_at: now,
@@ -256,10 +284,20 @@ export function updateWebhook(deps: AdminDeps, req: Request, res: Response): voi
     webhookUrl?: unknown;
     webhookToken?: unknown;
     payload?: unknown;
+    cron?: unknown;
   };
   let url = existing.url;
   let token = existing.token;
   let payload = existing.payload;
+  let cron = existing.cron ?? null;
+  if ("cron" in body) {
+    const cronParsed = parseCronField(body.cron, true);
+    if ("error" in cronParsed) {
+      res.status(400).json({ error: cronParsed.error, field: "cron" });
+      return;
+    }
+    cron = cronParsed.cron;
+  }
   if (typeof body.webhookUrl === "string" && body.webhookUrl.trim()) {
     if (!validWebhookUrl(body.webhookUrl.trim())) {
       res.status(400).json({ error: "webhookUrl must be an https URL (loopback http allowed)", field: "webhookUrl" });
@@ -297,6 +335,7 @@ export function updateWebhook(deps: AdminDeps, req: Request, res: Response): voi
     url,
     token,
     payload,
+    cron,
     updated_at: new Date().toISOString(),
   });
   res.json(webhookMeta(row));
