@@ -113,17 +113,27 @@
           <div><label>区间来源</label><div>{{ cursor.intervalMinutes !== null ? "控制台设置" : "环境变量 / 默认 60 分钟" }}</div></div>
           <div><label>runner 脚本</label><div>{{ cursor.runnerScriptPresent ? "存在" : "缺失（job-runner 未构建？）" }}</div></div>
         </div>
-        <form class="create" @submit.prevent="saveInterval">
+        <h3>触发设置</h3>
+        <div class="create">
           <input v-model.number="intervalInput" type="number" min="1" max="1440" class="input" />
-          <button class="btn primary" :disabled="busy">保存区间（分钟）</button>
-        </form>
-        <form class="create" @submit.prevent="saveWebhook">
+          <span class="hint">分钟；到 interval 才真正发一次 webhook。</span>
+        </div>
+        <h3>Webhook 设置</h3>
+        <div class="create">
           <input v-model="webhookUrl" placeholder="Webhook URL（https://…，留空则不改）" class="input" />
           <input v-model="webhookToken" type="password" placeholder="Webhook token（留空则不改）" class="input" autocomplete="off" />
-          <button class="btn primary" :disabled="busy">保存 webhook 配置</button>
-        </form>
+        </div>
+        <p class="hint">URL 与 token 留空则不改（token 永不回显）。</p>
+        <div class="row">
+          <button v-if="cursor?.webhookInEnv && cursor?.webhookSource !== 'db'" class="btn" :disabled="busy" @click="importWebhook">
+            从 .env 导入到数据库
+          </button>
+          <button v-if="cursor?.webhookSource === 'db'" class="btn" :disabled="busy" @click="deleteWebhook">
+            清除数据库配置（回落到 .env，如有）
+          </button>
+        </div>
         <div class="row space">
-          <h3>Payload 列表</h3>
+          <h4>Payload 列表</h4>
           <button class="btn" :disabled="busy" @click="startAddPayload">新增</button>
         </div>
         <p class="hint">每条 payload 是一份触发 body 的 JSON（里面通常含 prompt）。点一条看详情；定时触发发的是标为“定时”的那条；单条的“触发一次”只发那条，不改定时设置。定时未设时，触发按老规则走：单个 payload 模板 → 单个 prompt → 只发 ping。</p>
@@ -167,24 +177,16 @@
         </form>
         <p v-if="payloadOk" class="ok">{{ payloadOk }}</p>
         <p v-if="payloadError" class="err">{{ payloadError }}</p>
-        <p class="hint">URL 与 token 留空则不改（token 永不回显）。保存到数据库后，下次触发即生效，无需重启。</p>
-        <p v-if="webhookOk" class="ok">{{ webhookOk }}</p>
-        <p v-if="webhookError" class="err">{{ webhookError }}</p>
-        <div class="row">
-          <button v-if="cursor?.webhookInEnv && cursor?.webhookSource !== 'db'" class="btn" :disabled="busy" @click="importWebhook">
-            从 .env 导入到数据库
-          </button>
-          <button v-if="cursor?.webhookSource === 'db'" class="btn" :disabled="busy" @click="deleteWebhook">
-            清除数据库配置（回落到 .env，如有）
-          </button>
-        </div>
-        <form class="create" @submit.prevent="savePrompt">
+        <h3>Prompt 设置</h3>
+        <div class="create">
           <textarea v-model="promptInput" rows="8" placeholder="每次触发时 body 里带的 prompt（留空则只发 ping）" class="input"></textarea>
-          <button class="btn primary" :disabled="busy">保存 prompt</button>
-        </form>
+        </div>
         <p class="hint">prompt 不是密钥：明文存在触发状态文件里，页面上直接显示；每次触发（定时或手动）body 都会带上它。清空保存即恢复只发 ping。</p>
-        <p v-if="promptOk" class="ok">{{ promptOk }}</p>
-        <p v-if="promptError" class="err">{{ promptError }}</p>
+        <div class="row">
+          <button class="btn primary" :disabled="busy" @click="savePage">保存</button>
+        </div>
+        <p v-if="pageOk" class="ok">{{ pageOk }}</p>
+        <p v-if="pageError" class="err">{{ pageError }}</p>
         <div class="row">
           <button class="btn" :disabled="busy || restarting" @click="restartRunner">
             {{ restarting ? "重启中…" : "重启 job-runner" }}
@@ -225,6 +227,7 @@ const copied = ref(false);
 const cursor = ref(null);
 const cursorError = ref("");
 const intervalInput = ref(60);
+const savedInterval = ref(null);
 const triggering = ref(false);
 const triggerResult = ref("");
 const webhookUrl = ref("");
@@ -238,12 +241,10 @@ const editName = ref("");
 const editContent = ref("");
 const payloadError = ref("");
 const payloadOk = ref("");
-const webhookError = ref("");
-const webhookOk = ref("");
+const pageError = ref("");
+const pageOk = ref("");
 const promptInput = ref("");
 const savedPrompt = ref("");
-const promptError = ref("");
-const promptOk = ref("");
 const restarting = ref(false);
 const restartResult = ref("");
 
@@ -328,7 +329,13 @@ async function refreshCursor() {
   cursorError.value = "";
   try {
     cursor.value = await adminApi.cursorStatus(key.value);
-    intervalInput.value = cursor.value.effectiveIntervalMinutes;
+    // Same no-clobber guard as the prompt draft: sync the interval input
+    // only on first load or while it still holds the last saved value.
+    const serverInterval = cursor.value.effectiveIntervalMinutes;
+    if (savedInterval.value === null || intervalInput.value === savedInterval.value) {
+      intervalInput.value = serverInterval;
+    }
+    savedInterval.value = serverInterval;
     // Never clobber an unsaved prompt draft: sync the textarea only when
     // it still holds the last saved value (or is untouched).
     const serverPrompt = cursor.value.prompt ?? "";
@@ -463,17 +470,78 @@ async function triggerPayload(p) {
   }
 }
 
-async function saveInterval() {
+/**
+ * The page's single save: persists every changed setting — interval,
+ * webhook URL/token, prompt — in one click. The three parts are
+ * independent, so all of them are attempted and the result reports each
+ * part separately; only a part that actually succeeded updates its saved
+ * value, and a failed edit stays in its input for fixing. Payload list
+ * operations are not part of this save: they take effect immediately when
+ * used, because a per-item trigger needs a saved row to fire.
+ */
+async function savePage() {
   busy.value = true;
-  cursorError.value = "";
-  try {
-    cursor.value = await adminApi.cursorInterval(key.value, intervalInput.value);
-    intervalInput.value = cursor.value.effectiveIntervalMinutes;
-  } catch (e) {
-    cursorError.value = e.message;
-  } finally {
-    busy.value = false;
+  pageError.value = "";
+  pageOk.value = "";
+  webhookUrl.value = webhookUrl.value.trim();
+  const done = [];
+  const failed = [];
+  if (intervalInput.value !== savedInterval.value) {
+    if (
+      Number.isInteger(intervalInput.value) &&
+      intervalInput.value >= 1 &&
+      intervalInput.value <= 1440
+    ) {
+      try {
+        cursor.value = await adminApi.cursorInterval(key.value, intervalInput.value);
+        savedInterval.value = intervalInput.value;
+        done.push("区间");
+      } catch (e) {
+        failed.push(`区间：${e.message}`);
+      }
+    } else {
+      failed.push("区间：必须是 1–1440 的整数分钟");
+    }
   }
+  const urlChanged = webhookUrl.value !== savedWebhookUrl.value;
+  const tokenTyped = webhookToken.value.trim() !== "";
+  if (urlChanged || tokenTyped) {
+    if (urlChanged && webhookUrl.value === "") {
+      // An emptied URL cannot be saved (empty means "keep" to the API);
+      // restore the displayed value instead of silently discarding it.
+      webhookUrl.value = savedWebhookUrl.value;
+      failed.push("webhook：URL 不能为空，已恢复原值");
+    } else {
+      const body = {};
+      if (urlChanged) body.webhookUrl = webhookUrl.value;
+      if (tokenTyped) body.webhookToken = webhookToken.value.trim();
+      try {
+        cursor.value = await adminApi.cursorWebhook(key.value, body);
+        savedWebhookUrl.value = webhookUrl.value;
+        webhookToken.value = "";
+        done.push("webhook");
+      } catch (e) {
+        failed.push(`webhook：${e.message}`);
+      }
+    }
+  }
+  if (promptInput.value !== savedPrompt.value) {
+    try {
+      cursor.value = await adminApi.cursorPrompt(key.value, promptInput.value);
+      savedPrompt.value = promptInput.value;
+      done.push("prompt");
+    } catch (e) {
+      failed.push(`prompt：${e.message}`);
+    }
+  }
+  if (done.length === 0 && failed.length === 0) {
+    pageOk.value = "没有改动。";
+  } else {
+    if (done.length) pageOk.value = `已保存：${done.join("、")}，下次触发即生效，无需重启。`;
+    if (failed.length) pageError.value = `保存失败：${failed.join("；")}。`;
+  }
+  busy.value = false;
+  await refreshCursor();
 }
 
 async function trigger() {
@@ -491,43 +559,16 @@ async function trigger() {
   }
 }
 
-async function saveWebhook() {
-  busy.value = true;
-  webhookError.value = "";
-  webhookOk.value = "";
-  // URL/token are partial updates (empty = keep).
-  const body = {};
-  if (webhookUrl.value.trim()) body.webhookUrl = webhookUrl.value.trim();
-  if (webhookToken.value.trim()) body.webhookToken = webhookToken.value.trim();
-  if (!body.webhookUrl && !body.webhookToken) {
-    webhookError.value = "至少填一项（URL 或 token）";
-    busy.value = false;
-    return;
-  }
-  try {
-    cursor.value = await adminApi.cursorWebhook(key.value, body);
-    intervalInput.value = cursor.value.effectiveIntervalMinutes;
-    // The token never comes back; the visible URL stays as displayed.
-    webhookToken.value = "";
-    savedWebhookUrl.value = webhookUrl.value;
-    webhookOk.value = "已保存到数据库，下次触发即生效，无需重启。";
-  } catch (e) {
-    webhookError.value = e.message;
-  } finally {
-    busy.value = false;
-  }
-}
-
 async function importWebhook() {
   busy.value = true;
-  webhookError.value = "";
-  webhookOk.value = "";
+  pageError.value = "";
+  pageOk.value = "";
   try {
-    cursor.value = await adminApi.cursorWebhookImport(key.value);
-    intervalInput.value = cursor.value.effectiveIntervalMinutes;
-    webhookOk.value = "已从 .env 导入到数据库，下次触发即用数据库配置；.env 里的旧行可删可留（数据库优先）。";
+    await adminApi.cursorWebhookImport(key.value);
+    pageOk.value = "已从 .env 导入到数据库，下次触发即用数据库配置；.env 里的旧行可删可留（数据库优先）。";
+    await refreshCursor();
   } catch (e) {
-    webhookError.value = e.message;
+    pageError.value = e.message;
   } finally {
     busy.value = false;
   }
@@ -535,31 +576,14 @@ async function importWebhook() {
 
 async function deleteWebhook() {
   busy.value = true;
-  webhookError.value = "";
-  webhookOk.value = "";
+  pageError.value = "";
+  pageOk.value = "";
   try {
-    cursor.value = await adminApi.cursorWebhookDelete(key.value);
-    intervalInput.value = cursor.value.effectiveIntervalMinutes;
-    webhookOk.value = "数据库配置已清除；触发将回落到 .env（如有），否则报未配置。";
+    await adminApi.cursorWebhookDelete(key.value);
+    pageOk.value = "数据库配置已清除；触发将回落到 .env（如有），否则报未配置。";
+    await refreshCursor();
   } catch (e) {
-    webhookError.value = e.message;
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function savePrompt() {
-  busy.value = true;
-  promptError.value = "";
-  promptOk.value = "";
-  try {
-    cursor.value = await adminApi.cursorPrompt(key.value, promptInput.value);
-    intervalInput.value = cursor.value.effectiveIntervalMinutes;
-    savedPrompt.value = cursor.value.prompt ?? "";
-    promptInput.value = savedPrompt.value;
-    promptOk.value = savedPrompt.value ? "prompt 已保存，下次触发 body 会带上它。" : "prompt 已清空，下次触发恢复只发 ping。";
-  } catch (e) {
-    promptError.value = e.message;
+    pageError.value = e.message;
   } finally {
     busy.value = false;
   }
@@ -608,6 +632,8 @@ body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", 
 .tabs button.active { background: #222; color: #fff; border-color: #222; }
 .card { background: #fff; border: 1px solid #ddd; border-radius: 0 12px 12px 12px; padding: 20px; margin-top: -1px; }
 .card h2 { margin: 0 0 12px; font-size: 18px; }
+.card h3 { margin: 24px 0 8px; font-size: 16px; }
+.card h4 { margin: 20px 0 8px; font-size: 15px; }
 .hint { color: #666; font-size: 13px; line-height: 1.7; }
 .hint code { background: #f0f0f0; padding: 1px 6px; border-radius: 4px; }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
