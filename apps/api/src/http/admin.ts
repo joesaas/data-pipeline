@@ -253,7 +253,7 @@ export function createWebhook(deps: AdminDeps, req: Request, res: Response): voi
     }
     const trimmed = body.payload.trim();
     if (trimmed) {
-      const parsed = parsePayloadTemplate(trimmed);
+      const parsed = parsePayloadText(trimmed);
       if ("error" in parsed) {
         res.status(400).json({ error: parsed.error, field: "payload" });
         return;
@@ -346,7 +346,7 @@ export function updateWebhook(deps: AdminDeps, req: Request, res: Response): voi
     if (!trimmed) {
       payload = null;
     } else {
-      const parsed = parsePayloadTemplate(trimmed);
+      const parsed = parsePayloadText(trimmed);
       if ("error" in parsed) {
         res.status(400).json({ error: parsed.error, field: "payload" });
         return;
@@ -403,20 +403,18 @@ export function setWebhookActive(deps: AdminDeps, req: Request, res: Response): 
   res.json(webhookMeta(row ?? { ...target, is_active: body.active }));
 }
 
-/** Shared validation for a payload template: must be a JSON object. */
-function parsePayloadTemplate(raw: unknown): { content: string } | { error: string } {
+/**
+ * Shared validation for a payload template: any text is allowed, not
+ * just a JSON object. A template that parses as a JSON object is sent
+ * as a JSON body by the trigger; anything else is sent verbatim as
+ * plain text (see trigger.ts buildRequest), so a bare prompt no longer
+ * needs a {"prompt": "..."} wrapper to be saved. Only the length is
+ * still enforced.
+ */
+function parsePayloadText(raw: unknown): { content: string } | { error: string } {
   if (typeof raw !== "string") return { error: "payload must be a string" };
   const trimmed = raw.trim();
   if (trimmed.length > 200_000) return { error: "payload must be at most 200000 chars" };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return { error: "payload must be valid JSON" };
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { error: "payload must be a JSON object" };
-  }
   return { content: trimmed };
 }
 

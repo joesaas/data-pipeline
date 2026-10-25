@@ -167,7 +167,7 @@
               <button class="btn small" type="button" @click="newWebhookCron = '0 9 * * 1-5'">工作日 9 点</button>
               <button class="btn small" type="button" @click="newWebhookCron = ''">清除（走间隔）</button>
             </div>
-            <textarea v-model="newWebhookPayload" rows="4" placeholder='payload 模板（可选，JSON 对象，如 {"prompt": "…"})' class="input"></textarea>
+            <textarea v-model="newWebhookPayload" rows="4" placeholder='payload 模板（可选：JSON 对象，或直接写纯文本 prompt，如 {"prompt": "…"} 或一段文字）' class="input"></textarea>
             <button class="btn primary" :disabled="busy">新建</button>
           </form>
         </div>
@@ -202,7 +202,7 @@
             <button class="btn small" type="button" @click="editWebhookCron = '0 9 * * 1-5'">工作日 9 点</button>
             <button class="btn small" type="button" @click="editWebhookCron = ''">清除（走间隔）</button>
           </div>
-          <textarea v-model="editWebhookPayload" rows="10" placeholder='JSON 对象，如 {"prompt": "…"}（留空则清除模板）' class="input"></textarea>
+          <textarea v-model="editWebhookPayload" rows="10" placeholder='JSON 对象，或直接写纯文本 prompt（留空则清除模板）' class="input"></textarea>
           <div class="row">
             <button class="btn primary" :disabled="busy">保存</button>
             <button class="btn" type="button" @click="webhookView = 'list'">取消</button>

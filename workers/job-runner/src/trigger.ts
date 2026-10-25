@@ -20,10 +20,10 @@ export interface TriggerConfig {
    */
   prompt?: string;
   /**
-   * User-authored JSON body template (console webhook setting, stored in
-   * the database). When set, it IS the request body (after placeholder
-   * substitution) and `prompt` above is ignored; when unset, the built-in
-   * body shape is used.
+   * User-authored body template (console webhook setting, stored in
+   * the database): a JSON object, or plain text. When set, it IS the
+   * request body (after placeholder substitution) and `prompt` above
+   * is ignored; when unset, the built-in body shape is used.
    */
   payload?: string | null;
   /**
@@ -108,16 +108,18 @@ export interface TriggerRequest {
  * active payload-list item, then the webhook row's single template. A
  * template usually contains the `prompt` itself, so when one is used the
  * state's single prompt is ignored — the template is authoritative.
- * Placeholders {{triggered_at}} / {{source}} inside string values are
- * replaced with the run's values; anything else is sent verbatim. A
- * template that is not valid JSON, or not a JSON object, fails here with
- * a readable message (never echoing the template itself). Without a
- * template, the body is the old shape: {source, triggered_at} plus
- * `prompt` when the state has one, else just the ping.
+ * A template that parses as a JSON object is sent as a JSON body, with
+ * placeholders {{triggered_at}} / {{source}} replaced inside its string
+ * values. Anything else is plain text: it is sent verbatim as a
+ * text/plain body, with the same placeholders replaced in the raw text
+ * — a bare prompt no longer needs a {"prompt": "..."} wrapper, and the
+ * trigger never fails on a non-JSON template. Without a template, the
+ * body is the old shape: {source, triggered_at} plus `prompt` when the
+ * state has one, else just the ping.
  * The prompt is never logged (it can be long); only its presence is.
  */
 export function buildRequest(config: TriggerConfig, now: Date): TriggerRequest {
-  const headers = {
+  const headers: Record<string, string> = {
     Authorization: `Bearer ${config.token}`,
     "Content-Type": "application/json",
   };
@@ -128,19 +130,26 @@ export function buildRequest(config: TriggerConfig, now: Date): TriggerRequest {
     null;
   if (template) {
     let parsed: unknown;
+    let isObject = false;
     try {
       parsed = JSON.parse(template);
+      isObject = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
     } catch {
-      throw new Error("webhook payload is not valid JSON — check the value in the console webhook settings");
+      isObject = false;
     }
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("webhook payload must be a JSON object — check the value in the console webhook settings");
+    if (isObject) {
+      const body = substitutePlaceholders(parsed, {
+        triggered_at: now.toISOString(),
+        source: "data-pipeline/cursor-trigger",
+      });
+      return { url: config.url, method: "POST", headers, body: JSON.stringify(body) };
     }
-    const body = substitutePlaceholders(parsed, {
+    headers["Content-Type"] = "text/plain; charset=utf-8";
+    const body = substitutePlaceholders(template, {
       triggered_at: now.toISOString(),
       source: "data-pipeline/cursor-trigger",
-    });
-    return { url: config.url, method: "POST", headers, body: JSON.stringify(body) };
+    }) as string;
+    return { url: config.url, method: "POST", headers, body };
   }
   const prompt = config.prompt?.trim() ? config.prompt : undefined;
   return {

@@ -116,16 +116,18 @@ describe("buildRequest", () => {
     const fall = buildRequest({ ...base, activePayload: "  ", payloadOverride: "" }, now);
     assert.equal((JSON.parse(fall.body) as { k: string }).k, "single");
   });
-  it("payload template must be valid JSON and an object", () => {
+  it("plain-text template is sent verbatim as text/plain, placeholders substituted", () => {
     const now = new Date("2026-10-24T02:00:00.000Z");
-    assert.throws(
-      () => buildRequest({ ...BASE, payload: "{not json" }, now),
-      /not valid JSON/,
+    const req = buildRequest(
+      { ...BASE, payload: "do the thing at {{triggered_at}} from {{source}}" },
+      now,
     );
-    assert.throws(
-      () => buildRequest({ ...BASE, payload: '["array"]' }, now),
-      /must be a JSON object/,
-    );
+    assert.equal(req.headers["Content-Type"], "text/plain; charset=utf-8");
+    assert.equal(req.body, "do the thing at 2026-10-24T02:00:00.000Z from data-pipeline/cursor-trigger");
+    // A JSON array is not an object, so it is text too, not an error.
+    const arr = buildRequest({ ...BASE, payload: '["array"]' }, now);
+    assert.equal(arr.headers["Content-Type"], "text/plain; charset=utf-8");
+    assert.equal(arr.body, '["array"]');
     // Blank template falls back to the built-in body shape.
     const blank = buildRequest({ ...BASE, payload: "   " }, now);
     assert.equal((JSON.parse(blank.body) as { source: string }).source, "data-pipeline/cursor-trigger");

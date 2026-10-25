@@ -273,7 +273,7 @@ describe("admin routes", () => {
     assert.equal((await req(ctx, "GET", `${W}/${idB}`, ctx.adminKey)).status, 404);
   });
 
-  it("webhooks: validation rejects bad url, bad token, bad payload, bad active flag", async () => {
+  it("webhooks: validation rejects bad url, bad token, bad active flag; plain-text payload accepted", async () => {
     const W = "/data-pipeline/api/v1/admin/webhooks";
     const base = { name: "bad-one", webhookUrl: "https://ok.example/hook", webhookToken: "tok-ok" };
     assert.equal(
@@ -293,14 +293,22 @@ describe("admin routes", () => {
       (await req(ctx, "POST", W, ctx.adminKey, { ...base, webhookToken: "" })).status,
       400,
     );
-    assert.equal(
-      (await req(ctx, "POST", W, ctx.adminKey, { ...base, payload: "not json" })).status,
-      400,
-    );
-    assert.equal(
-      (await req(ctx, "POST", W, ctx.adminKey, { ...base, payload: "[1,2]" })).status,
-      400,
-    );
+    // Plain text payloads are accepted now (no JSON requirement): a bare
+    // prompt saves as-is and is sent as text/plain by the trigger.
+    const textSaved = await req(ctx, "POST", W, ctx.adminKey, {
+      ...base,
+      name: "text-one",
+      payload: "do the thing",
+    });
+    assert.equal(textSaved.status, 201);
+    assert.equal(textSaved.body.payload, "do the thing");
+    const arraySaved = await req(ctx, "POST", W, ctx.adminKey, {
+      ...base,
+      name: "text-two",
+      payload: "[1,2]",
+    });
+    assert.equal(arraySaved.status, 201);
+    assert.equal(arraySaved.body.payload, "[1,2]");
     assert.equal((await req(ctx, "POST", W, ctx.adminKey, { ...base, name: "  " })).status, 400);
     const created = await req(ctx, "POST", W, ctx.adminKey, base);
     assert.equal(created.status, 201);
