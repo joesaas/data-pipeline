@@ -56,6 +56,12 @@ async function main(): Promise<void> {
   // that exceeds it. (Bree's `timeout` is a first-run delay, NOT a
   // kill switch — never map maxRunMs onto it.)
   const jobsDir = join(dirname(fileURLToPath(import.meta.url)), "jobs");
+  // In --run mode a failing job must fail the process: Bree reports job
+  // failures through errorHandler without rejecting run(), so without
+  // this flag a failed single run would misleadingly exit 0 (the old
+  // cursor-trigger --once exited 1 on failure, and callers like the
+  // console's manual-trigger button rely on the exit code).
+  let runFailed = false;
   const bree = new Bree({
     root: jobsDir,
     logger: false,
@@ -67,6 +73,7 @@ async function main(): Promise<void> {
     errorHandler: (error, data) => {
       // Logged, never rethrown: one job's failure must not kill the runner.
       // (Error text only; jobs must never log secrets themselves.)
+      if (runOnly && data.name === runOnly) runFailed = true;
       console.error(`[job-runner] job ${data.name} failed: ${error instanceof Error ? error.message : String(error)}`);
     },
     workerMessageHandler: (data) => {
@@ -78,6 +85,7 @@ async function main(): Promise<void> {
     await bree.run(runOnly);
     await bree.stop();
     console.log(`[job-runner] job ${runOnly} finished (single run)`);
+    process.exitCode = runFailed ? 1 : 0;
     return;
   }
 

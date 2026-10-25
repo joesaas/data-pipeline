@@ -1,11 +1,14 @@
 import type { Express, Request, Response } from "express";
 import express from "express";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { AppConfig } from "../config.js";
 import { ValidationError } from "../domain/types.js";
 import type { AuthService } from "../auth/auth.js";
 import type { IngestService } from "../ingest/ingest-service.js";
 import type { StorageDriver } from "../storage/storage-driver.js";
 import { CleanedReader } from "../cleaned/cleaned-reader.js";
+import * as admin from "./admin.js";
 
 /**
  * Routing layer only: parse HTTP, delegate, format responses. No business rules.
@@ -15,9 +18,10 @@ import { CleanedReader } from "../cleaned/cleaned-reader.js";
  */
 export function registerRoutes(
   app: Express,
-  deps: { config: AppConfig; auth: AuthService; ingest: IngestService; driver: StorageDriver },
+  deps: { config: AppConfig; auth: AuthService; ingest: IngestService; driver: StorageDriver; envFile?: string | null },
 ): void {
   const { config, auth, ingest, driver } = deps;
+  const adminDeps: admin.AdminDeps = { config, auth, driver, envFile: deps.envFile ?? null };
   const router = express.Router();
 
   // Simple fixed-window rate limit, keyed by identity (or IP when anonymous).
@@ -63,7 +67,14 @@ export function registerRoutes(
         cleaned_items: `GET ${base}/api/v1/cleaned/items?category=&q=&limit=&offset=`,
         cleaned_item: `GET ${base}/api/v1/cleaned/items/:id`,
         cleaned_stats: `GET ${base}/api/v1/cleaned/stats`,
+        admin_tokens: `GET ${base}/api/v1/admin/tokens`,
+        admin_token_create: `POST ${base}/api/v1/admin/tokens`,
+        admin_token_revoke: `POST ${base}/api/v1/admin/tokens/:id/revoke`,
+        admin_cursor_status: `GET ${base}/api/v1/admin/jobs/cursor-trigger`,
+        admin_cursor_trigger: `POST ${base}/api/v1/admin/jobs/cursor-trigger/trigger`,
+        admin_cursor_interval: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/interval`,
       },
+      console: `${base}/console`,
       docs: "https://github.com/joesaas/data-pipeline",
     });
   });
@@ -164,6 +175,35 @@ export function registerRoutes(
     res.status(204).send();
   });
 
+  // Admin routes (web console). No rate limit: unlike the public push
+  // endpoint, these are gated to a single admin identity, and a stolen
+  // admin key is already total compromise — throttling would not help.
+  router.get("/api/v1/admin/tokens", (req, res) => admin.listTokens(adminDeps, req, res));
+  router.post("/api/v1/admin/tokens", (req, res) => admin.createToken(adminDeps, req, res));
+  router.post("/api/v1/admin/tokens/:id/revoke", (req, res) => admin.revokeToken(adminDeps, req, res));
+  router.get("/api/v1/admin/jobs/cursor-trigger", (req, res) => admin.getCursorStatus(adminDeps, req, res));
+  router.put("/api/v1/admin/jobs/cursor-trigger/interval", (req, res) =>
+    admin.setCursorInterval(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/jobs/cursor-trigger/trigger", (req, res) =>
+    admin.triggerCursor(adminDeps, req, res),
+  );
+
   if (config.basePath) app.use(config.basePath, router);
   app.use(router);
+
+  // Web console (Vue SPA), served by this same process — no new pm2 app.
+  // Silent when the console has not been built (e.g. CLI runs, or a
+  // deploy that predates the console): /console then simply 404s.
+  const consoleDir = join(admin.repoRoot(config, adminDeps.envFile), "apps/console/dist");
+  if (existsSync(consoleDir)) {
+    const prefixes = [...new Set(["/console", config.basePath ? `${config.basePath}/console` : "/console"])];
+    app.use(prefixes, express.static(consoleDir));
+    app.get(
+      prefixes.map((p) => `${p}/*`),
+      (_req, res) => {
+        res.sendFile(join(consoleDir, "index.html"));
+      },
+    );
+  }
 }

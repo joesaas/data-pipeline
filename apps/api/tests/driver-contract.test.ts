@@ -108,6 +108,13 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.notEqual(driver.findTokenByHash("h1")?.revoked_at, null);
     });
 
+    it("lists tokens oldest first", () => {
+      driver.createToken({ id: "t-old", name: "old", key_hash: "ho", created_at: "2026-01-01T00:00:00.000Z", revoked_at: null });
+      driver.createToken({ id: "t-new", name: "new", key_hash: "hn", created_at: "2026-01-02T00:00:00.000Z", revoked_at: null });
+      const names = driver.listTokens().map((t) => t.name);
+      assert.ok(names.indexOf("old") < names.indexOf("new"));
+    });
+
     it("rejects invalid payloads with field info", () => {
       assert.throws(() => ingest.push("anonymous", { content: "x" }), /prompt is required/);
       assert.throws(() => ingest.push("anonymous", { prompt: "x", content: "" }), /content is required/);

@@ -206,6 +206,13 @@ export class SqliteDriver implements StorageDriver {
     return row ? rowToToken(row) : null;
   }
 
+  listTokens(): StoredToken[] {
+    const rows = this.db
+      .prepare("SELECT * FROM tokens ORDER BY created_at ASC, id ASC")
+      .all() as TokenRow[];
+    return rows.map(rowToToken);
+  }
+
   revokeToken(id: string): boolean {
     const res = this.db
       .prepare("UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")

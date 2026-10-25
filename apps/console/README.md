@@ -1,0 +1,32 @@
+# console：Web 管理控制台
+
+Vue 3 + Vite 单页应用，构建产物由 API 进程静态托管（`/console` 与
+`<basePath>/console` 两个前缀），**不新增 pm2 进程**。
+
+## 功能
+
+- Tokens：列表（id、名字、角色、创建时间、吊销时间）、新建、吊销。
+- Cursor 定时触发：状态（上次触发、当前区间、下次触发约、webhook 是否已配置）、
+  改区间、手动触发一次。
+
+## 鉴权与安全红线
+
+- 控制台没有独立账号：登录就是粘贴一把 admin 钥匙，存在浏览器 localStorage，
+  每次请求以 `X-API-Key` 头带上。非 admin 钥匙进不来（403），无钥匙 401。
+- 明文钥匙只在创建那一刻返回一次，之后谁也查不回来（库里只存哈希）。
+  列表接口不返回 `key_hash`，也不返回明文。
+- webhook 地址与 token 只存在服务器根 `.env`，控制台只显示「已配置 / 未配置」，
+  不读、不显示它们的值。
+- 手动触发走 API 路由 spawn 的 job 单次模式（`--run cursor-trigger`），与定时
+  走同一份代码；并发第二次触发返回 409，不会双发 webhook。
+
+## 本地开发与构建
+
+```bash
+npm run build -w @data-pipeline/console   # 产物在 apps/console/dist/
+npm run dev -w @data-pipeline/console     # 仅调界面；API 请求需同源或代理
+```
+
+API 在启动时检查 `apps/console/dist/` 是否存在：存在才挂载 `/console`，
+不存在则静默跳过（CLI、旧部署都不受影响）。部署顺序保证构建先于重启，
+所以 `deploy.sh deploy` 后控制台即随 API 一起上线。

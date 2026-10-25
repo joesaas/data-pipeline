@@ -13,11 +13,14 @@ export function createDriver(config: AppConfig): StorageDriver {
   return new SqliteDriver(join(config.dataDir, "data.db"));
 }
 
-export function createApp(config: AppConfig): { app: express.Express; driver: StorageDriver; auth: AuthService } {
+export function createApp(
+  config: AppConfig,
+  opts?: { envFile?: string | null },
+): { app: express.Express; driver: StorageDriver; auth: AuthService } {
   const driver = createDriver(config);
   const auth = new AuthService(driver, config.authRequired);
   const ingest = new IngestService(driver, config);
   const app = express();
-  registerRoutes(app, { config, auth, ingest, driver });
+  registerRoutes(app, { config, auth, ingest, driver, envFile: opts?.envFile ?? null });
   return { app, driver, auth };
 }

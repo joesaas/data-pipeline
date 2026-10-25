@@ -115,6 +115,12 @@ export class FileDriver implements StorageDriver {
     return this.readTokens().find((t) => t.key_hash === keyHash) ?? null;
   }
 
+  listTokens(): StoredToken[] {
+    return this.readTokens().sort(
+      (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
+    );
+  }
+
   revokeToken(id: string): boolean {
     const tokens = this.readTokens();
     const tok = tokens.find((t) => t.id === id && t.revoked_at === null);

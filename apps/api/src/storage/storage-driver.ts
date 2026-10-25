@@ -30,6 +30,8 @@ export interface StorageDriver {
 
   createToken(tok: StoredToken): void;
   findTokenByHash(keyHash: string): StoredToken | null;
+  /** All tokens, oldest first. Never includes plaintext keys (only hashes are stored). */
+  listTokens(): StoredToken[];
   revokeToken(id: string): boolean;
   close(): void;
 }

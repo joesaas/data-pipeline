@@ -1,0 +1,18 @@
+{
+  "name": "@data-pipeline/console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Web admin console for data-pipeline: tokens, cursor-trigger job. Served statically by the API process; no new pm2 app.",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite": "^6.0.0"
+  }
+}

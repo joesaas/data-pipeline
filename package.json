@@ -13,7 +13,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @data-pipeline/shared && npm run build -w @data-pipeline/api && npm run build -w @data-pipeline/exporter && npm run build -w @data-pipeline/cleaner && npm run build -w @data-pipeline/cursor-trigger && npm run build -w @data-pipeline/job-runner",
+    "build": "npm run build -w @data-pipeline/shared && npm run build -w @data-pipeline/api && npm run build -w @data-pipeline/exporter && npm run build -w @data-pipeline/cleaner && npm run build -w @data-pipeline/cursor-trigger && npm run build -w @data-pipeline/job-runner && npm run build -w @data-pipeline/console",
     "test": "npm run build && npm run test --workspaces --if-present",
     "start": "npm run start -w @data-pipeline/api",
     "dev": "npm run dev -w @data-pipeline/api",
