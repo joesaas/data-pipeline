@@ -1,4 +1,6 @@
 import type {
+  PendingTaskStatus,
+  StoredPendingTask,
   StoredPullTask,
   StoredRecord,
   StoredToken,
@@ -51,13 +53,25 @@ export interface StorageDriver {
   saveWebhook(w: StoredWebhook): StoredWebhook;
   deleteWebhook(id: number): boolean;
 
-  /** Muse pull tasks (console-configured, Muse polls the due list). */
+  /** Muse pull tasks (console-configured, agents pull their own queue). */
   getPullTask(id: number): StoredPullTask | null;
   /** All pull tasks, oldest-updated first. */
   listPullTasks(): StoredPullTask[];
   /** Insert (id <= 0 assigns the next id) or replace by id. Returns the stored row. */
   savePullTask(t: StoredPullTask): StoredPullTask;
   deletePullTask(id: number): boolean;
+
+  /** Pending queue: one row per (pull_task_id, due_at), any status.
+   *  Insert (id <= 0) throws on a duplicate (pull_task_id, due_at);
+   *  callers check first and treat the throw as a conflict. */
+  getPendingTask(id: number): StoredPendingTask | null;
+  /** All pending rows, oldest-created first, optionally filtered. */
+  listPendingTasks(filter: { target?: string; status?: PendingTaskStatus }): StoredPendingTask[];
+  /** Insert (id <= 0 assigns the next id) or replace by id. Returns the stored row. */
+  savePendingTask(t: StoredPendingTask): StoredPendingTask;
+  deletePendingTask(id: number): boolean;
+  /** Delete waiting rows of one pull task (used when the task itself is deleted). */
+  deleteWaitingPendingTasks(pullTaskId: number): number;
 
   /** Saved payload templates the trigger job still reads for its active
    *  row (the console no longer manages this list). */

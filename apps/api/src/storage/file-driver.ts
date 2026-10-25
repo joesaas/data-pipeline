@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  PendingTaskStatus,
+  StoredPendingTask,
   StoredPullTask,
   StoredRecord,
   StoredToken,
@@ -28,6 +30,7 @@ export class FileDriver implements StorageDriver {
   private webhooksPath: string;
   private webhookPayloadsPath: string;
   private pullTasksPath: string;
+  private pendingTasksPath: string;
 
   constructor(dir: string) {
     this.recordsDir = join(dir, "records");
@@ -35,9 +38,11 @@ export class FileDriver implements StorageDriver {
     this.webhooksPath = join(dir, "webhooks.json");
     this.webhookPayloadsPath = join(dir, "webhook-payloads.json");
     this.pullTasksPath = join(dir, "pull-tasks.json");
+    this.pendingTasksPath = join(dir, "pending-tasks.json");
     mkdirSync(this.recordsDir, { recursive: true });
     if (!existsSync(this.tokensPath)) writeFileSync(this.tokensPath, "[]");
     if (!existsSync(this.pullTasksPath)) writeFileSync(this.pullTasksPath, "[]");
+    if (!existsSync(this.pendingTasksPath)) writeFileSync(this.pendingTasksPath, "[]");
     // One-time migration from the old webhook-configs.json (name-keyed)
     // to webhooks.json (id-keyed); the old file is removed once migrated.
     const legacyPath = join(dir, "webhook-configs.json");
@@ -227,7 +232,9 @@ export class FileDriver implements StorageDriver {
   }
 
   private readPullTasks(): StoredPullTask[] {
-    return JSON.parse(readFileSync(this.pullTasksPath, "utf8")) as StoredPullTask[];
+    const rows = JSON.parse(readFileSync(this.pullTasksPath, "utf8")) as StoredPullTask[];
+    // Rows written before the target column default to "muse".
+    return rows.map((t) => ({ ...t, target: t.target ?? "muse" }));
   }
 
   private writePullTasks(rows: StoredPullTask[]): void {
@@ -242,6 +249,60 @@ export class FileDriver implements StorageDriver {
     return this.readPullTasks().sort(
       (a, b) => a.updated_at.localeCompare(b.updated_at) || a.id - b.id,
     );
+  }
+
+  private readPendingTasks(): StoredPendingTask[] {
+    return JSON.parse(readFileSync(this.pendingTasksPath, "utf8")) as StoredPendingTask[];
+  }
+
+  private writePendingTasks(rows: StoredPendingTask[]): void {
+    writeFileSync(this.pendingTasksPath, JSON.stringify(rows, null, 1));
+  }
+
+  getPendingTask(id: number): StoredPendingTask | null {
+    return this.readPendingTasks().find((t) => t.id === id) ?? null;
+  }
+
+  listPendingTasks(filter: { target?: string; status?: PendingTaskStatus }): StoredPendingTask[] {
+    return this.readPendingTasks()
+      .filter((t) => (filter.target ? t.target === filter.target : true))
+      .filter((t) => (filter.status ? t.status === filter.status : true))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
+  }
+
+  savePendingTask(t: StoredPendingTask): StoredPendingTask {
+    const rows = this.readPendingTasks();
+    if (t.id > 0) {
+      const i = rows.findIndex((x) => x.id === t.id);
+      if (i >= 0) rows[i] = t;
+      else rows.push(t);
+      this.writePendingTasks(rows);
+      return t;
+    }
+    if (rows.some((x) => x.pull_task_id === t.pull_task_id && x.due_at === t.due_at)) {
+      throw new Error("duplicate pending task (pull_task_id, due_at)");
+    }
+    const next = rows.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+    const saved = { ...t, id: next };
+    rows.push(saved);
+    this.writePendingTasks(rows);
+    return saved;
+  }
+
+  deletePendingTask(id: number): boolean {
+    const rows = this.readPendingTasks();
+    const kept = rows.filter((t) => t.id !== id);
+    if (kept.length === rows.length) return false;
+    this.writePendingTasks(kept);
+    return true;
+  }
+
+  deleteWaitingPendingTasks(pullTaskId: number): number {
+    const rows = this.readPendingTasks();
+    const kept = rows.filter((t) => !(t.pull_task_id === pullTaskId && t.status === "waiting"));
+    const removed = rows.length - kept.length;
+    if (removed > 0) this.writePendingTasks(kept);
+    return removed;
   }
 
   savePullTask(t: StoredPullTask): StoredPullTask {

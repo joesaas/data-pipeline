@@ -83,8 +83,13 @@ export function registerRoutes(
         admin_pull_task_update: `PUT ${base}/api/v1/admin/pull-tasks/:id`,
         admin_pull_task_delete: `DELETE ${base}/api/v1/admin/pull-tasks/:id`,
         admin_pull_task_active: `POST ${base}/api/v1/admin/pull-tasks/:id/active`,
-        admin_pull_tasks_due: `GET ${base}/api/v1/admin/pull-tasks/due`,
-        admin_pull_task_run: `POST ${base}/api/v1/admin/pull-tasks/:id/run`,
+        admin_pull_task_run_now: `POST ${base}/api/v1/admin/pull-tasks/:id/run-now`,
+        admin_pending_tasks: `GET ${base}/api/v1/admin/pull-tasks/pending`,
+        admin_pending_claim: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/claim`,
+        admin_pending_complete: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/complete`,
+        admin_pending_fail: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/fail`,
+        admin_pending_reset: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/reset`,
+        pull_tasks_pending_public: `GET ${base}/api/v1/pull-tasks/pending?target=`,
       },
       console: `${base}/console`,
       docs: "https://github.com/joesaas/data-pipeline",
@@ -204,10 +209,22 @@ export function registerRoutes(
   router.post("/api/v1/admin/webhooks/:id/test", (req, res) =>
     admin.testWebhook(adminDeps, req, res),
   );
-  // Pull tasks (Muse polling). The /due route must be registered before
-  // /:id, or "due" would be parsed as an id and 400.
-  router.get("/api/v1/admin/pull-tasks/due", (req, res) =>
-    admin.listDuePullTasks(adminDeps, req, res),
+  // Pull tasks (queue model). The /pending routes must be registered
+  // before /:id, or "pending" would be parsed as an id and 400.
+  router.get("/api/v1/admin/pull-tasks/pending", (req, res) =>
+    admin.listPendingTasks(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/pull-tasks/pending/:id/claim", (req, res) =>
+    admin.claimPendingTask(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/pull-tasks/pending/:id/complete", (req, res) =>
+    admin.completePendingTask(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/pull-tasks/pending/:id/fail", (req, res) =>
+    admin.failPendingTask(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/pull-tasks/pending/:id/reset", (req, res) =>
+    admin.resetPendingTask(adminDeps, req, res),
   );
   router.get("/api/v1/admin/pull-tasks", (req, res) => admin.listPullTasks(adminDeps, req, res));
   router.post("/api/v1/admin/pull-tasks", (req, res) => admin.createPullTask(adminDeps, req, res));
@@ -221,8 +238,13 @@ export function registerRoutes(
   router.post("/api/v1/admin/pull-tasks/:id/active", (req, res) =>
     admin.setPullTaskActive(adminDeps, req, res),
   );
-  router.post("/api/v1/admin/pull-tasks/:id/run", (req, res) =>
-    admin.markPullTaskRun(adminDeps, req, res),
+  router.post("/api/v1/admin/pull-tasks/:id/run-now", (req, res) =>
+    admin.runPullTaskNow(adminDeps, req, res),
+  );
+  // Public detector for the 5-second hook: waiting ids only, no prompts.
+  // Deliberately unauthenticated — the hook runtime holds no secrets.
+  router.get("/api/v1/pull-tasks/pending", (req, res) =>
+    admin.listPendingTasksPublic(adminDeps, req, res),
   );
 
   if (config.basePath) app.use(config.basePath, router);

@@ -4,8 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import type { Request, Response } from "express";
 import type { AppConfig } from "../config.js";
 import type { AuthService } from "../auth/auth.js";
-import { ADMIN_IDENTITY, type DuePullTask, type StoredPullTask, type StoredToken, type StoredWebhook, type TokenRole, type WebhookMeta } from "../domain/types.js";
-import { isPullTaskDue, parseCron, previousCronOccurrence } from "@data-pipeline/shared";
+import { ADMIN_IDENTITY, type PendingTaskPublic, type PendingTaskStatus, type StoredPendingTask, type StoredPullTask, type StoredToken, type StoredWebhook, type TokenRole, type WebhookMeta } from "../domain/types.js";
+import { parseCron } from "@data-pipeline/shared";
 import type { StorageDriver } from "../storage/storage-driver.js";
 
 /**
@@ -469,6 +469,17 @@ function parsePullTaskCron(raw: unknown): { cron: string } | { error: string } {
   return { cron };
 }
 
+/** Target names an agent ("muse" by default); lowercase letters, digits, dash, underscore, max 50. */
+function parsePullTaskTarget(raw: unknown): { target: string } | { error: string } {
+  if (raw === undefined) return { target: "muse" };
+  if (typeof raw !== "string") return { error: "target must be a string" };
+  const target = raw.trim();
+  if (!target || target.length > 50 || !/^[a-z0-9][a-z0-9_-]*$/.test(target)) {
+    return { error: 'target must match ^[a-z0-9][a-z0-9_-]*$ (max 50 chars), e.g. "muse"' };
+  }
+  return { target };
+}
+
 export function listPullTasks(deps: AdminDeps, req: Request, res: Response): void {
   if (adminOf(deps, req, res) === null) return;
   res.json(deps.driver.listPullTasks());
@@ -476,7 +487,7 @@ export function listPullTasks(deps: AdminDeps, req: Request, res: Response): voi
 
 export function createPullTask(deps: AdminDeps, req: Request, res: Response): void {
   if (adminOf(deps, req, res) === null) return;
-  const body = (req.body ?? {}) as { name?: unknown; prompt?: unknown; cron?: unknown };
+  const body = (req.body ?? {}) as { name?: unknown; prompt?: unknown; cron?: unknown; target?: unknown };
   const name = parsePullTaskName(body.name);
   if ("error" in name) {
     res.status(400).json({ error: name.error, field: "name" });
@@ -496,14 +507,20 @@ export function createPullTask(deps: AdminDeps, req: Request, res: Response): vo
     res.status(400).json({ error: cron.error, field: "cron" });
     return;
   }
+  const target = parsePullTaskTarget(body.target);
+  if ("error" in target) {
+    res.status(400).json({ error: target.error, field: "target" });
+    return;
+  }
   const now = new Date().toISOString();
   // A new task is never active by default, like a new webhook: the
-  // poller must not start running a task the moment it is created.
+  // scheduler must not start queueing a task the moment it is created.
   const saved = deps.driver.savePullTask({
     id: 0,
     name: name.name,
     prompt: prompt.prompt,
     cron: cron.cron,
+    target: target.target,
     is_active: false,
     last_run_at: null,
     created_at: now,
@@ -533,9 +550,10 @@ export function updatePullTask(deps: AdminDeps, req: Request, res: Response): vo
     res.status(404).json({ error: "pull task not found" });
     return;
   }
-  const body = (req.body ?? {}) as { prompt?: unknown; cron?: unknown };
+  const body = (req.body ?? {}) as { prompt?: unknown; cron?: unknown; target?: unknown };
   let prompt = existing.prompt;
   let cron = existing.cron;
+  let target = existing.target;
   if ("prompt" in body) {
     const parsed = parsePullTaskPrompt(body.prompt);
     if ("error" in parsed) {
@@ -552,10 +570,22 @@ export function updatePullTask(deps: AdminDeps, req: Request, res: Response): vo
     }
     cron = parsed.cron;
   }
+  if ("target" in body) {
+    const parsed = parsePullTaskTarget(body.target);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error, field: "target" });
+      return;
+    }
+    target = parsed.target;
+  }
+  // Editing a task never rewrites already-queued rows: pending rows
+  // carry their own prompt/target snapshot, so only future scheduled
+  // rows (and future manual runs) pick up the new values.
   const row = deps.driver.savePullTask({
     ...existing,
     prompt,
     cron,
+    target,
     updated_at: new Date().toISOString(),
   });
   res.json(row);
@@ -569,7 +599,10 @@ export function deletePullTask(deps: AdminDeps, req: Request, res: Response): vo
     res.status(404).json({ error: "pull task not found" });
     return;
   }
-  res.json({ ok: true });
+  // Waiting rows of a deleted task will never be wanted; done/failed
+  // rows stay as history.
+  const cancelled = deps.driver.deleteWaitingPendingTasks(id);
+  res.json({ ok: true, cancelled_waiting: cancelled });
 }
 
 export function setPullTaskActive(deps: AdminDeps, req: Request, res: Response): void {
@@ -596,70 +629,239 @@ export function setPullTaskActive(deps: AdminDeps, req: Request, res: Response):
   res.json(row);
 }
 
-/**
- * The poller's endpoint: active tasks whose most recent cron occurrence
- * is later than their last reported run. `?at=<ISO>` overrides "now"
- * (for testing); it defaults to the server clock. This endpoint claims
- * nothing — a task stays due until the poller reports a run via
- * markPullTaskRun, so a crashed run is retried on the next poll instead
- * of being silently dropped.
- */
-export function listDuePullTasks(deps: AdminDeps, req: Request, res: Response): void {
+// --- Pending queue -----------------------------------------------------------
+// The queue replaces the earlier due/run polling model (2026-10-25
+// redesign): the scheduler inserts rows, the worker claims one, pushes
+// its result to the records API itself, then marks it done. No review
+// gate on this path, by li's decision.
+
+function parsePendingTaskId(req: Request, res: Response): number | null {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "pending task id must be a positive integer", field: "id" });
+    return null;
+  }
+  return id;
+}
+
+function parsePendingStatus(raw: unknown): { status: PendingTaskStatus } | { error: string } {
+  if (raw === undefined) return { error: "status is required" };
+  if (raw !== "waiting" && raw !== "running" && raw !== "done" && raw !== "failed") {
+    return { error: 'status must be one of "waiting", "running", "done", "failed"' };
+  }
+  return { status: raw };
+}
+
+export function listPendingTasks(deps: AdminDeps, req: Request, res: Response): void {
   if (adminOf(deps, req, res) === null) return;
-  let now = new Date();
-  const at = req.query.at;
-  if (typeof at === "string" && at) {
-    const parsed = new Date(at);
-    if (Number.isNaN(parsed.getTime())) {
-      res.status(400).json({ error: "at must be an ISO timestamp", field: "at" });
+  const target = typeof req.query.target === "string" ? req.query.target : undefined;
+  if (target !== undefined) {
+    const parsed = parsePullTaskTarget(target);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error, field: "target" });
       return;
     }
-    now = parsed;
   }
-  const due: DuePullTask[] = [];
-  for (const task of deps.driver.listPullTasks()) {
-    if (!task.is_active) continue;
-    const parsed = parseCron(task.cron);
-    if (!parsed) continue;
-    if (!isPullTaskDue(parsed, now, task.last_run_at)) continue;
-    const prev = previousCronOccurrence(parsed, now);
-    if (!prev) continue;
-    due.push({ ...task, due_at: prev.toISOString() });
+  const status = req.query.status;
+  let statusFilter: PendingTaskStatus | undefined;
+  if (typeof status === "string" && status) {
+    const parsed = parsePendingStatus(status);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error, field: "status" });
+      return;
+    }
+    statusFilter = parsed.status;
   }
-  res.json(due);
+  let items = deps.driver.listPendingTasks({ target, status: statusFilter });
+  const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 100;
+  items = items.slice(0, limit);
+  res.json(items);
 }
 
 /**
- * The poller reports a completed run: the task's last_run_at advances to
- * the reported time (usually "now" at report time, but the body may carry
- * the run's own timestamp). Only after this call does the task stop
- * being due for that occurrence — so the poller must call it only after
- * its draft is safely written, never before executing.
+ * Public detector endpoint for the 5-second hook: waiting rows only,
+ * no prompts, no results — just enough for the hook to know there is
+ * work and which ids are new. Deliberately unauthenticated (the hook
+ * runtime holds no secrets); the prompts themselves stay behind the
+ * admin-only claim endpoint. The hook wakes the worker, which then
+ * claims with an admin key.
  */
-export function markPullTaskRun(deps: AdminDeps, req: Request, res: Response): void {
+export function listPendingTasksPublic(deps: AdminDeps, req: Request, res: Response): void {
+  const targetRaw = typeof req.query.target === "string" && req.query.target ? req.query.target : "muse";
+  const parsed = parsePullTaskTarget(targetRaw);
+  if ("error" in parsed) {
+    res.status(400).json({ error: parsed.error, field: "target" });
+    return;
+  }
+  const items: PendingTaskPublic[] = deps.driver
+    .listPendingTasks({ target: parsed.target, status: "waiting" })
+    .slice(0, 100)
+    .map((t) => ({ id: t.id, pull_task_id: t.pull_task_id, due_at: t.due_at, kind: t.kind }));
+  res.json({ target: parsed.target, waiting: items.length, items });
+}
+
+/** Claim a waiting row: waiting -> running. Anything else is a 409 — two workers can never run one row. */
+export function claimPendingTask(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parsePendingTaskId(req, res);
+  if (id === null) return;
+  const row = deps.driver.getPendingTask(id);
+  if (!row) {
+    res.status(404).json({ error: "pending task not found" });
+    return;
+  }
+  if (row.status !== "waiting") {
+    res.status(409).json({ error: `pending task is ${row.status}, not waiting`, status: row.status });
+    return;
+  }
+  const claimed = deps.driver.savePendingTask({
+    ...row,
+    status: "running",
+    updated_at: new Date().toISOString(),
+  });
+  res.json(claimed);
+}
+
+/** Mark a running row done after its result was pushed. Requires the pushed record's external_id. */
+export function completePendingTask(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parsePendingTaskId(req, res);
+  if (id === null) return;
+  const row = deps.driver.getPendingTask(id);
+  if (!row) {
+    res.status(404).json({ error: "pending task not found" });
+    return;
+  }
+  if (row.status !== "running") {
+    res.status(409).json({ error: `pending task is ${row.status}, not running`, status: row.status });
+    return;
+  }
+  const body = (req.body ?? {}) as { external_id?: unknown; record_id?: unknown };
+  if (typeof body.external_id !== "string" || !body.external_id.trim()) {
+    res.status(400).json({ error: "external_id is required", field: "external_id" });
+    return;
+  }
+  if (body.record_id !== undefined && typeof body.record_id !== "string") {
+    res.status(400).json({ error: "record_id must be a string", field: "record_id" });
+    return;
+  }
+  const done = deps.driver.savePendingTask({
+    ...row,
+    status: "done",
+    result_external_id: body.external_id.trim(),
+    result_record_id: typeof body.record_id === "string" ? body.record_id : null,
+    error: null,
+    updated_at: new Date().toISOString(),
+  });
+  // Display-only bookkeeping on the task itself (scheduling runs off the queue, not this field).
+  const task = deps.driver.getPullTask(row.pull_task_id);
+  if (task) {
+    deps.driver.savePullTask({ ...task, last_run_at: new Date().toISOString(), updated_at: task.updated_at });
+  }
+  res.json(done);
+}
+
+/** Mark a running row failed, with a short error for the queue display. */
+export function failPendingTask(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parsePendingTaskId(req, res);
+  if (id === null) return;
+  const row = deps.driver.getPendingTask(id);
+  if (!row) {
+    res.status(404).json({ error: "pending task not found" });
+    return;
+  }
+  if (row.status !== "running") {
+    res.status(409).json({ error: `pending task is ${row.status}, not running`, status: row.status });
+    return;
+  }
+  const body = (req.body ?? {}) as { error?: unknown };
+  const error =
+    typeof body.error === "string" && body.error.trim() ? body.error.trim().slice(0, 1000) : "failed";
+  const failed = deps.driver.savePendingTask({
+    ...row,
+    status: "failed",
+    error,
+    updated_at: new Date().toISOString(),
+  });
+  res.json(failed);
+}
+
+/** Stale-running recovery: a worker that died mid-run leaves its row
+ *  "running" forever; after 30 minutes anyone may reset it to waiting
+ *  so the next wake retries it. Only running rows reset, never done ones. */
+export function resetPendingTask(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parsePendingTaskId(req, res);
+  if (id === null) return;
+  const row = deps.driver.getPendingTask(id);
+  if (!row) {
+    res.status(404).json({ error: "pending task not found" });
+    return;
+  }
+  if (row.status !== "running") {
+    res.status(409).json({ error: `pending task is ${row.status}, not running`, status: row.status });
+    return;
+  }
+  const reset = deps.driver.savePendingTask({
+    ...row,
+    status: "waiting",
+    error: null,
+    updated_at: new Date().toISOString(),
+  });
+  res.json(reset);
+}
+
+/**
+ * Manual "run now": insert a waiting row for this task right away.
+ * Blocked (409) while the task already has any waiting row — otherwise
+ * repeated clicks would pile up identical executions. Works whether or
+ * not the task is active: a manual run is an explicit action, not a
+ * schedule. due_at is now, so it never collides with a scheduled row.
+ */
+export function runPullTaskNow(deps: AdminDeps, req: Request, res: Response): void {
   if (adminOf(deps, req, res) === null) return;
   const id = parsePullTaskId(req, res);
   if (id === null) return;
-  const target = deps.driver.getPullTask(id);
-  if (!target) {
+  const task = deps.driver.getPullTask(id);
+  if (!task) {
     res.status(404).json({ error: "pull task not found" });
     return;
   }
-  const body = (req.body ?? {}) as { last_run_at?: unknown };
-  let lastRunAt = new Date().toISOString();
-  if (body.last_run_at !== undefined) {
-    if (typeof body.last_run_at !== "string" || Number.isNaN(Date.parse(body.last_run_at))) {
-      res.status(400).json({ error: "last_run_at must be an ISO timestamp", field: "last_run_at" });
+  const waiting = deps.driver
+    .listPendingTasks({ target: task.target, status: "waiting" })
+    .find((t) => t.pull_task_id === id);
+  if (waiting) {
+    res.status(409).json({ error: "task already has a waiting execution", pending_id: waiting.id });
+    return;
+  }
+  const now = new Date().toISOString();
+  try {
+    const row = deps.driver.savePendingTask({
+      id: 0,
+      pull_task_id: task.id,
+      pull_task_name: task.name,
+      target: task.target,
+      prompt: task.prompt,
+      due_at: now,
+      kind: "manual",
+      status: "waiting",
+      result_external_id: null,
+      result_record_id: null,
+      error: null,
+      created_at: now,
+      updated_at: now,
+    });
+    res.status(201).json(row);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/UNIQUE|duplicate/i.test(msg)) {
+      res.status(409).json({ error: "task already has a waiting execution" });
       return;
     }
-    lastRunAt = new Date(body.last_run_at).toISOString();
+    throw e;
   }
-  const row = deps.driver.savePullTask({
-    ...target,
-    last_run_at: lastRunAt,
-    updated_at: new Date().toISOString(),
-  });
-  res.json(row);
 }
 
 /**

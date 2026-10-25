@@ -83,33 +83,70 @@ export interface WebhookMeta {
 }
 
 /**
- * One Muse pull task (2026-10-25, pull model — the counterpart to the
- * webhook push model). Muse has no inbound webhook, so it polls: the
- * console holds tasks, a Muse cron reads the due list, executes each
- * task's prompt, and pushes the result to the records API. Unlike
- * webhooks, many pull tasks may be active at once — each runs on its
- * own cron, so activating one never deactivates another.
+ * One pull task (2026-10-25, pull model — the counterpart to the
+ * webhook push model). An agent with no inbound webhook cannot be
+ * pushed; instead the console holds tasks and the agent pulls its own.
+ * Unlike webhooks, many pull tasks may be active at once — each runs
+ * on its own cron, so activating one never deactivates another.
  * `cron` is required (a task without a schedule never runs) and is a
- * 5-field cron expression in Asia/Shanghai time. `last_run_at` is the
- * ISO timestamp of the last execution the poller reported (via the
- * last-run endpoint); the due check compares it against the task's
- * most recent cron occurrence, so a task that came due between polls
- * fires late instead of being skipped.
+ * 5-field cron expression in Asia/Shanghai time. `target` names the
+ * agent the task is for (default "muse"); a poller only ever takes
+ * rows whose target is its own, so new agents can be added later
+ * without changing the queue. `last_run_at` is kept for display only;
+ * scheduling itself runs through the pending_tasks queue (below).
  */
 export interface StoredPullTask {
   id: number;
   name: string;
   prompt: string;
   cron: string;
+  /** Agent this task is for, e.g. "muse". Lowercase letters, digits, dash, underscore. */
+  target: string;
   is_active: boolean;
   last_run_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
-/** A pull task as the due endpoint returns it: the stored row plus the scheduled occurrence it is due for. */
-export interface DuePullTask extends StoredPullTask {
+export type PendingTaskStatus = "waiting" | "running" | "done" | "failed";
+
+/**
+ * One queued execution of a pull task (2026-10-25, queue redesign).
+ * The scheduler (job-runner, 1-minute tick) inserts one row per cron
+ * occurrence; a manual "run now" inserts one row with kind "manual".
+ * Uniqueness rule: at most ONE row per (pull_task_id, due_at), in ANY
+ * status — a row is never deleted, it only changes status, so the
+ * scheduler can never insert the same occurrence twice. A manual run
+ * is blocked while the task already has a waiting row (any due_at).
+ * `prompt` is snapshotted at insert time: editing the task later does
+ * not change an already-queued execution. The worker claims a waiting
+ * row (waiting -> running) before executing, pushes the result to the
+ * records API itself, then marks the row done (or failed) — there is
+ * no review gate on this path, by design (2026-10-25 li decision).
+ */
+export interface StoredPendingTask {
+  id: number;
+  pull_task_id: number;
+  /** Task name snapshot, for queue displays without a join. */
+  pull_task_name: string;
+  target: string;
+  prompt: string;
   due_at: string;
+  kind: "scheduled" | "manual";
+  status: PendingTaskStatus;
+  result_external_id: string | null;
+  result_record_id: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** What the public detector endpoint returns: waiting rows only, no prompts, no results. */
+export interface PendingTaskPublic {
+  id: number;
+  pull_task_id: number;
+  due_at: string;
+  kind: "scheduled" | "manual";
 }
 
 /**

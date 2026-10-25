@@ -336,9 +336,9 @@ describe("admin routes", () => {
     assert.equal((await req(ctx, "DELETE", `${W}/${id}`, ctx.adminKey)).status, 200);
   });
 
-  it("pull tasks: create/list/get/update/active/due/run, many may be active", async () => {
+  it("pull tasks: create/list/get/update/active, many may be active", async () => {
     const P = "/data-pipeline/api/v1/admin/pull-tasks";
-    // Validation: prompt and cron are required, cron must parse.
+    // Validation: prompt and cron are required, cron must parse, target must match.
     assert.equal(
       (await req(ctx, "POST", P, ctx.adminKey, { name: "t1", prompt: "do it" })).status,
       400,
@@ -353,6 +353,17 @@ describe("admin routes", () => {
       ).status,
       400,
     );
+    assert.equal(
+      (
+        await req(ctx, "POST", P, ctx.adminKey, {
+          name: "t1",
+          prompt: "do it",
+          cron: "0 9 * * *",
+          target: "Bad Target!",
+        })
+      ).status,
+      400,
+    );
     const a = await req(ctx, "POST", P, ctx.adminKey, {
       name: "every-minute",
       prompt: "do it every minute",
@@ -360,14 +371,17 @@ describe("admin routes", () => {
     });
     assert.equal(a.status, 201);
     assert.equal(a.body.is_active, false);
+    assert.equal(a.body.target, "muse");
     assert.equal(a.body.last_run_at, null);
     const idA = a.body.id as number;
     const b = await req(ctx, "POST", P, ctx.adminKey, {
       name: "also-every-minute",
       prompt: "do it too",
       cron: "* * * * *",
+      target: "grok",
     });
     assert.equal(b.status, 201);
+    assert.equal(b.body.target, "grok");
     const idB = b.body.id as number;
     assert.equal(
       (
@@ -379,8 +393,6 @@ describe("admin routes", () => {
       ).status,
       409,
     );
-    // Nothing due while inactive.
-    assert.deepEqual(await req(ctx, "GET", `${P}/due`, ctx.adminKey).then((r) => r.body), []);
     // Activate both: unlike webhooks, both stay active.
     assert.equal(
       (await req(ctx, "POST", `${P}/${idA}/active`, ctx.adminKey, { active: true })).body.is_active,
@@ -391,25 +403,16 @@ describe("admin routes", () => {
       true,
     );
     assert.equal((await req(ctx, "GET", `${P}/${idA}`, ctx.adminKey)).body.is_active, true);
-    // Both due now (every-minute cron, never run).
-    const due = (await req(ctx, "GET", `${P}/due`, ctx.adminKey)).body as unknown as Record<string, unknown>[];
-    assert.equal(due.length, 2);
-    assert.ok(due.every((t) => typeof t.due_at === "string"));
-    // Mark A run: A drops out of due, B stays due.
-    assert.equal(
-      (await req(ctx, "POST", `${P}/${idA}/run`, ctx.adminKey, {})).body.last_run_at !== null,
-      true,
-    );
-    const dueAfter = (await req(ctx, "GET", `${P}/due`, ctx.adminKey)).body as unknown as Record<string, unknown>[];
-    assert.deepEqual(dueAfter.map((t) => t.id), [idB]);
-    // Update prompt + cron; name is immutable (not in the update body).
+    // Update prompt + cron + target; name is immutable (not in the update body).
     const upd = await req(ctx, "PUT", `${P}/${idB}`, ctx.adminKey, {
       prompt: "do it better",
       cron: "0 9 * * *",
+      target: "muse",
     });
     assert.equal(upd.status, 200);
     assert.equal(upd.body.prompt, "do it better");
     assert.equal(upd.body.cron, "0 9 * * *");
+    assert.equal(upd.body.target, "muse");
     assert.equal((await req(ctx, "PUT", `${P}/${idB}`, ctx.adminKey, { cron: "nope" })).status, 400);
     // Auth and unknown ids.
     assert.equal((await req(ctx, "GET", P)).status, 401);
@@ -418,6 +421,89 @@ describe("admin routes", () => {
     assert.equal((await req(ctx, "GET", `${P}/abc`, ctx.adminKey)).status, 400);
     assert.equal((await req(ctx, "DELETE", `${P}/${idA}`, ctx.adminKey)).status, 200);
     assert.equal((await req(ctx, "DELETE", `${P}/${idB}`, ctx.adminKey)).status, 200);
+  });
+
+  it("pending queue: run-now blocks on waiting, claim/complete/fail/reset transitions", async () => {
+    const P = "/data-pipeline/api/v1/admin/pull-tasks";
+    const created = await req(ctx, "POST", P, ctx.adminKey, {
+      name: "queue-task",
+      prompt: "queue prompt",
+      cron: "0 9 * * *",
+    });
+    assert.equal(created.status, 201);
+    const taskId = created.body.id as number;
+    // Public detector: no waiting rows yet, and it needs no key.
+    const pub0 = await req(ctx, "GET", "/data-pipeline/api/v1/pull-tasks/pending?target=muse");
+    assert.equal(pub0.status, 200);
+    assert.equal(pub0.body.waiting, 0);
+    // Run now inserts a manual waiting row.
+    const run1 = await req(ctx, "POST", `${P}/${taskId}/run-now`, ctx.adminKey, {});
+    assert.equal(run1.status, 201);
+    assert.equal(run1.body.status, "waiting");
+    assert.equal(run1.body.kind, "manual");
+    assert.equal(run1.body.prompt, "queue prompt");
+    const pendingId = run1.body.id as number;
+    // Second run-now while one waits is a 409.
+    assert.equal((await req(ctx, "POST", `${P}/${taskId}/run-now`, ctx.adminKey, {})).status, 409);
+    // Public detector now sees it, without the prompt.
+    const pub1 = await req(ctx, "GET", "/data-pipeline/api/v1/pull-tasks/pending?target=muse");
+    assert.equal(pub1.body.waiting, 1);
+    const pubItems = pub1.body.items as unknown as Record<string, unknown>[];
+    assert.equal(pubItems[0].id, pendingId);
+    assert.equal("prompt" in pubItems[0], false);
+    // Claim: waiting -> running; a second claim is a 409.
+    const claimed = await req(ctx, "POST", `${P}/pending/${pendingId}/claim`, ctx.adminKey, {});
+    assert.equal(claimed.status, 200);
+    assert.equal(claimed.body.status, "running");
+    assert.equal(claimed.body.prompt, "queue prompt");
+    assert.equal((await req(ctx, "POST", `${P}/pending/${pendingId}/claim`, ctx.adminKey, {})).status, 409);
+    // Complete requires external_id and only works from running.
+    assert.equal(
+      (await req(ctx, "POST", `${P}/pending/${pendingId}/complete`, ctx.adminKey, {})).status,
+      400,
+    );
+    const done = await req(ctx, "POST", `${P}/pending/${pendingId}/complete`, ctx.adminKey, {
+      external_id: "pull-1-manual",
+      record_id: "rec-1",
+    });
+    assert.equal(done.status, 200);
+    assert.equal(done.body.status, "done");
+    assert.equal(done.body.result_external_id, "pull-1-manual");
+    assert.equal(done.body.result_record_id, "rec-1");
+    // After done, run-now works again (no waiting row left).
+    assert.equal((await req(ctx, "POST", `${P}/${taskId}/run-now`, ctx.adminKey, {})).status, 201);
+    const pending2 = (await req(ctx, "GET", `${P}/pending?status=waiting`, ctx.adminKey)).body as unknown as Record<string, unknown>[];
+    assert.equal(pending2.length, 1);
+    const pendingId2 = pending2[0].id as number;
+    // Fail from running: a failed row stays failed (no auto-retry) —
+    // neither claim nor reset applies to it; a fresh run-now re-queues.
+    await req(ctx, "POST", `${P}/pending/${pendingId2}/claim`, ctx.adminKey, {});
+    const failed = await req(ctx, "POST", `${P}/pending/${pendingId2}/fail`, ctx.adminKey, {
+      error: "boom",
+    });
+    assert.equal(failed.body.status, "failed");
+    assert.equal(failed.body.error, "boom");
+    assert.equal(
+      (await req(ctx, "POST", `${P}/pending/${pendingId2}/claim`, ctx.adminKey, {})).status,
+      409,
+    );
+    assert.equal(
+      (await req(ctx, "POST", `${P}/pending/${pendingId2}/reset`, ctx.adminKey, {})).status,
+      409,
+    );
+    // Stale-running recovery: claim a fresh row, then reset it to waiting.
+    assert.equal((await req(ctx, "POST", `${P}/${taskId}/run-now`, ctx.adminKey, {})).status, 201);
+    const waiting3 = (await req(ctx, "GET", `${P}/pending?status=waiting`, ctx.adminKey)).body as unknown as Record<string, unknown>[];
+    assert.equal(waiting3.length, 1);
+    const pendingId3 = waiting3[0].id as number;
+    await req(ctx, "POST", `${P}/pending/${pendingId3}/claim`, ctx.adminKey, {});
+    const reset = await req(ctx, "POST", `${P}/pending/${pendingId3}/reset`, ctx.adminKey, {});
+    assert.equal(reset.body.status, "waiting");
+    // Deleting the task cancels its waiting rows.
+    const del = await req(ctx, "DELETE", `${P}/${taskId}`, ctx.adminKey);
+    assert.equal(del.body.cancelled_waiting, 1);
+    const pub2 = await req(ctx, "GET", "/data-pipeline/api/v1/pull-tasks/pending?target=muse");
+    assert.equal(pub2.body.waiting, 0);
   });
 
   it("webhooks: test unknown id 404s before spawn; missing runner script fails cleanly", async () => {

@@ -174,6 +174,7 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
         name: "pull-a",
         prompt: "do it",
         cron: "0 9 * * *",
+        target: "muse",
         is_active: false,
         last_run_at: null,
         created_at: "2026-10-25T00:00:00.000Z",
@@ -195,6 +196,36 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.equal(driver.deletePullTask(created.id), true);
       assert.equal(driver.deletePullTask(created.id), false);
       assert.equal(driver.getPullTask(created.id), null);
+    });
+
+    it("pending tasks: save assigns ids, one row per (task, due_at), status transitions", () => {
+      const base = {
+        pull_task_id: 7,
+        pull_task_name: "t7",
+        target: "muse",
+        prompt: "do it",
+        due_at: "2026-10-25T01:00:00.000Z",
+        kind: "scheduled" as const,
+        status: "waiting" as const,
+        result_external_id: null,
+        result_record_id: null,
+        error: null,
+        created_at: "2026-10-25T01:00:00.000Z",
+        updated_at: "2026-10-25T01:00:00.000Z",
+      };
+      const created = driver.savePendingTask({ ...base, id: 0 });
+      assert.ok(created.id > 0);
+      assert.throws(() => driver.savePendingTask({ ...base, id: 0 }), /UNIQUE|duplicate/);
+      assert.equal(driver.getPendingTask(created.id)?.status, "waiting");
+      driver.savePendingTask({ ...created, status: "running", updated_at: "2026-10-25T01:01:00.000Z" });
+      assert.equal(driver.getPendingTask(created.id)?.status, "running");
+      assert.equal(driver.listPendingTasks({ target: "muse", status: "running" }).length, 1);
+      assert.equal(driver.listPendingTasks({ target: "grok" }).length, 0);
+      assert.equal(driver.deleteWaitingPendingTasks(7), 0);
+      driver.savePendingTask({ ...created, status: "waiting", updated_at: "2026-10-25T01:02:00.000Z" });
+      assert.equal(driver.deleteWaitingPendingTasks(7), 1);
+      assert.equal(driver.getPendingTask(created.id), null);
+      assert.equal(driver.deletePendingTask(created.id), false);
     });
 
     it("webhook payloads: save upserts, list newest-updated first, delete removes", () => {

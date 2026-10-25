@@ -129,3 +129,32 @@ describe("cron: pull-task due (previous occurrence beats last run)", () => {
     assert.equal(isPullTaskDue(cron, SUN_09_SHANGHAI, null), false);
   });
 });
+
+describe("pull-task scheduler: one pending row per occurrence", () => {
+  // Imported lazily to keep this file's cron tests independent of the
+  // scheduler module's node:sqlite import in non-node runners.
+  it("queues the latest occurrence once, skips inactive/invalid/existing", async () => {
+    const { tasksToSchedule } = await import("../src/pull-task-scheduler.js");
+    const now = new Date("2026-10-25T01:07:00.000Z"); // 09:07 Shanghai
+    const tasks = [
+      { id: 1, name: "daily", prompt: "p", cron: "0 9 * * *", target: "muse", is_active: true },
+      { id: 2, name: "off", prompt: "p", cron: "0 9 * * *", target: "muse", is_active: false },
+      { id: 3, name: "bad", prompt: "p", cron: "nope", target: "muse", is_active: true },
+      { id: 4, name: "rare", prompt: "p", cron: "0 0 29 2 *", target: "muse", is_active: true },
+    ];
+    // No existing rows: only the daily task queues, for today 09:00 Shanghai.
+    const first = tasksToSchedule(tasks, new Set(), now);
+    assert.deepEqual(first, [
+      {
+        pull_task_id: 1,
+        pull_task_name: "daily",
+        target: "muse",
+        prompt: "p",
+        due_at: "2026-10-25T01:00:00.000Z",
+      },
+    ]);
+    // The same occurrence already queued (any status): nothing new.
+    const second = tasksToSchedule(tasks, new Set(["1|2026-10-25T01:00:00.000Z"]), now);
+    assert.deepEqual(second, []);
+  });
+});

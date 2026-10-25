@@ -48,6 +48,13 @@ export const JOBS: JobDef[] = [
     description:
       "POSTs the automation webhook when its schedule is due. Ticks every minute and self-gates: the active webhooks row's cron (Asia/Shanghai time) when set, else cursor-state interval (state file, else CURSOR_TRIGGER_INTERVAL_MINUTES, default 60m); the 1m here is the tick, not the trigger cadence. The endpoint is the active row of the webhooks table — no active row means the tick skips.",
   },
+  {
+    name: "pull-task-scheduler",
+    interval: "1m",
+    maxRunMs: "1m",
+    description:
+      "Queues pull-task executions: ticks every minute, inserts one pending_tasks row per active pull task whose latest cron occurrence (Asia/Shanghai time) has no row yet. It never executes prompts — the target agent claims rows from the queue and pushes results itself. The 1m here is the tick, not the task cadence.",
+  },
 ];
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]*$/;

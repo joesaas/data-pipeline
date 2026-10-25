@@ -88,12 +88,15 @@ export const adminApi = {
     return api("GET", `/api/v1/cleaned/items?${qs}`, key);
   },
   getNewsStats: (key) => api("GET", "/api/v1/cleaned/stats", key),
-  // Pull tasks: console-configured prompts Muse polls and executes.
-  // Many may be active at once, each on its own cron.
+  // Pull tasks: console-configured prompts agents pull from a queue.
+  // Many may be active at once, each on its own cron; each task names
+  // its target agent, and a worker only takes its own target's rows.
   listPullTasks: (key) => api("GET", "/api/v1/admin/pull-tasks", key),
   createPullTask: (key, body) => api("POST", "/api/v1/admin/pull-tasks", key, body),
   updatePullTask: (key, id, body) => api("PUT", `/api/v1/admin/pull-tasks/${id}`, key, body),
   deletePullTask: (key, id) => api("DELETE", `/api/v1/admin/pull-tasks/${id}`, key),
   setPullTaskActive: (key, id, active) =>
     api("POST", `/api/v1/admin/pull-tasks/${id}/active`, key, { active }),
+  runPullTaskNow: (key, id) => api("POST", `/api/v1/admin/pull-tasks/${id}/run-now`, key, {}),
+  listPendingTasks: (key) => api("GET", "/api/v1/admin/pull-tasks/pending?limit=100", key),
 };

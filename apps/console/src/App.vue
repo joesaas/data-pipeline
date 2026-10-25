@@ -391,11 +391,36 @@
         </div>
         <p class="hint">
           Muse 没有入站 webhook，没法被推，只能反过来拉：这里配的每条任务是一份 prompt +
-          一份 cron（5 段，按北京时间），Muse 每 10 分钟轮询一次，到点的任务就执行，
-          成稿先写 review 把关（不直推），放行后才进 pending 推 API。
-          和 Webhooks 不同：多条任务可以同时启用，各跑各的 cron，启用一条不会停掉另一条。
-          新任务默认不启用；执行时间以上次 cron 时刻为准，轮询迟到几分钟会补跑，不会跳过。
+          一份 cron（5 段，按北京时间）+ 一个目标（默认 muse，以后可以扩展给别的 agent）。
+          调度器每分钟检查一次，到点的 cron 时刻就往待处理队列里写一条等待执行的任务；
+          目标 agent 每 5 秒查一次队列，有货就认领、执行 prompt、直接推到 API——这条路
+          不走 review 把关。队列里每个任务每个 cron 时刻最多一条状态记录，执行完只改
+          状态不删行，所以调度器永远不会重复插同一时刻。和 Webhooks 不同：多条任务可以
+          同时启用，各跑各的 cron，启用一条不会停掉另一条。新任务默认不启用。
         </p>
+        <h4>待处理队列</h4>
+        <p class="hint">
+          waiting = 等执行，running = 正在执行，done = 已推 API，failed = 执行或推送失败
+          （失败不自动重试，点立即执行可重新排队）。删任务时会取消它还没执行的等待行，
+          已完成/失败的行留作记录。
+        </p>
+        <table v-if="pendingTasks.length">
+          <thead>
+            <tr><th>任务</th><th>目标</th><th>到期时刻</th><th>方式</th><th>状态</th><th>结果</th><th>更新时间</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="p in pendingTasks" :key="p.id">
+              <td>{{ p.pull_task_name }}</td>
+              <td>{{ p.target }}</td>
+              <td>{{ fmtTime(p.due_at) }}</td>
+              <td>{{ p.kind === "manual" ? "立即执行" : "定时" }}</td>
+              <td><span v-if="p.status === 'waiting'" class="badge">等待</span><span v-else-if="p.status === 'running'" class="badge">执行中</span><span v-else-if="p.status === 'done'">完成</span><span v-else>失败</span></td>
+              <td class="short">{{ p.result_external_id || p.error || "—" }}</td>
+              <td>{{ fmtTime(p.updated_at) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="hint">队列目前是空的。</p>
         <p class="hint">
           上次刷新：{{ pullTasksLastRefreshed || "尚未刷新" }}
           <span v-if="pullTasksRefreshing"> · 正在从服务器拉取最新数据…</span>
@@ -404,11 +429,12 @@
         <div v-if="pullTaskView === 'list'">
           <table v-if="pullTasks.length">
             <thead>
-              <tr><th>名字</th><th>cron</th><th>启用</th><th>上次执行</th><th>更新时间</th><th></th></tr>
+              <tr><th>名字</th><th>目标</th><th>cron</th><th>启用</th><th>上次执行</th><th>更新时间</th><th></th></tr>
             </thead>
             <tbody>
               <tr v-for="t in pullTasks" :key="t.id" @click="openPullTask(t)">
                 <td>{{ t.name }}</td>
+                <td>{{ t.target }}</td>
                 <td class="mono short">{{ t.cron }}</td>
                 <td><span v-if="t.is_active" class="badge">启用</span><span v-else>—</span></td>
                 <td>{{ t.last_run_at ? fmtTime(t.last_run_at) : "从未执行" }}</td>
@@ -416,6 +442,7 @@
                 <td @click.stop>
                   <button class="btn small" :disabled="busy" @click="openPullTask(t)">详情</button>
                   <button class="btn small" :disabled="busy" @click="startEditPullTask(t)">编辑</button>
+                  <button class="btn small" :disabled="busy" @click="runPullTaskNow(t)">立即执行</button>
                   <button v-if="!t.is_active" class="btn small" :disabled="busy" @click="setPullTaskActive(t, true)">启用</button>
                   <button v-else class="btn small" :disabled="busy" @click="setPullTaskActive(t, false)">停用</button>
                   <button class="btn danger small" :disabled="busy" @click="deletePullTask(t)">删除</button>
@@ -426,6 +453,7 @@
           <p v-else class="hint">还没有拉取任务，在下方新建一个。</p>
           <form class="create" @submit.prevent="createPullTask">
             <input v-model="newPullTaskName" placeholder="新任务名字，如：ai-agent-日报" class="input" />
+            <input v-model="newPullTaskTarget" placeholder="目标 agent，默认 muse" class="input" />
             <input v-model="newPullTaskCron" placeholder="cron（北京时间，如 0 9 * * *）" class="input" />
             <div class="row">
               <button class="btn small" type="button" @click="newPullTaskCron = '*/30 * * * *'">每 30 分钟</button>
@@ -433,7 +461,7 @@
               <button class="btn small" type="button" @click="newPullTaskCron = '0 9 * * *'">每天 9 点</button>
               <button class="btn small" type="button" @click="newPullTaskCron = '0 9 * * 1-5'">工作日 9 点</button>
             </div>
-            <textarea v-model="newPullTaskPrompt" rows="6" placeholder="prompt：Muse 到点执行这份指令，成稿写 review 把关" class="input"></textarea>
+            <textarea v-model="newPullTaskPrompt" rows="6" placeholder="prompt：到点后目标 agent 执行这份指令，成稿直接推 API" class="input"></textarea>
             <button class="btn primary" :disabled="busy">新建（默认不启用）</button>
           </form>
         </div>
@@ -441,6 +469,7 @@
           <h4>{{ selectedPullTask.name }} <span v-if="selectedPullTask.is_active" class="badge">启用</span></h4>
           <div class="hint">更新于 {{ fmtTime(selectedPullTask.updated_at) }} · 上次执行 {{ selectedPullTask.last_run_at ? fmtTime(selectedPullTask.last_run_at) : "从未执行" }}</div>
           <div class="grid">
+            <div><label>目标</label><div>{{ selectedPullTask.target }}</div></div>
             <div><label>cron（北京时间）</label><div class="mono">{{ selectedPullTask.cron }}</div></div>
           </div>
           <h4>prompt</h4>
@@ -448,13 +477,15 @@
           <div class="row">
             <button class="btn" @click="pullTaskView = 'list'">返回列表</button>
             <button class="btn" :disabled="busy" @click="startEditPullTask(selectedPullTask)">编辑</button>
+            <button class="btn" :disabled="busy" @click="runPullTaskNow(selectedPullTask)">立即执行</button>
             <button v-if="!selectedPullTask.is_active" class="btn" :disabled="busy" @click="setPullTaskActive(selectedPullTask, true)">启用</button>
             <button v-else class="btn" :disabled="busy" @click="setPullTaskActive(selectedPullTask, false)">停用</button>
             <button class="btn danger" :disabled="busy" @click="deletePullTask(selectedPullTask)">删除</button>
           </div>
         </div>
         <form v-if="pullTaskView === 'edit'" class="create" @submit.prevent="savePullTaskForm">
-          <div class="hint">正在编辑 {{ editPullTaskName }}（名字不可改）。prompt 与 cron 都是完整值，改后保存即生效，下次轮询按新 cron 执行。</div>
+          <div class="hint">正在编辑 {{ editPullTaskName }}（名字不可改）。prompt、cron 与目标都是完整值，改后保存即生效；已排队的任务不受影响（排队时已快照了当时的 prompt 与目标），只有以后新排的队用新值。</div>
+          <input v-model="editPullTaskTarget" placeholder="目标 agent，如 muse" class="input" />
           <input v-model="editPullTaskCron" placeholder="cron（北京时间，如 0 9 * * *）" class="input" />
           <div class="row">
             <button class="btn small" type="button" @click="editPullTaskCron = '*/30 * * * *'">每 30 分钟</button>
@@ -546,15 +577,18 @@ const newsLastRefreshed = ref("");
 let newsRefreshSeq = 0;
 
 const pullTasks = ref([]);
+const pendingTasks = ref([]);
 const pullTaskView = ref("list");
 const selectedPullTask = ref(null);
 const newPullTaskName = ref("");
 const newPullTaskPrompt = ref("");
 const newPullTaskCron = ref("");
+const newPullTaskTarget = ref("");
 const editPullTaskId = ref(null);
 const editPullTaskName = ref("");
 const editPullTaskPrompt = ref("");
 const editPullTaskCron = ref("");
+const editPullTaskTarget = ref("");
 const pullTaskOk = ref("");
 const pullTaskError = ref("");
 const pullTasksRefreshing = ref(false);
@@ -602,6 +636,7 @@ function logout() {
   newsView.value = "list";
   newsLastRefreshed.value = "";
   pullTasks.value = [];
+  pendingTasks.value = [];
   selectedPullTask.value = null;
   pullTaskView.value = "list";
   pullTasksLastRefreshed.value = "";
@@ -906,9 +941,13 @@ async function refreshPullTasks() {
   pullTasksRefreshing.value = true;
   pullTaskError.value = "";
   try {
-    const items = await adminApi.listPullTasks(key.value);
+    const [items, pending] = await Promise.all([
+      adminApi.listPullTasks(key.value),
+      adminApi.listPendingTasks(key.value),
+    ]);
     if (seq === pullTasksRefreshSeq) {
       pullTasks.value = items;
+      pendingTasks.value = pending;
       pullTasksLastRefreshed.value = new Date().toLocaleString();
     }
   } catch (e) {
@@ -932,14 +971,31 @@ async function createPullTask() {
       name: newPullTaskName.value.trim(),
       prompt: newPullTaskPrompt.value,
       cron: newPullTaskCron.value.trim(),
+      ...(newPullTaskTarget.value.trim() ? { target: newPullTaskTarget.value.trim() } : {}),
     });
     newPullTaskName.value = "";
     newPullTaskPrompt.value = "";
     newPullTaskCron.value = "";
-    pullTaskOk.value = "任务已新建（默认不启用，点启用后 Muse 下次轮询到点才执行）。";
+    newPullTaskTarget.value = "";
+    pullTaskOk.value = "任务已新建（默认不启用，点启用后调度器到点即排队）。";
     await refreshPullTasks();
   } catch (e) {
     pullTaskError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function runPullTaskNow(t) {
+  pullTaskOk.value = "";
+  pullTaskError.value = "";
+  busy.value = true;
+  try {
+    const row = await adminApi.runPullTaskNow(key.value, t.id);
+    pullTaskOk.value = `已排队等待执行（队列 id ${row.id}）：目标 agent 5 秒内会查到它。`;
+    await refreshPullTasks();
+  } catch (e) {
+    pullTaskError.value = e.status === 409 ? "该任务已有等待执行的行，先等它跑完再点立即执行。" : e.message;
   } finally {
     busy.value = false;
   }
@@ -950,6 +1006,7 @@ function startEditPullTask(t) {
   editPullTaskName.value = t.name;
   editPullTaskPrompt.value = t.prompt;
   editPullTaskCron.value = t.cron;
+  editPullTaskTarget.value = t.target;
   selectedPullTask.value = t;
   pullTaskView.value = "edit";
 }
@@ -962,6 +1019,7 @@ async function savePullTaskForm() {
     const row = await adminApi.updatePullTask(key.value, editPullTaskId.value, {
       prompt: editPullTaskPrompt.value,
       cron: editPullTaskCron.value.trim(),
+      target: editPullTaskTarget.value.trim(),
     });
     selectedPullTask.value = row;
     pullTaskView.value = "detail";
@@ -981,7 +1039,7 @@ async function setPullTaskActive(t, active) {
   try {
     const row = await adminApi.setPullTaskActive(key.value, t.id, active);
     if (selectedPullTask.value && selectedPullTask.value.id === t.id) selectedPullTask.value = row;
-    pullTaskOk.value = active ? "已启用：Muse 下次轮询到点即执行。" : "已停用：Muse 轮询会跳过它。";
+    pullTaskOk.value = active ? "已启用：调度器到点即排队。" : "已停用：调度器不再为它排队。";
     await refreshPullTasks();
   } catch (e) {
     pullTaskError.value = e.message;

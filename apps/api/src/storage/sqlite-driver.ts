@@ -2,6 +2,8 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  PendingTaskStatus,
+  StoredPendingTask,
   StoredPullTask,
   StoredRecord,
   StoredToken,
@@ -111,12 +113,37 @@ export class SqliteDriver implements StorageDriver {
         name TEXT NOT NULL UNIQUE,
         prompt TEXT NOT NULL,
         cron TEXT NOT NULL,
+        target TEXT NOT NULL DEFAULT 'muse',
         is_active INTEGER NOT NULL DEFAULT 0,
         last_run_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS pending_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pull_task_id INTEGER NOT NULL,
+        pull_task_name TEXT NOT NULL,
+        target TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'waiting',
+        result_external_id TEXT,
+        result_record_id TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(pull_task_id, due_at)
+      );
     `);
+    // Migration for databases created before the queue redesign:
+    // pull_tasks gains target (pending_tasks is created above for new DBs).
+    {
+      const cols = this.db.prepare("PRAGMA table_info(pull_tasks)").all() as { name: string }[];
+      if (!cols.some((c) => c.name === "target")) {
+        this.db.exec("ALTER TABLE pull_tasks ADD COLUMN target TEXT NOT NULL DEFAULT 'muse'");
+      }
+    }
     // One-time migration from the old webhook_configs table (name-keyed,
     // endpoint + template + active in one row) to webhooks (id-keyed).
     // Old tables may lack the payload or is_active columns; the old
@@ -342,20 +369,21 @@ export class SqliteDriver implements StorageDriver {
   getPullTask(id: number): StoredPullTask | null {
     type RawRow = Omit<StoredPullTask, "is_active"> & { is_active: number };
     const row = this.db
-      .prepare("SELECT id, name, prompt, cron, is_active, last_run_at, created_at, updated_at FROM pull_tasks WHERE id = ?")
+      .prepare("SELECT id, name, prompt, cron, target, is_active, last_run_at, created_at, updated_at FROM pull_tasks WHERE id = ?")
       .get(id) as RawRow | undefined;
     if (!row) return null;
     const { is_active, ...rest } = row;
-    return { ...rest, last_run_at: rest.last_run_at ?? null, is_active: is_active === 1 };
+    return { ...rest, target: rest.target ?? "muse", last_run_at: rest.last_run_at ?? null, is_active: is_active === 1 };
   }
 
   listPullTasks(): StoredPullTask[] {
     type RawRow = Omit<StoredPullTask, "is_active"> & { is_active: number };
     const rows = this.db
-      .prepare("SELECT id, name, prompt, cron, is_active, last_run_at, created_at, updated_at FROM pull_tasks ORDER BY updated_at ASC, id ASC")
+      .prepare("SELECT id, name, prompt, cron, target, is_active, last_run_at, created_at, updated_at FROM pull_tasks ORDER BY updated_at ASC, id ASC")
       .all() as RawRow[];
     return rows.map(({ is_active, ...rest }) => ({
       ...rest,
+      target: rest.target ?? "muse",
       last_run_at: rest.last_run_at ?? null,
       is_active: is_active === 1,
     }));
@@ -365,23 +393,95 @@ export class SqliteDriver implements StorageDriver {
     if (t.id > 0) {
       this.db
         .prepare(
-          `INSERT INTO pull_tasks (id, name, prompt, cron, is_active, last_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET name = excluded.name, prompt = excluded.prompt, cron = excluded.cron, is_active = excluded.is_active, last_run_at = excluded.last_run_at, updated_at = excluded.updated_at`,
+          `INSERT INTO pull_tasks (id, name, prompt, cron, target, is_active, last_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET name = excluded.name, prompt = excluded.prompt, cron = excluded.cron, target = excluded.target, is_active = excluded.is_active, last_run_at = excluded.last_run_at, updated_at = excluded.updated_at`,
         )
-        .run(t.id, t.name, t.prompt, t.cron, t.is_active ? 1 : 0, t.last_run_at, t.created_at, t.updated_at);
+        .run(t.id, t.name, t.prompt, t.cron, t.target, t.is_active ? 1 : 0, t.last_run_at, t.created_at, t.updated_at);
       return this.getPullTask(t.id) as StoredPullTask;
     }
     const res = this.db
       .prepare(
-        "INSERT INTO pull_tasks (name, prompt, cron, is_active, last_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO pull_tasks (name, prompt, cron, target, is_active, last_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(t.name, t.prompt, t.cron, t.is_active ? 1 : 0, t.last_run_at, t.created_at, t.updated_at);
+      .run(t.name, t.prompt, t.cron, t.target, t.is_active ? 1 : 0, t.last_run_at, t.created_at, t.updated_at);
     return this.getPullTask(Number(res.lastInsertRowid)) as StoredPullTask;
   }
 
   deletePullTask(id: number): boolean {
     const res = this.db.prepare("DELETE FROM pull_tasks WHERE id = ?").run(id);
     return Number(res.changes) > 0;
+  }
+
+  getPendingTask(id: number): StoredPendingTask | null {
+    const row = this.db
+      .prepare("SELECT id, pull_task_id, pull_task_name, target, prompt, due_at, kind, status, result_external_id, result_record_id, error, created_at, updated_at FROM pending_tasks WHERE id = ?")
+      .get(id) as StoredPendingTask | undefined;
+    if (!row) return null;
+    return {
+      ...row,
+      kind: row.kind as "scheduled" | "manual",
+      status: row.status as PendingTaskStatus,
+      result_external_id: row.result_external_id ?? null,
+      result_record_id: row.result_record_id ?? null,
+      error: row.error ?? null,
+    };
+  }
+
+  listPendingTasks(filter: { target?: string; status?: PendingTaskStatus }): StoredPendingTask[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (filter.target) {
+      where.push("target = ?");
+      params.push(filter.target);
+    }
+    if (filter.status) {
+      where.push("status = ?");
+      params.push(filter.status);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT id, pull_task_id, pull_task_name, target, prompt, due_at, kind, status, result_external_id, result_record_id, error, created_at, updated_at FROM pending_tasks ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at ASC, id ASC`,
+      )
+      .all(...params) as StoredPendingTask[];
+    return rows.map((r) => ({
+      ...r,
+      kind: r.kind as "scheduled" | "manual",
+      status: r.status as PendingTaskStatus,
+      result_external_id: r.result_external_id ?? null,
+      result_record_id: r.result_record_id ?? null,
+      error: r.error ?? null,
+    }));
+  }
+
+  savePendingTask(t: StoredPendingTask): StoredPendingTask {
+    if (t.id > 0) {
+      this.db
+        .prepare(
+          `INSERT INTO pending_tasks (id, pull_task_id, pull_task_name, target, prompt, due_at, kind, status, result_external_id, result_record_id, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET status = excluded.status, result_external_id = excluded.result_external_id, result_record_id = excluded.result_record_id, error = excluded.error, updated_at = excluded.updated_at`,
+        )
+        .run(t.id, t.pull_task_id, t.pull_task_name, t.target, t.prompt, t.due_at, t.kind, t.status, t.result_external_id, t.result_record_id, t.error, t.created_at, t.updated_at);
+      return this.getPendingTask(t.id) as StoredPendingTask;
+    }
+    // Throws on UNIQUE(pull_task_id, due_at) — the caller treats that as a conflict.
+    const res = this.db
+      .prepare(
+        "INSERT INTO pending_tasks (pull_task_id, pull_task_name, target, prompt, due_at, kind, status, result_external_id, result_record_id, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(t.pull_task_id, t.pull_task_name, t.target, t.prompt, t.due_at, t.kind, t.status, t.result_external_id, t.result_record_id, t.error, t.created_at, t.updated_at);
+    return this.getPendingTask(Number(res.lastInsertRowid)) as StoredPendingTask;
+  }
+
+  deletePendingTask(id: number): boolean {
+    const res = this.db.prepare("DELETE FROM pending_tasks WHERE id = ?").run(id);
+    return Number(res.changes) > 0;
+  }
+
+  deleteWaitingPendingTasks(pullTaskId: number): number {
+    const res = this.db
+      .prepare("DELETE FROM pending_tasks WHERE pull_task_id = ? AND status = 'waiting'")
+      .run(pullTaskId);
+    return Number(res.changes);
   }
 
   listWebhookPayloads(): WebhookPayload[] {
