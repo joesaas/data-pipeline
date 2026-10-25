@@ -34,8 +34,8 @@
 
     <template v-else>
       <nav class="tabs">
-        <button :class="{ active: tab === 'tokens' }" @click="tab = 'tokens'">Tokens</button>
-        <button :class="{ active: tab === 'webhooks' }" @click="tab = 'webhooks'">Webhooks</button>
+        <button :class="{ active: tab === 'tokens' }" @click="openTokensTab">Tokens</button>
+        <button :class="{ active: tab === 'webhooks' }" @click="openWebhooksTab">Webhooks</button>
         <button :class="{ active: tab === 'records' }" @click="openRecordsTab">Records</button>
       </nav>
 
@@ -43,10 +43,18 @@
       <section v-if="tab === 'tokens'" class="card">
         <div class="row space">
           <h2>Tokens</h2>
-          <button class="btn" :disabled="busy" @click="refreshTokens">刷新</button>
+          <button class="btn" :disabled="tokensRefreshing" @click="refreshTokens">
+            <span v-if="tokensRefreshing" class="spin">⟳</span>
+            {{ tokensRefreshing ? "刷新中…" : "刷新" }}
+          </button>
         </div>
         <p class="hint">
           明文钥匙只在创建那一刻显示一次，库里只存哈希——这里永远查不回已发钥匙的明文，丢了只能吊销重发。
+        </p>
+        <p class="hint">
+          上次刷新：{{ tokensLastRefreshed || "尚未刷新" }}
+          <span v-if="tokensRefreshing"> · 正在从服务器拉取最新数据…</span>
+          <span v-else-if="tokens.length"> · 当前共 {{ tokens.length }} 条</span>
         </p>
         <table v-if="tokens.length">
           <thead>
@@ -97,12 +105,20 @@
       <section v-if="tab === 'webhooks'" class="card">
         <div class="row space">
           <h2>Webhooks</h2>
-          <button class="btn" :disabled="busy" @click="refreshWebhooks">刷新</button>
+          <button class="btn" :disabled="webhooksRefreshing" @click="refreshWebhooks">
+            <span v-if="webhooksRefreshing" class="spin">⟳</span>
+            {{ webhooksRefreshing ? "刷新中…" : "刷新" }}
+          </button>
         </div>
         <p class="hint">
           每个 webhook 是一组接收地址（URL + token + 可选 payload 模板），存在数据库 webhooks 表里。
           后台定时触发只发标为“定时”的那条；任何一条都可以点“测试一次”单独发一次，不改定时设置、不动触发节奏。
           没有标为定时的行时，定时触发当轮跳过。token 永远不显示。
+        </p>
+        <p class="hint">
+          上次刷新：{{ webhooksLastRefreshed || "尚未刷新" }}
+          <span v-if="webhooksRefreshing"> · 正在从服务器拉取最新数据…</span>
+          <span v-else-if="webhooks.length"> · 当前共 {{ webhooks.length }} 条</span>
         </p>
         <div v-if="webhookView === 'list'">
           <table v-if="webhooks.length">
@@ -267,6 +283,9 @@ const healthOk = ref(null);
 
 const tokens = ref([]);
 const tokensError = ref("");
+const tokensRefreshing = ref(false);
+const tokensLastRefreshed = ref("");
+let tokensRefreshSeq = 0;
 const newName = ref("");
 const newRole = ref("user");
 const createdKey = ref(null);
@@ -287,6 +306,9 @@ const editWebhookPayload = ref("");
 const webhookOk = ref("");
 const webhookError = ref("");
 const webhookTestResult = ref("");
+const webhooksRefreshing = ref(false);
+const webhooksLastRefreshed = ref("");
+let webhooksRefreshSeq = 0;
 
 const records = ref([]);
 const recordsTotal = ref(0);
@@ -300,6 +322,7 @@ const recordsOk = ref("");
 const recordsError = ref("");
 const recordsRefreshing = ref(false);
 const recordsLastRefreshed = ref("");
+let recordsRefreshSeq = 0;
 
 function fmtTime(iso) {
   if (!iso) return "";
@@ -333,6 +356,18 @@ function logout() {
   selectedRecord.value = null;
   recordsView.value = "list";
   recordsLastRefreshed.value = "";
+  tokensLastRefreshed.value = "";
+  webhooksLastRefreshed.value = "";
+}
+
+function openTokensTab() {
+  tab.value = "tokens";
+  refreshTokens();
+}
+
+function openWebhooksTab() {
+  tab.value = "webhooks";
+  refreshWebhooks();
 }
 
 function tokenName(tokenId) {
@@ -341,12 +376,23 @@ function tokenName(tokenId) {
 }
 
 async function refreshTokens() {
+  // Sequence token, not an early-return guard: two overlapping fetches
+  // (e.g. a manual Refresh, then a post-delete refresh) must not let
+  // the older response overwrite the newer one, and the post-mutation
+  // refresh must never be dropped — that would leave a deleted row
+  // on screen looking like the refresh did nothing.
+  const seq = ++tokensRefreshSeq;
+  tokensRefreshing.value = true;
   tokensError.value = "";
   try {
     const data = await adminApi.listTokens(key.value);
+    if (seq !== tokensRefreshSeq) return;
     tokens.value = data.items;
+    tokensLastRefreshed.value = new Date().toLocaleString();
   } catch (e) {
-    tokensError.value = e.message;
+    if (seq === tokensRefreshSeq) tokensError.value = e.message;
+  } finally {
+    if (seq === tokensRefreshSeq) tokensRefreshing.value = false;
   }
 }
 
@@ -389,15 +435,22 @@ async function revoke(t) {
 }
 
 async function refreshWebhooks() {
+  const seq = ++webhooksRefreshSeq;
+  webhooksRefreshing.value = true;
   try {
-    webhooks.value = await adminApi.listWebhooks(key.value);
+    const rows = await adminApi.listWebhooks(key.value);
+    if (seq !== webhooksRefreshSeq) return;
+    webhooks.value = rows;
+    webhooksLastRefreshed.value = new Date().toLocaleString();
     if (selectedWebhook.value) {
       selectedWebhook.value =
         webhooks.value.find((w) => w.id === selectedWebhook.value.id) ?? null;
       if (!selectedWebhook.value && webhookView.value === "detail") webhookView.value = "list";
     }
   } catch (e) {
-    webhookError.value = e.message;
+    if (seq === webhooksRefreshSeq) webhookError.value = e.message;
+  } finally {
+    if (seq === webhooksRefreshSeq) webhooksRefreshing.value = false;
   }
 }
 
@@ -516,9 +569,11 @@ async function testWebhook(w) {
 }
 
 async function refreshRecords() {
-  // Guard against double-clicks: without it, two overlapping fetches
-  // could resolve out of order and leave the older page on screen.
-  if (recordsRefreshing.value) return;
+  // Same sequence-token rule as Tokens/Webhooks: the button is disabled
+  // while refreshing, so a manual double-click cannot start a second
+  // fetch — but a post-delete refresh must never be dropped, and an
+  // older fetch resolving late must never overwrite a newer page.
+  const seq = ++recordsRefreshSeq;
   recordsRefreshing.value = true;
   recordsError.value = "";
   try {
@@ -528,6 +583,7 @@ async function refreshRecords() {
       limit: recordsPageSize,
       offset: recordsOffset.value,
     });
+    if (seq !== recordsRefreshSeq) return;
     records.value = data.items;
     recordsTotal.value = data.total;
     // The timestamp is the visible proof the refresh actually ran:
@@ -539,9 +595,9 @@ async function refreshRecords() {
       if (!selectedRecord.value && recordsView.value === "detail") recordsView.value = "list";
     }
   } catch (e) {
-    recordsError.value = e.message;
+    if (seq === recordsRefreshSeq) recordsError.value = e.message;
   } finally {
-    recordsRefreshing.value = false;
+    if (seq === recordsRefreshSeq) recordsRefreshing.value = false;
   }
 }
 
