@@ -5,7 +5,6 @@
 # 服务名（可省略，省略 = 全部）：
 # api -> pm2 进程 data-pipeline（收集 API）
 # cleaner -> pm2 进程 data-cleaner（定时清洗 + 自动导出静态站）
-# cursor -> pm2 进程 data-cursor-trigger（定时调用 Cursor automation webhook）
 # runner -> pm2 进程 data-job-runner（多定时 job 常驻进程；新轻量定时任务进这里，不再新增 pm2 服务）
 # 静态站由 cleaner 自动导出、nginx 直供，没有常驻 web 进程。
 
@@ -30,8 +29,8 @@ need() { command -v "$1" >/dev/null 2>&1 || die "找不到命令：$1（先装�
 # 先校验服务别名（die 必须在主 shell 里执行，不能放进命令替换的子 shell）
 validate_svc() {
   case "${1:-}" in
-    ""|all|api|cleaner|cursor|runner) return 0 ;;
-    *) die "未知服务：${1}（可用：api / cleaner / cursor / runner / all）" ;;
+    ""|all|api|cleaner|runner) return 0 ;;
+    *) die "未知服务：${1}（可用：api / cleaner / runner / all）" ;;
   esac
 }
 
@@ -41,9 +40,8 @@ case "${1:-}" in
 ""|all) echo "";;
 api) echo "data-pipeline";;
 cleaner) echo "data-cleaner";;
-cursor) echo "data-cursor-trigger";;
 runner) echo "data-job-runner";;
-*) die "未知服务：$1（可用：api / cleaner / cursor / runner / all）";;
+*) die "未知服务：$1（可用：api / cleaner / runner / all）";;
 esac
 }
 
@@ -58,7 +56,7 @@ deploy [服务] 全流程：拉代码 -> 装依赖 -> 构建 -> 重启 -> 导出
 update 只拉最新代码（git pull）
 build 只装依赖并构建（npm install + npm run build，均为轻量 tsc）
 
-服务可填 api / cleaner / cursor / runner / all（省略 = all）
+服务可填 api / cleaner / runner / all（省略 = all）
 start [服务] 启动（用 ecosystem.config.cjs）
 stop [服务] 停止
 restart [服务] 重启（进程不存在时自动改为启动）
@@ -112,7 +110,7 @@ if command -v free >/dev/null 2>&1; then
 fi
 info "安装依赖…"
 npm install --no-audit --no-fund || die "npm install 失败"
-info "构建（shared -> api -> exporter -> cleaner -> cursor-trigger -> job-runner）…"
+info "构建（shared -> api -> exporter -> cleaner -> job-runner -> console）…"
 npm run build || die "构建失败"
 ok "构建完成"
 }
@@ -150,7 +148,7 @@ ok "已停止"
 # 重启后空表 + deploy 的 save 把空快照落了盘，服务就再也拉不起来）。
 save_if_any() {
   local alive=0
-  for n in data-pipeline data-cleaner data-cursor-trigger data-job-runner; do
+  for n in data-pipeline data-cleaner data-job-runner; do
     pm2 describe "$n" >/dev/null 2>&1 && alive=$((alive + 1))
   done
   if [ "$alive" -gt 0 ]; then
@@ -177,7 +175,7 @@ info "重启全部服务…"
 # 逐个重启 ecosystem 里定义的进程；不存在的改为启动（与单服务行为一致）。
 # 旧逻辑是跳过 + 提示，结果重启后空表时四个全跳过、再被下面的 save 把空
 # 快照落盘——这就是 2026-10-25 重启后服务拉不起来的根因。
-for n in data-pipeline data-cleaner data-cursor-trigger data-job-runner; do
+for n in data-pipeline data-cleaner data-job-runner; do
 if pm2 describe "$n" >/dev/null 2>&1; then
 pm2 restart "$n" || die "重启 $n 失败"
 else

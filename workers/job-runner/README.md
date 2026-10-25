@@ -41,5 +41,5 @@ EC2 上线：`./deploy.sh start runner`（首次）或随 `deploy.sh deploy` 一
 
 ## 迁移说明
 
-- `cursor-trigger` 已于 2026-10-25 迁入本 worker：`src/jobs/cursor-trigger.ts`（每 1 分钟 tick、按 `cursor-state` 自我门控触发，触发逻辑与旧独立服务逐字节一致：同一 webhook 请求体、同一环境变量来源）。旧 `data-cursor-trigger` 进程在新 job 验证触发后才下线并删除源码，见后续清理提交。
+- `cursor-trigger` 已于 2026-10-25 迁入本 worker：`src/jobs/cursor-trigger.ts`（每 1 分钟 tick、按 `cursor-state` 自我门控触发，触发逻辑与旧独立服务逐字节一致：同一 webhook 请求体、同一环境变量来源）。旧 `data-cursor-trigger` 进程已于同日下线，源码随清理提交删除。
 - `cleaner` 不迁入：LLM 长批次、失败画像不同，混进来会拖住轻量 job。
