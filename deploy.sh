@@ -99,8 +99,19 @@ chmod +x scripts/*.sh 2>/dev/null || true
 
 cmd_build() {
 need npm
+# 内存预警：小内存机器 + 无 swap 时，npm install 常被 OOM killer 直接杀掉
+# （表现为 Killed / exit 137，2026-10-25 实测）。只警告不停手：可用内存是
+# 波动的，能不能装成要试了才知道；真被杀了就先建 swap 再部署，不要反复重试。
+if command -v free >/dev/null 2>&1; then
+  local avail swap_total
+  avail="$(free -m | awk '/^Mem:/ {print $7}')"
+  swap_total="$(free -m | awk '/^Swap:/ {print $2}')"
+  if [ "${swap_total:-0}" -eq 0 ] && [ "${avail:-9999}" -lt 512 ]; then
+    warn "可用内存 ${avail}MB 且无 swap：npm install 可能被 OOM killer 杀掉，建议先建 2G swap 再部署（见上次说明）"
+  fi
+fi
 info "安装依赖…"
-npm install || die "npm install 失败"
+npm install --no-audit --no-fund || die "npm install 失败"
 info "构建（shared -> api -> exporter -> cleaner -> cursor-trigger -> job-runner）…"
 npm run build || die "构建失败"
 ok "构建完成"
