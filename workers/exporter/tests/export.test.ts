@@ -59,7 +59,13 @@ describe("exportSite", () => {
     assert.ok(existsSync(join(result.releaseDir, "favicon.svg")), "favicon copied into release");
     assert.ok(index.includes('id="loginBtn"'), "login button rendered in topbar");
     assert.ok(index.includes('id="authModal"'), "login modal rendered on index");
-    assert.ok(index.includes('id="walletLoginBtn"'), "wallet login button rendered");
+    assert.ok(index.includes('id="walletList"'), "wallet choice list rendered in modal");
+    assert.ok(index.includes("eip6963:announceProvider"), "EIP-6963 discovery wired");
+    assert.ok(index.includes("eip6963:requestProvider"), "EIP-6963 discovery requested");
+    assert.ok(index.includes("binancew3w"), "Binance legacy fallback present");
+    assert.ok(index.includes("coinbaseWalletExtension"), "Coinbase legacy fallback present");
+    assert.ok(index.includes("okxwallet"), "OKX legacy fallback present");
+    assert.ok(!index.includes('id="walletLoginBtn"'), "single wallet button is gone");
     assert.ok(index.includes('class="fav-btn"'), "favorite button rendered on cards");
     assert.ok(index.includes('data-fav="item-1"'), "favorite button carries the item id");
     assert.ok(index.includes("/data-pipeline/api/v1"), "site script talks to the API on the same host");

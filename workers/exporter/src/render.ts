@@ -133,9 +133,10 @@ ${seo.jsonLd ?? ""}
 <div class="auth-modal" id="authModal" hidden>
   <div class="auth-modal-card">
     <h3>请先登录</h3>
-    <p class="muted">收藏需要登录。连接你的钱包并签名一条登录消息即可完成，不会产生任何链上交易，也不会扣费。</p>
+    <p class="muted">收藏需要登录。选择一个钱包并签名一条登录消息即可完成，不会产生任何链上交易，也不会扣费。</p>
     <p class="auth-error" id="authError" hidden></p>
-    <button type="button" class="btn-primary" id="walletLoginBtn">连接钱包登录</button>
+    <div id="walletList" class="wallet-list"></div>
+    <p class="muted" id="walletEmpty" hidden>未检测到浏览器钱包，请先安装 MetaMask、OKX Wallet、Coinbase Wallet 或 Binance Web3 Wallet 扩展后再试。</p>
     <button type="button" class="head-link-btn" id="authCancelBtn">取消</button>
   </div>
 </div>
@@ -304,7 +305,12 @@ const PAGE_JS = `
  *  /data-pipeline/api/v1 (the API and the news site share the domain,
  *  so no CORS is involved). A favorite click while logged out opens
  *  the login modal, and the pending favorite is applied right after a
- *  successful login, so the user never has to click twice. */
+ *  successful login, so the user never has to click twice.
+ *  Wallet discovery is EIP-6963 first: the page asks every installed
+ *  wallet to announce itself (MetaMask, OKX, Coinbase and Binance all
+ *  do this in current versions), so the modal can list them all instead
+ *  of racing for the single window.ethereum slot. Legacy injected
+ *  globals are only a fallback for wallets too old to announce. */
 const SITE_JS = `
 <script>
 (function () {
@@ -380,11 +386,88 @@ const SITE_JS = `
       applyFavView();
     }).catch(function () { favIds = {}; paint(); });
   }
+  var walletList = [];
+  function addWallet(name, icon, provider, rdns) {
+    if (!provider || typeof provider.request !== "function") return;
+    for (var i = 0; i < walletList.length; i++) {
+      if (walletList[i].provider === provider) return;
+      if (walletList[i].name === name) {
+        if (!walletList[i].icon && icon) walletList[i].icon = icon;
+        return;
+      }
+    }
+    walletList.push({ name: name, icon: icon || "", provider: provider, rdns: rdns || "" });
+  }
+  function legacyName(p) {
+    if (p.isMetaMask) return "MetaMask";
+    if (p.isCoinbaseWallet) return "Coinbase Wallet";
+    if (p.isOkxWallet || p.isOKExWallet) return "OKX Wallet";
+    return "浏览器钱包";
+  }
+  function collectLegacy() {
+    var eth = window.ethereum;
+    if (eth) {
+      if (eth.providers && eth.providers.length) {
+        eth.providers.forEach(function (p) { addWallet(legacyName(p), "", p, ""); });
+      } else {
+        addWallet(legacyName(eth), "", eth, "");
+      }
+    }
+    if (window.okxwallet) addWallet("OKX Wallet", "", window.okxwallet.ethereum || window.okxwallet, "com.okx.wallet");
+    if (window.coinbaseWalletExtension) addWallet("Coinbase Wallet", "", window.coinbaseWalletExtension, "com.coinbase.wallet");
+    if (window.binancew3w && window.binancew3w.ethereum) addWallet("Binance Web3 Wallet", "", window.binancew3w.ethereum, "com.binance.wallet");
+  }
+  function renderWalletList() {
+    var list = $("walletList"), empty = $("walletEmpty");
+    if (!list) return;
+    while (list.firstChild) list.removeChild(list.firstChild);
+    var order = ["MetaMask", "OKX Wallet", "Coinbase Wallet", "Binance Web3 Wallet"];
+    var sorted = walletList.slice().sort(function (a, b) {
+      var ia = order.indexOf(a.name), ib = order.indexOf(b.name);
+      if (ia >= 0 && ib >= 0) return ia - ib;
+      if (ia >= 0) return -1;
+      if (ib >= 0) return 1;
+      return a.name < b.name ? -1 : 1;
+    });
+    if (empty) empty.hidden = sorted.length > 0;
+    sorted.forEach(function (w) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "wallet-option";
+      if (w.icon) {
+        var img = document.createElement("img");
+        img.src = w.icon;
+        img.alt = "";
+        img.width = 24;
+        img.height = 24;
+        btn.appendChild(img);
+      }
+      var span = document.createElement("span");
+      span.textContent = w.name;
+      btn.appendChild(span);
+      btn.addEventListener("click", function () { loginWith(w.provider, btn); });
+      list.appendChild(btn);
+    });
+  }
+  function discoverWallets() {
+    collectLegacy();
+    try { window.dispatchEvent(new Event("eip6963:requestProvider")); } catch (e) {}
+    renderWalletList();
+  }
+  window.addEventListener("eip6963:announceProvider", function (e) {
+    var detail = (e && e.detail) || {};
+    var info = detail.info || {};
+    if (detail.provider) {
+      addWallet(info.name || "钱包", info.icon || "", detail.provider, info.rdns || "");
+      renderWalletList();
+    }
+  });
   function openModal(pending) {
     pendingFav = pending || null;
     var m = $("authModal"), err = $("authError");
     if (err) err.hidden = true;
     if (m) m.hidden = false;
+    discoverWallets();
   }
   function closeModal() { var m = $("authModal"); if (m) m.hidden = true; pendingFav = null; }
   function showError(msg) {
@@ -429,14 +512,12 @@ const SITE_JS = `
     if (window.AGENT101_INDEX_URL) { window.location.href = window.AGENT101_INDEX_URL + "?favorites=1"; return; }
     window.location.href = window.location.pathname + "?favorites=1";
   });
-  var walletBtn = $("walletLoginBtn");
-  if (walletBtn) walletBtn.addEventListener("click", function () {
-    if (!window.ethereum) { showError("未检测到浏览器钱包，请先安装 MetaMask 等钱包扩展后再试。"); return; }
-    walletBtn.disabled = true;
-    window.ethereum.request({ method: "eth_requestAccounts" }).then(function (accounts) {
+  function loginWith(provider, btn) {
+    if (btn) btn.disabled = true;
+    provider.request({ method: "eth_requestAccounts" }).then(function (accounts) {
       var addr = String(accounts[0]).toLowerCase();
       return api("/site-auth/nonce", { method: "POST", body: JSON.stringify({ address: addr }) }).then(function (d) {
-        return window.ethereum.request({ method: "personal_sign", params: [d.message, addr] }).then(function (sig) {
+        return provider.request({ method: "personal_sign", params: [d.message, addr] }).then(function (sig) {
           return api("/site-auth/verify", { method: "POST", body: JSON.stringify({ address: addr, signature: sig }) });
         });
       });
@@ -454,8 +535,9 @@ const SITE_JS = `
     }).catch(function (err) {
       if (err && (err.code === 4001 || /rejected/i.test(String(err.message || "")))) showError("已取消签名，请重新尝试。");
       else showError("登录失败，请检查钱包连接后重试。");
-    }).then(function () { walletBtn.disabled = false; });
-  });
+    }).then(function () { if (btn) btn.disabled = false; });
+  }
+  discoverWallets();
   if (session) {
     api("/site-auth/me").then(function (d) {
       setLoggedIn(d.address);
