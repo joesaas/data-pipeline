@@ -36,7 +36,7 @@
       <nav class="tabs">
         <button :class="{ active: tab === 'tokens' }" @click="tab = 'tokens'">Tokens</button>
         <button :class="{ active: tab === 'webhooks' }" @click="tab = 'webhooks'">Webhooks</button>
-        <button :class="{ active: tab === 'records' }" @click="tab = 'records'">Records</button>
+        <button :class="{ active: tab === 'records' }" @click="openRecordsTab">Records</button>
       </nav>
 
       <!-- Tokens -->
@@ -172,12 +172,20 @@
       <section v-if="tab === 'records'" class="card">
         <div class="row space">
           <h2>Records</h2>
-          <button class="btn" :disabled="busy" @click="refreshRecords">刷新</button>
+          <button class="btn" :disabled="recordsRefreshing" @click="refreshRecords">
+            <span v-if="recordsRefreshing" class="spin">⟳</span>
+            {{ recordsRefreshing ? "刷新中…" : "刷新" }}
+          </button>
         </div>
         <p class="hint">
           这里是数据库 records 表的全部记录（admin 跨桶可见，桶名按 token_id 对应到 Tokens 页的名字）。
           记录只能从 push 接口进来，控制台不新建、不编辑，只能看详情和删除。列表只显示标题等摘要，
           prompt 与 content 正文只在详情页展开。
+        </p>
+        <p class="hint">
+          上次刷新：{{ recordsLastRefreshed || "尚未刷新" }}
+          <span v-if="recordsRefreshing"> · 正在从服务器拉取最新数据…</span>
+          <span v-else-if="recordsTotal"> · 当前共 {{ recordsTotal }} 条</span>
         </p>
         <form class="create" @submit.prevent="applyRecordsFilter">
           <input v-model="recordsFilterAgent" placeholder="按来源筛选，如 muse" class="input" />
@@ -290,6 +298,8 @@ const recordsView = ref("list");
 const selectedRecord = ref(null);
 const recordsOk = ref("");
 const recordsError = ref("");
+const recordsRefreshing = ref(false);
+const recordsLastRefreshed = ref("");
 
 function fmtTime(iso) {
   if (!iso) return "";
@@ -322,6 +332,7 @@ function logout() {
   recordsTotal.value = 0;
   selectedRecord.value = null;
   recordsView.value = "list";
+  recordsLastRefreshed.value = "";
 }
 
 function tokenName(tokenId) {
@@ -505,6 +516,10 @@ async function testWebhook(w) {
 }
 
 async function refreshRecords() {
+  // Guard against double-clicks: without it, two overlapping fetches
+  // could resolve out of order and leave the older page on screen.
+  if (recordsRefreshing.value) return;
+  recordsRefreshing.value = true;
   recordsError.value = "";
   try {
     const data = await adminApi.listRecords(key.value, {
@@ -515,6 +530,9 @@ async function refreshRecords() {
     });
     records.value = data.items;
     recordsTotal.value = data.total;
+    // The timestamp is the visible proof the refresh actually ran:
+    // it moves on every click even when no row changed.
+    recordsLastRefreshed.value = new Date().toLocaleString();
     if (selectedRecord.value) {
       selectedRecord.value =
         records.value.find((r) => r.id === selectedRecord.value.id) ?? null;
@@ -522,7 +540,17 @@ async function refreshRecords() {
     }
   } catch (e) {
     recordsError.value = e.message;
+  } finally {
+    recordsRefreshing.value = false;
   }
+}
+
+function openRecordsTab() {
+  tab.value = "records";
+  // Entering the tab always re-reads the server: a Records page left
+  // open while new records are pushed must not keep showing old rows
+  // until the user remembers to hit Refresh.
+  refreshRecords();
 }
 
 function openRecord(r) {
@@ -615,6 +643,8 @@ body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", 
 .btn.danger { color: #cf222e; border-color: #f0b8bc; }
 .btn.ghost { border: none; background: transparent; color: #666; }
 .btn.small { padding: 4px 10px; font-size: 13px; }
+.spin { display: inline-block; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
 th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #eee; }
 .mono { font-family: ui-monospace, monospace; }

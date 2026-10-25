@@ -30,6 +30,11 @@ export function clearKey() {
 export async function api(method, path, key, body) {
   const res = await fetch(`${apiBase()}${path}`, {
     method,
+    // Load-bearing: the API sends no Cache-Control, so a plain GET may
+    // be served from the browser's heuristic cache and a console Refresh
+    // click would silently show stale rows (looking exactly like a dead
+    // button). no-store forces every console request onto the network.
+    cache: "no-store",
     headers: {
       "content-type": "application/json",
       ...(key ? { "x-api-key": key } : {}),
