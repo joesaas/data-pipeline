@@ -154,19 +154,31 @@ export class FileDriver implements StorageDriver {
     const found = this.readWebhookConfigs().find((c) => c.name === name);
     if (!found) return null;
     // Rows written before the payload column existed lack the field at
-    // runtime even though the type requires it.
-    const row = found as StoredWebhookConfig & { payload?: string | null };
-    return { ...row, payload: row.payload ?? null };
+    // runtime even though the type requires it. Rows written before the
+    // webhook list existed lack is_active too — the old single row was
+    // the scheduled webhook, so it normalizes to active (mirroring the
+    // SQLite migration, which marks the cursor-trigger row active).
+    const row = found as StoredWebhookConfig & { payload?: string | null; is_active?: boolean };
+    return {
+      ...row,
+      payload: row.payload ?? null,
+      is_active: row.is_active ?? row.name === "cursor-trigger",
+    };
   }
 
   listWebhookConfigs(): WebhookConfigMeta[] {
     return this.readWebhookConfigs()
-      .map(({ name, url, payload, updated_at }) => ({
-        name,
-        url,
-        payload: (payload ?? null) as string | null,
-        updated_at,
-      }))
+      .map((c) => {
+        const row = c as StoredWebhookConfig & { payload?: string | null; is_active?: boolean };
+        return {
+          name: row.name,
+          url: row.url,
+          payload: (row.payload ?? null) as string | null,
+          is_active: row.is_active ?? row.name === "cursor-trigger",
+          hasToken: (row.token ?? "").trim() !== "",
+          updated_at: row.updated_at,
+        };
+      })
       .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.name.localeCompare(b.name));
   }
 

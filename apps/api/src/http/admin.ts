@@ -168,8 +168,10 @@ export function cursorStatus(config: AppConfig, envFile: string | null, driver: 
   webhookSource: "db" | "env" | null;
   webhookInEnv: boolean;
   webhookUpdatedAt: string | null;
-  /** Whether the database row carries a payload template. */
+  /** Whether the scheduled webhook's row carries a payload template. */
   webhookPayloadSet: boolean;
+  /** Name of the scheduled webhook, if one is marked. */
+  activeWebhookName: string | null;
   /** Payload-list summary (the list is the console's payload surface). */
   payloadCount: number;
   activePayloadName: string | null;
@@ -181,7 +183,9 @@ export function cursorStatus(config: AppConfig, envFile: string | null, driver: 
   const present = existsSync(path);
   const state = readCursorState(path);
   const effective = effectiveIntervalMinutes(state, process.env);
-  const dbRow = driver.getWebhookConfig(CURSOR_WEBHOOK_NAME);
+  // The status grid follows the scheduled webhook: the row marked active,
+  // not the legacy single row — the list may hold several rows now.
+  const dbRow = driver.listWebhookConfigs().find((m) => m.is_active) ?? null;
   const inEnv = envWebhookPresent(config, envFile);
   const payloads = driver.listWebhookPayloads();
   const active = payloads.find((p) => p.is_active) ?? null;
@@ -198,6 +202,7 @@ export function cursorStatus(config: AppConfig, envFile: string | null, driver: 
     webhookInEnv: inEnv,
     webhookUpdatedAt: dbRow?.updated_at ?? null,
     webhookPayloadSet: Boolean(dbRow?.payload?.trim()),
+    activeWebhookName: dbRow?.name ?? null,
     payloadCount: payloads.length,
     activePayloadName: active?.name ?? null,
     runnerScriptPresent: existsSync(cursorRunnerScript(config, envFile)),
@@ -385,11 +390,18 @@ export function setCursorWebhook(deps: AdminDeps, req: Request, res: Response): 
     });
     return;
   }
+  // The legacy single-row endpoint keeps the row's scheduled flag: a new
+  // row becomes scheduled only when nothing else is (preserving the old
+  // "this row IS the webhook" behaviour); the list endpoints own changes
+  // of the scheduled row after that.
+  const isActive =
+    existing?.is_active ?? deps.driver.listWebhookConfigs().every((m) => !m.is_active);
   deps.driver.saveWebhookConfig({
     name: CURSOR_WEBHOOK_NAME,
     url,
     token,
     payload: payload === undefined ? (existing?.payload ?? null) : payload,
+    is_active: isActive,
     updated_at: new Date().toISOString(),
   });
   res.json(cursorStatus(deps.config, deps.envFile, deps.driver));
@@ -409,6 +421,236 @@ export function getCursorWebhook(deps: AdminDeps, req: Request, res: Response): 
     payload: row.payload,
     updated_at: row.updated_at,
     configured: true,
+  });
+}
+
+// --- Webhook list (console-managed endpoints) ------------------------------
+// The cursor trigger used to have exactly one webhook (the cursor-trigger
+// row). The console now manages a list of them: the list below is the
+// webhook surface, one row per receiving automation. At most one row is
+// scheduled (is_active) — that is the row the timed trigger fires. Any row
+// can be test-fired on demand without changing the scheduled one. Tokens
+// are plaintext by necessity (Bearer) and are never returned by any of
+// these endpoints; the list/detail views carry hasToken instead.
+
+/** Mark exactly one row scheduled: clear every other active row, then set this one. */
+export function activateWebhook(driver: StorageDriver, name: string): void {
+  const now = new Date().toISOString();
+  for (const m of driver.listWebhookConfigs()) {
+    if (m.is_active && m.name !== name) {
+      const full = driver.getWebhookConfig(m.name);
+      if (full) driver.saveWebhookConfig({ ...full, is_active: false, updated_at: now });
+    }
+  }
+  const target = driver.getWebhookConfig(name);
+  if (target && !target.is_active) {
+    driver.saveWebhookConfig({ ...target, is_active: true, updated_at: now });
+  }
+}
+
+function validWebhookToken(s: string): boolean {
+  return s.length > 0 && s.length <= 2000 && !/\s/.test(s) && !s.includes("'");
+}
+
+export function listWebhooks(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  res.json(
+    deps.driver.listWebhookConfigs().map((m) => ({
+      name: m.name,
+      url: m.url,
+      payload: m.payload,
+      is_active: m.is_active,
+      hasToken: m.hasToken,
+      updated_at: m.updated_at,
+    })),
+  );
+}
+
+export function createWebhook(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const body = (req.body ?? {}) as {
+    name?: unknown;
+    webhookUrl?: unknown;
+    webhookToken?: unknown;
+    payload?: unknown;
+  };
+  const name = parsePayloadName(body.name);
+  if ("error" in name) {
+    res.status(400).json({ error: name.error, field: "name" });
+    return;
+  }
+  if (deps.driver.getWebhookConfig(name.name)) {
+    res.status(409).json({ error: "webhook already exists", field: "name" });
+    return;
+  }
+  const urlRaw = typeof body.webhookUrl === "string" ? body.webhookUrl.trim() : "";
+  const tokenRaw = typeof body.webhookToken === "string" ? body.webhookToken.trim() : "";
+  if (!urlRaw || !validWebhookUrl(urlRaw)) {
+    res.status(400).json({ error: "webhookUrl must be an https URL (loopback http allowed)", field: "webhookUrl" });
+    return;
+  }
+  if (!validWebhookToken(tokenRaw)) {
+    res.status(400).json({ error: "webhookToken must be a single token without whitespace or quotes", field: "webhookToken" });
+    return;
+  }
+  let payload: string | null = null;
+  if (body.payload !== undefined) {
+    if (typeof body.payload !== "string") {
+      res.status(400).json({ error: "payload must be a string (empty clears it)", field: "payload" });
+      return;
+    }
+    const trimmed = body.payload.trim();
+    if (trimmed) {
+      const parsed = parsePayloadTemplate(trimmed);
+      if ("error" in parsed) {
+        res.status(400).json({ error: parsed.error, field: "payload" });
+        return;
+      }
+      payload = parsed.content;
+    }
+  }
+  const now = new Date().toISOString();
+  // A new row is never scheduled by default: the timed trigger keeps
+  // firing the row that was scheduled before, until one is set active.
+  deps.driver.saveWebhookConfig({
+    name: name.name,
+    url: urlRaw,
+    token: tokenRaw,
+    payload,
+    is_active: false,
+    updated_at: now,
+  });
+  res.status(201).json({
+    name: name.name,
+    url: urlRaw,
+    payload,
+    is_active: false,
+    hasToken: true,
+    updated_at: now,
+  });
+}
+
+export function getWebhook(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const row = deps.driver.getWebhookConfig(req.params.name);
+  if (!row) {
+    res.status(404).json({ error: "webhook not found" });
+    return;
+  }
+  res.json({
+    name: row.name,
+    url: row.url,
+    payload: row.payload,
+    is_active: row.is_active,
+    hasToken: row.token.trim() !== "",
+    updated_at: row.updated_at,
+  });
+}
+
+export function updateWebhook(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const existing = deps.driver.getWebhookConfig(req.params.name);
+  if (!existing) {
+    res.status(404).json({ error: "webhook not found" });
+    return;
+  }
+  const body = (req.body ?? {}) as {
+    webhookUrl?: unknown;
+    webhookToken?: unknown;
+    payload?: unknown;
+  };
+  let url = existing.url;
+  let token = existing.token;
+  let payload = existing.payload;
+  if (typeof body.webhookUrl === "string" && body.webhookUrl.trim()) {
+    if (!validWebhookUrl(body.webhookUrl.trim())) {
+      res.status(400).json({ error: "webhookUrl must be an https URL (loopback http allowed)", field: "webhookUrl" });
+      return;
+    }
+    url = body.webhookUrl.trim();
+  }
+  if (typeof body.webhookToken === "string" && body.webhookToken.trim()) {
+    if (!validWebhookToken(body.webhookToken.trim())) {
+      res.status(400).json({ error: "webhookToken must be a single token without whitespace or quotes", field: "webhookToken" });
+      return;
+    }
+    token = body.webhookToken.trim();
+  }
+  if ("payload" in body) {
+    // Full value, like the legacy single-row endpoint: absent keeps the
+    // stored template, an empty string clears it.
+    if (typeof body.payload !== "string") {
+      res.status(400).json({ error: "payload must be a string (empty clears it)", field: "payload" });
+      return;
+    }
+    const trimmed = body.payload.trim();
+    if (!trimmed) {
+      payload = null;
+    } else {
+      const parsed = parsePayloadTemplate(trimmed);
+      if ("error" in parsed) {
+        res.status(400).json({ error: parsed.error, field: "payload" });
+        return;
+      }
+      payload = parsed.content;
+    }
+  }
+  const row = {
+    ...existing,
+    url,
+    token,
+    payload,
+    updated_at: new Date().toISOString(),
+  };
+  deps.driver.saveWebhookConfig(row);
+  res.json({
+    name: row.name,
+    url: row.url,
+    payload: row.payload,
+    is_active: row.is_active,
+    hasToken: row.token.trim() !== "",
+    updated_at: row.updated_at,
+  });
+}
+
+export function deleteWebhook(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  if (!deps.driver.deleteWebhookConfig(req.params.name)) {
+    res.status(404).json({ error: "webhook not found" });
+    return;
+  }
+  res.json({ ok: true });
+}
+
+export function setWebhookActive(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const target = deps.driver.getWebhookConfig(req.params.name);
+  if (!target) {
+    res.status(404).json({ error: "webhook not found" });
+    return;
+  }
+  const body = (req.body ?? {}) as { active?: unknown };
+  if (typeof body.active !== "boolean") {
+    res.status(400).json({ error: "active must be a boolean", field: "active" });
+    return;
+  }
+  if (body.active) {
+    activateWebhook(deps.driver, target.name);
+  } else {
+    deps.driver.saveWebhookConfig({
+      ...target,
+      is_active: false,
+      updated_at: new Date().toISOString(),
+    });
+  }
+  const row = deps.driver.getWebhookConfig(target.name);
+  res.json({
+    name: target.name,
+    url: target.url,
+    payload: target.payload,
+    is_active: row?.is_active ?? false,
+    hasToken: (row?.token ?? "").trim() !== "",
+    updated_at: row?.updated_at ?? target.updated_at,
   });
 }
 
@@ -558,8 +800,12 @@ export function importCursorWebhook(deps: AdminDeps, req: Request, res: Response
     url: url.trim(),
     token: token.trim(),
     payload: deps.driver.getWebhookConfig(CURSOR_WEBHOOK_NAME)?.payload ?? null,
+    is_active: true,
     updated_at: new Date().toISOString(),
   });
+  // The imported row becomes the scheduled webhook; any previously
+  // scheduled row stops being it.
+  activateWebhook(deps.driver, CURSOR_WEBHOOK_NAME);
   res.json(cursorStatus(deps.config, deps.envFile, deps.driver));
 }
 
@@ -620,6 +866,41 @@ export function triggerCursor(deps: AdminDeps, req: Request, res: Response): voi
     }
     payloadOverride = row.content;
   }
+  runTriggerChild(deps, res, { payloadOverride });
+}
+
+/**
+ * Test-fire one webhook row once, without changing the scheduled row or
+ * the trigger cadence: the child runs the job with a webhook override,
+ * so it fires this row and skips the interval gate and the state write
+ * (see the job file). The row must exist — resolved here, before spawn,
+ * so an unknown name is a 404, never a misdirected fire.
+ */
+export function testWebhook(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const row = deps.driver.getWebhookConfig(req.params.name);
+  if (!row) {
+    res.status(404).json({ error: "webhook not found" });
+    return;
+  }
+  if (triggerInFlight) {
+    res.status(409).json({ error: "trigger already running" });
+    return;
+  }
+  runTriggerChild(deps, res, { webhookOverride: row.name });
+}
+
+/**
+ * Shared child-spawn for manual triggers: runs the cursor-trigger job
+ * once, exactly like the scheduler does (same code, same environment).
+ * A second concurrent request is rejected by the callers' 409 guard, not
+ * here, so the guard stays in front of the (possibly slow) row lookups.
+ */
+function runTriggerChild(
+  deps: AdminDeps,
+  res: Response,
+  overrides: { payloadOverride?: string | null; webhookOverride?: string | null },
+): void {
   const script = cursorRunnerScript(deps.config, deps.envFile);
   if (!existsSync(script)) {
     res.status(500).json({ ok: false, error: "job runner script not found (is the runner built?)" });
@@ -640,9 +921,11 @@ export function triggerCursor(deps: AdminDeps, req: Request, res: Response): voi
   for (const k of ["CURSOR_WEBHOOK_URL", "CURSOR_AUTOMATION_TOKEN", "CURSOR_TRIGGER_INTERVAL_MINUTES"]) {
     if (fileVals.get(k)) delete childEnv[k];
   }
-  // Set after the scrub: the override is per-trigger, never a .env value,
-  // and the child's env loader never overwrites variables already present.
-  if (payloadOverride !== null) childEnv.CURSOR_TRIGGER_PAYLOAD_OVERRIDE = payloadOverride;
+  // Set after the scrub: the overrides are per-trigger, never .env
+  // values, and the child's env loader never overwrites variables
+  // already present.
+  if (overrides.payloadOverride) childEnv.CURSOR_TRIGGER_PAYLOAD_OVERRIDE = overrides.payloadOverride;
+  if (overrides.webhookOverride) childEnv.CURSOR_TRIGGER_WEBHOOK_OVERRIDE = overrides.webhookOverride;
   execFile(
     process.execPath,
     [script, "--run", "cursor-trigger"],

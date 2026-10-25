@@ -82,6 +82,11 @@ export function registerRoutes(
         admin_cursor_payloads: `GET ${base}/api/v1/admin/jobs/cursor-trigger/payloads`,
         admin_cursor_payload: `POST ${base}/api/v1/admin/jobs/cursor-trigger/payloads`,
         admin_cursor_payload_active: `POST ${base}/api/v1/admin/jobs/cursor-trigger/payloads/:id/active`,
+        admin_cursor_webhooks: `GET ${base}/api/v1/admin/jobs/cursor-trigger/webhooks`,
+        admin_cursor_webhook_create: `POST ${base}/api/v1/admin/jobs/cursor-trigger/webhooks`,
+        admin_cursor_webhook_detail: `GET ${base}/api/v1/admin/jobs/cursor-trigger/webhooks/:name`,
+        admin_cursor_webhook_active: `POST ${base}/api/v1/admin/jobs/cursor-trigger/webhooks/:name/active`,
+        admin_cursor_webhook_test: `POST ${base}/api/v1/admin/jobs/cursor-trigger/webhooks/:name/test`,
       },
       console: `${base}/console`,
       docs: "https://github.com/joesaas/data-pipeline",
@@ -229,6 +234,27 @@ export function registerRoutes(
   );
   router.post("/api/v1/admin/jobs/cursor-trigger/payloads/:id/active", (req, res) =>
     admin.setCursorPayloadActive(adminDeps, req, res),
+  );
+  router.get("/api/v1/admin/jobs/cursor-trigger/webhooks", (req, res) =>
+    admin.listWebhooks(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/jobs/cursor-trigger/webhooks", (req, res) =>
+    admin.createWebhook(adminDeps, req, res),
+  );
+  router.get("/api/v1/admin/jobs/cursor-trigger/webhooks/:name", (req, res) =>
+    admin.getWebhook(adminDeps, req, res),
+  );
+  router.put("/api/v1/admin/jobs/cursor-trigger/webhooks/:name", (req, res) =>
+    admin.updateWebhook(adminDeps, req, res),
+  );
+  router.delete("/api/v1/admin/jobs/cursor-trigger/webhooks/:name", (req, res) =>
+    admin.deleteWebhook(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/jobs/cursor-trigger/webhooks/:name/active", (req, res) =>
+    admin.setWebhookActive(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/jobs/cursor-trigger/webhooks/:name/test", (req, res) =>
+    admin.testWebhook(adminDeps, req, res),
   );
 
   if (config.basePath) app.use(config.basePath, router);

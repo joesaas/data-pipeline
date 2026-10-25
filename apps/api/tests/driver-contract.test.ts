@@ -127,26 +127,32 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
         url: "https://hooks.example/hook",
         token: "tok-1",
         payload: null,
+        is_active: false,
         updated_at: "2026-10-25T00:00:00.000Z",
       });
       assert.equal(driver.getWebhookConfig("cursor-trigger")?.token, "tok-1");
       assert.equal(driver.getWebhookConfig("cursor-trigger")?.payload, null);
+      assert.equal(driver.getWebhookConfig("cursor-trigger")?.is_active, false);
       driver.saveWebhookConfig({
         name: "cursor-trigger",
         url: "https://hooks.example/hook2",
         token: "tok-2",
         payload: JSON.stringify({ prompt: "do it" }),
+        is_active: true,
         updated_at: "2026-10-25T01:00:00.000Z",
       });
       const row = driver.getWebhookConfig("cursor-trigger");
       assert.equal(row?.url, "https://hooks.example/hook2");
       assert.equal(row?.token, "tok-2");
       assert.equal(row?.payload, JSON.stringify({ prompt: "do it" }));
+      assert.equal(row?.is_active, true);
       const listed = driver.listWebhookConfigs();
       assert.equal(listed.length, 1);
       assert.equal(listed[0].name, "cursor-trigger");
       assert.equal(listed[0].url, "https://hooks.example/hook2");
       assert.equal(listed[0].payload, JSON.stringify({ prompt: "do it" }));
+      assert.equal(listed[0].is_active, true);
+      assert.equal(listed[0].hasToken, true);
       assert.equal("token" in listed[0], false);
       assert.equal(driver.deleteWebhookConfig("cursor-trigger"), true);
       assert.equal(driver.deleteWebhookConfig("cursor-trigger"), false);
@@ -195,3 +201,46 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
 
 contract("sqlite", (dir) => new SqliteDriver(join(dir, "test.db")));
 contract("file", (dir) => new FileDriver(join(dir, "files")));
+
+// SQLite-only: opening a database created before the webhook list existed
+// migrates the legacy single row to scheduled (is_active), and rows of
+// other names stay unscheduled.
+describe("sqlite webhook migration", () => {
+  it("marks the legacy cursor-trigger row active, others inactive", async () => {
+    const { DatabaseSync } = await import("node:sqlite");
+    const dir = mkdtempSync(join(tmpdir(), "dp-migration-"));
+    try {
+      const path = join(dir, "old.db");
+      const db = new DatabaseSync(path);
+      db.exec(
+        "CREATE TABLE webhook_configs (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL, payload TEXT, updated_at TEXT NOT NULL);",
+      );
+      db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?, ?)").run(
+        "cursor-trigger",
+        "https://old.example/hook",
+        "old-token",
+        null,
+        "2026-10-25T00:00:00.000Z",
+      );
+      db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?, ?)").run(
+        "other",
+        "https://other.example/hook",
+        "other-token",
+        null,
+        "2026-10-25T00:00:00.000Z",
+      );
+      db.close();
+      const driver = new SqliteDriver(path);
+      try {
+        assert.equal(driver.getWebhookConfig("cursor-trigger")?.is_active, true);
+        assert.equal(driver.getWebhookConfig("other")?.is_active, false);
+        const active = driver.listWebhookConfigs().filter((m) => m.is_active);
+        assert.deepEqual(active.map((m) => m.name), ["cursor-trigger"]);
+      } finally {
+        driver.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

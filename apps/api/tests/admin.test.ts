@@ -597,4 +597,87 @@ describe("admin routes", () => {
       process.env.PATH = savedPath;
     }
   });
+
+  it("webhook list: create/list/detail/update/active/delete, token never exposed", async () => {
+    // Fresh app: the shared ctx already holds rows from earlier tests.
+    const dir2 = join(tmpdir(), `dp-admin-webhooks-${Date.now()}`);
+    mkdirSync(dir2, { recursive: true });
+    const ctx2 = await start(baseConfig(dir2));
+    try {
+      const base = "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhooks";
+      const list = async () =>
+        (await req(ctx2, "GET", base, ctx2.adminKey)).body as unknown as Record<string, unknown>[];
+      // Auth: anonymous 401, user 403.
+      assert.equal((await req(ctx2, "GET", base)).status, 401);
+      assert.equal((await req(ctx2, "GET", base, ctx2.userKey)).status, 403);
+      assert.deepEqual(await list(), []);
+      // Validation: bad URL, bad token, missing name, bad payload.
+      assert.equal((await req(ctx2, "POST", base, ctx2.adminKey, { name: "a", webhookUrl: "http://example.com/x", webhookToken: "t" })).status, 400);
+      assert.equal((await req(ctx2, "POST", base, ctx2.adminKey, { name: "a", webhookUrl: "https://example.com/x", webhookToken: "has space" })).status, 400);
+      assert.equal((await req(ctx2, "POST", base, ctx2.adminKey, { webhookUrl: "https://example.com/x", webhookToken: "t" })).status, 400);
+      assert.equal((await req(ctx2, "POST", base, ctx2.adminKey, { name: "a", webhookUrl: "https://example.com/x", webhookToken: "t", payload: "{bad" })).status, 400);
+      // Create two rows; new rows are never scheduled by default.
+      const a = await req(ctx2, "POST", base, ctx2.adminKey, { name: "hook-a", webhookUrl: "https://a.example/hook", webhookToken: "tok-a", payload: JSON.stringify({ prompt: "A" }) });
+      assert.equal(a.status, 201);
+      assert.equal(a.body.is_active, false);
+      assert.equal(a.body.hasToken, true);
+      assert.equal("token" in a.body, false);
+      const b = await req(ctx2, "POST", base, ctx2.adminKey, { name: "hook-b", webhookUrl: "https://b.example/hook", webhookToken: "tok-b" });
+      assert.equal(b.status, 201);
+      // Duplicate name → 409.
+      assert.equal((await req(ctx2, "POST", base, ctx2.adminKey, { name: "hook-a", webhookUrl: "https://a.example/hook", webhookToken: "tok-a" })).status, 409);
+      // List shows both, oldest-updated first.
+      assert.deepEqual((await list()).map((w) => w.name), ["hook-a", "hook-b"]);
+      // Detail: 404 unknown, 200 known without token.
+      assert.equal((await req(ctx2, "GET", `${base}/nope`, ctx2.adminKey)).status, 404);
+      const detail = await req(ctx2, "GET", `${base}/hook-a`, ctx2.adminKey);
+      assert.equal(detail.status, 200);
+      assert.equal(detail.body.url, "https://a.example/hook");
+      assert.equal(detail.body.hasToken, true);
+      assert.equal("token" in detail.body, false);
+      // Update: partial (token kept when omitted), payload full-value clear.
+      const upd = await req(ctx2, "PUT", `${base}/hook-a`, ctx2.adminKey, { webhookUrl: "https://a2.example/hook", payload: "" });
+      assert.equal(upd.status, 200);
+      assert.equal(upd.body.url, "https://a2.example/hook");
+      assert.equal(upd.body.payload, null);
+      assert.equal(upd.body.hasToken, true);
+      assert.equal((await req(ctx2, "PUT", `${base}/nope`, ctx2.adminKey, { webhookUrl: "https://x.example/h" })).status, 404);
+      // Active: setting one active clears the others; status follows it.
+      await req(ctx2, "POST", `${base}/hook-a/active`, ctx2.adminKey, { active: true });
+      assert.deepEqual((await list()).filter((w) => w.is_active).map((w) => w.name), ["hook-a"]);
+      await req(ctx2, "POST", `${base}/hook-b/active`, ctx2.adminKey, { active: true });
+      assert.deepEqual((await list()).filter((w) => w.is_active).map((w) => w.name), ["hook-b"]);
+      const status = await req(ctx2, "GET", "/data-pipeline/api/v1/admin/jobs/cursor-trigger", ctx2.adminKey);
+      assert.equal(status.body.activeWebhookName, "hook-b");
+      assert.equal(status.body.webhookConfigured, true);
+      assert.equal(status.body.webhookSource, "db");
+      assert.equal((await req(ctx2, "POST", `${base}/hook-b/active`, ctx2.adminKey, { active: "yes" })).status, 400);
+      // Delete: 404 unknown, then removes.
+      assert.equal((await req(ctx2, "DELETE", `${base}/nope`, ctx2.adminKey)).status, 404);
+      assert.equal((await req(ctx2, "DELETE", `${base}/hook-a`, ctx2.adminKey)).status, 200);
+      assert.deepEqual((await list()).map((w) => w.name), ["hook-b"]);
+    } finally {
+      ctx2.close();
+    }
+  });
+
+  it("webhook test: unknown name 404s before spawn, known name runs the runner script", async () => {
+    const dir2 = join(tmpdir(), `dp-admin-webhook-test-${Date.now()}`);
+    mkdirSync(dir2, { recursive: true });
+    const ctx2 = await start(baseConfig(dir2));
+    try {
+      const base = "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhooks";
+      assert.equal((await req(ctx2, "POST", `${base}/nope/test`, ctx2.adminKey, {})).status, 404);
+      await req(ctx2, "POST", base, ctx2.adminKey, { name: "hook-t", webhookUrl: "https://t.example/hook", webhookToken: "tok-t" });
+      const scriptDir = join(dir2, "workers/job-runner/dist/src");
+      mkdirSync(scriptDir, { recursive: true });
+      writeFileSync(join(scriptDir, "main.js"), `console.log("fake test ok");\n`);
+      const r = await req(ctx2, "POST", `${base}/hook-t/test`, ctx2.adminKey, {});
+      assert.equal(r.status, 200);
+      assert.equal(r.body.ok, true);
+      assert.match(r.body.output as string, /fake test ok/);
+    } finally {
+      ctx2.close();
+    }
+  });
 });

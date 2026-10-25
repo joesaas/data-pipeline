@@ -2,7 +2,10 @@
  * cursor-trigger job — migrated from the standalone data-cursor-trigger
  * service (same webhook request shape, same prompt/state rules). The
  * endpoint itself now comes from the API database first (console-managed
- * webhook_configs table), with the environment as fallback.
+ * webhook_configs table), with the environment as fallback. The scheduled
+ * trigger fires the row marked active; CURSOR_TRIGGER_WEBHOOK_OVERRIDE
+ * names one row to test-fire once instead, bypassing the interval gate
+ * and the state write so a test never disturbs the schedule.
  *
  * Bree ticks this file every minute; the file itself decides whether the
  * configured interval has elapsed (see cursor-state.ts), so the cadence
@@ -31,7 +34,7 @@ import {
   shouldTrigger,
   stateFilePath,
 } from "../cursor-state.js";
-import { apiDbPath, loadActivePayloadFromDb, loadWebhookConfigFromDb } from "../webhook-config.js";
+import { apiDbPath, loadActivePayloadFromDb, loadWebhookConfigByName, loadWebhookConfigFromDb } from "../webhook-config.js";
 
 const envFile = loadDefaultEnv();
 const statePath = stateFilePath(envFile, dirname(fileURLToPath(import.meta.url)));
@@ -40,7 +43,15 @@ const now = new Date();
 const state = loadState(statePath);
 const intervalMinutes = resolveIntervalMinutes(state, process.env);
 
-if (!shouldTrigger(state, intervalMinutes, now)) {
+// A webhook override means "test-fire this row once" (console test
+// button): it bypasses the interval gate and never writes the state
+// file, so testing neither waits for the cadence nor postpones the next
+// scheduled fire. A missing override row is a hard error — a test must
+// never silently fall back to the scheduled webhook or the environment.
+const webhookOverride = process.env.CURSOR_TRIGGER_WEBHOOK_OVERRIDE?.trim() || null;
+const isTest = webhookOverride !== null;
+
+if (!isTest && !shouldTrigger(state, intervalMinutes, now)) {
   console.log(
     `[job-runner] cursor-trigger: skip (last ok ${state.lastTriggeredAt}, interval ${intervalMinutes}m)`,
   );
@@ -50,7 +61,15 @@ if (!shouldTrigger(state, intervalMinutes, now)) {
     // The read happens on every trigger attempt, so a console save takes
     // effect on the next tick with no runner restart.
     const dbPath = apiDbPath(envFile);
-    const dbConfig = loadWebhookConfigFromDb(dbPath);
+    let dbConfig: { url: string; token: string; payload: string | null } | null;
+    if (isTest) {
+      dbConfig = loadWebhookConfigByName(dbPath, webhookOverride);
+      if (!dbConfig) {
+        throw new Error(`test webhook "${webhookOverride}" not found in the database`);
+      }
+    } else {
+      dbConfig = loadWebhookConfigFromDb(dbPath);
+    }
     const config = resolveWebhookConfig(process.env, dbConfig);
     const full = {
       ...config,
@@ -59,12 +78,14 @@ if (!shouldTrigger(state, intervalMinutes, now)) {
       payloadOverride: process.env.CURSOR_TRIGGER_PAYLOAD_OVERRIDE,
     };
     const result = await triggerOnce(full, now);
-    saveState(statePath, { ...state, lastTriggeredAt: now.toISOString() });
+    if (!isTest) {
+      saveState(statePath, { ...state, lastTriggeredAt: now.toISOString() });
+    }
     const origin = new URL(config.url).origin;
     const kind = templateKind(full);
     const bodyKind = kind ? `payload(${kind})` : state.prompt ? "prompt" : "ping";
     console.log(
-      `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… interval=${intervalMinutes}m body=${bodyKind} cfg=${dbConfig ? "db" : "env"}`,
+      `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… interval=${intervalMinutes}m body=${bodyKind} cfg=${dbConfig ? "db" : "env"}${isTest ? " test" : ""}`,
     );
   } catch (err) {
     console.error(

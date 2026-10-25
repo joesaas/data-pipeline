@@ -22,11 +22,45 @@ export function apiDbPath(envFile: string | null): string {
  * timeout: the API runs WAL mode, so readers proceed alongside writers,
  * and a contended read waits briefly instead of failing outright.
  *
- * Returns null on ANY failure — missing file, missing table (a database
- * from before the table existed), locked, unreadable — so the caller
- * falls back to the environment instead of failing the trigger.
+ * Resolution order for the scheduled trigger: the row marked active
+ * (newest-updated wins if several are marked — the API keeps at most one
+ * active, this is belt and braces), then the legacy cursor-trigger row
+ * (databases from before the webhook list existed, where the migration
+ * has not marked it yet), then null — the caller falls back to the
+ * environment instead of failing the trigger.
+ *
+ * Returns null on ANY failure — missing file, missing table or column (a
+ * database from before the table/column existed), locked, unreadable.
  */
 export function loadWebhookConfigFromDb(dbPath: string): { url: string; token: string; payload: string | null } | null {
+  return loadActiveWebhookFromDb(dbPath) ?? loadWebhookConfigByName(dbPath, "cursor-trigger");
+}
+
+/** The row marked scheduled (is_active), newest-updated first, or null. */
+export function loadActiveWebhookFromDb(dbPath: string): { url: string; token: string; payload: string | null } | null {
+  if (!existsSync(dbPath)) return null;
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    db.exec("PRAGMA busy_timeout = 5000;");
+    const row = db
+      .prepare("SELECT url, token, payload FROM webhook_configs WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1")
+      .get() as { url: string; token: string; payload: string | null } | undefined;
+    if (!row || !row.url || !row.token) return null;
+    return { url: row.url, token: row.token, payload: row.payload ?? null };
+  } catch {
+    return null;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // Already closed; nothing to do.
+    }
+  }
+}
+
+/** One row by name (used for test-firing a specific webhook), or null. */
+export function loadWebhookConfigByName(dbPath: string, name: string): { url: string; token: string; payload: string | null } | null {
   if (!existsSync(dbPath)) return null;
   let db: DatabaseSync | null = null;
   try {
@@ -34,7 +68,7 @@ export function loadWebhookConfigFromDb(dbPath: string): { url: string; token: s
     db.exec("PRAGMA busy_timeout = 5000;");
     const row = db
       .prepare("SELECT url, token, payload FROM webhook_configs WHERE name = ?")
-      .get("cursor-trigger") as { url: string; token: string; payload: string | null } | undefined;
+      .get(name) as { url: string; token: string; payload: string | null } | undefined;
     if (!row || !row.url || !row.token) return null;
     return { url: row.url, token: row.token, payload: row.payload ?? null };
   } catch {

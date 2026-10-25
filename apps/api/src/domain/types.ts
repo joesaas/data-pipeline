@@ -58,6 +58,8 @@ export interface StoredWebhookConfig {
   url: string;
   token: string;
   payload: string | null;
+  /** True when this is the webhook the scheduled trigger fires. At most one row is active. */
+  is_active: boolean;
   updated_at: string;
 }
 
@@ -66,6 +68,9 @@ export interface WebhookConfigMeta {
   name: string;
   url: string;
   payload: string | null;
+  is_active: boolean;
+  /** Whether a token is stored (the value itself is never exposed). */
+  hasToken: boolean;
   updated_at: string;
 }
 

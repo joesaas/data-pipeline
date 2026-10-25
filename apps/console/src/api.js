@@ -65,13 +65,19 @@ export const adminApi = {
     api("POST", `/api/v1/admin/jobs/cursor-trigger/payloads/${id}/active`, key, { active }),
   cursorInterval: (key, intervalMinutes) =>
     api("PUT", "/api/v1/admin/jobs/cursor-trigger/interval", key, { intervalMinutes }),
-  cursorWebhook: (key, body) =>
-    api("PUT", "/api/v1/admin/jobs/cursor-trigger/webhook", key, body),
-  cursorWebhookGet: (key) => api("GET", "/api/v1/admin/jobs/cursor-trigger/webhook", key),
+  cursorWebhooks: (key) => api("GET", "/api/v1/admin/jobs/cursor-trigger/webhooks", key),
+  cursorWebhookCreate: (key, body) =>
+    api("POST", "/api/v1/admin/jobs/cursor-trigger/webhooks", key, body),
+  cursorWebhookUpdate: (key, name, body) =>
+    api("PUT", `/api/v1/admin/jobs/cursor-trigger/webhooks/${encodeURIComponent(name)}`, key, body),
+  cursorWebhookDelete: (key, name) =>
+    api("DELETE", `/api/v1/admin/jobs/cursor-trigger/webhooks/${encodeURIComponent(name)}`, key),
+  cursorWebhookActive: (key, name, active) =>
+    api("POST", `/api/v1/admin/jobs/cursor-trigger/webhooks/${encodeURIComponent(name)}/active`, key, { active }),
+  cursorWebhookTest: (key, name) =>
+    api("POST", `/api/v1/admin/jobs/cursor-trigger/webhooks/${encodeURIComponent(name)}/test`, key, {}),
   cursorWebhookImport: (key) =>
     api("POST", "/api/v1/admin/jobs/cursor-trigger/webhook/import", key),
-  cursorWebhookDelete: (key) =>
-    api("DELETE", "/api/v1/admin/jobs/cursor-trigger/webhook", key),
   cursorPrompt: (key, prompt) =>
     api("PUT", "/api/v1/admin/jobs/cursor-trigger/prompt", key, { prompt }),
   cursorRestart: (key) => api("POST", "/api/v1/admin/jobs/cursor-trigger/restart", key),

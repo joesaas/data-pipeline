@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
-import { apiDbPath, loadActivePayloadFromDb, loadWebhookConfigFromDb } from "../src/webhook-config.js";
+import { apiDbPath, loadActivePayloadFromDb, loadActiveWebhookFromDb, loadWebhookConfigByName, loadWebhookConfigFromDb } from "../src/webhook-config.js";
 
 describe("webhook-config", () => {
   it("apiDbPath: absolute DATA_DIR wins, relative resolves against the .env dir, else cwd", () => {
@@ -127,6 +127,80 @@ describe("webhook-config", () => {
         payload: null,
       });
       writer.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("scheduled load prefers the active row over the legacy cursor-trigger row", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dp-webhook-active-"));
+    try {
+      const path = join(dir, "data.db");
+      const db = new DatabaseSync(path);
+      db.exec(
+        "CREATE TABLE webhook_configs (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL, payload TEXT, is_active INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);",
+      );
+      db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?, ?, ?)").run(
+        "cursor-trigger",
+        "https://legacy.example/hook",
+        "legacy-token",
+        null,
+        0,
+        "2026-10-25T00:00:00.000Z",
+      );
+      db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?, ?, ?)").run(
+        "grok",
+        "https://grok.example/hook",
+        "grok-token",
+        JSON.stringify({ prompt: "grok template" }),
+        1,
+        "2026-10-25T01:00:00.000Z",
+      );
+      db.close();
+      assert.deepEqual(loadWebhookConfigFromDb(path), {
+        url: "https://grok.example/hook",
+        token: "grok-token",
+        payload: JSON.stringify({ prompt: "grok template" }),
+      });
+      assert.deepEqual(loadActiveWebhookFromDb(path), {
+        url: "https://grok.example/hook",
+        token: "grok-token",
+        payload: JSON.stringify({ prompt: "grok template" }),
+      });
+      assert.deepEqual(loadWebhookConfigByName(path, "cursor-trigger"), {
+        url: "https://legacy.example/hook",
+        token: "legacy-token",
+        payload: null,
+      });
+      assert.equal(loadWebhookConfigByName(path, "nope"), null);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("scheduled load falls back to the legacy row when nothing is active", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dp-webhook-nactive-"));
+    try {
+      const path = join(dir, "data.db");
+      const db = new DatabaseSync(path);
+      db.exec(
+        "CREATE TABLE webhook_configs (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL, payload TEXT, is_active INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);",
+      );
+      db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?, ?, ?)").run(
+        "cursor-trigger",
+        "https://legacy.example/hook",
+        "legacy-token",
+        null,
+        0,
+        "2026-10-25T00:00:00.000Z",
+      );
+      db.close();
+      assert.equal(loadActiveWebhookFromDb(path), null);
+      assert.deepEqual(loadWebhookConfigFromDb(path), {
+        url: "https://legacy.example/hook",
+        token: "legacy-token",
+        payload: null,
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

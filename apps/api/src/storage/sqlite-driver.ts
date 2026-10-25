@@ -91,6 +91,7 @@ export class SqliteDriver implements StorageDriver {
         url TEXT NOT NULL,
         token TEXT NOT NULL,
         payload TEXT,
+        is_active INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS webhook_payloads (
@@ -106,6 +107,12 @@ export class SqliteDriver implements StorageDriver {
     const webhookCols = this.db.prepare("PRAGMA table_info(webhook_configs)").all() as { name: string }[];
     if (!webhookCols.some((c) => c.name === "payload")) {
       this.db.exec("ALTER TABLE webhook_configs ADD COLUMN payload TEXT");
+    }
+    // Migration for databases created before the webhook list existed:
+    // the single row the old job looked up becomes the scheduled webhook.
+    if (!webhookCols.some((c) => c.name === "is_active")) {
+      this.db.exec("ALTER TABLE webhook_configs ADD COLUMN is_active INTEGER NOT NULL DEFAULT 0");
+      this.db.exec("UPDATE webhook_configs SET is_active = 1 WHERE name = 'cursor-trigger'");
     }
     // Migration for databases created before token roles existed.
     const tokenCols = this.db.prepare("PRAGMA table_info(tokens)").all() as { name: string }[];
@@ -247,25 +254,34 @@ export class SqliteDriver implements StorageDriver {
   }
 
   getWebhookConfig(name: string): StoredWebhookConfig | null {
+    type RawRow = Omit<StoredWebhookConfig, "is_active"> & { is_active: number };
     const row = this.db
-      .prepare("SELECT name, url, token, payload, updated_at FROM webhook_configs WHERE name = ?")
-      .get(name) as StoredWebhookConfig | undefined;
-    return row ?? null;
+      .prepare("SELECT name, url, token, payload, is_active, updated_at FROM webhook_configs WHERE name = ?")
+      .get(name) as RawRow | undefined;
+    if (!row) return null;
+    const { is_active, ...rest } = row;
+    return { ...rest, is_active: is_active === 1 };
   }
 
   listWebhookConfigs(): WebhookConfigMeta[] {
-    return this.db
-      .prepare("SELECT name, url, payload, updated_at FROM webhook_configs ORDER BY updated_at ASC, name ASC")
-      .all() as WebhookConfigMeta[];
+    type RawRow = Omit<StoredWebhookConfig, "is_active"> & { is_active: number };
+    const rows = this.db
+      .prepare("SELECT name, url, token, payload, is_active, updated_at FROM webhook_configs ORDER BY updated_at ASC, name ASC")
+      .all() as RawRow[];
+    return rows.map(({ token, is_active, ...rest }) => ({
+      ...rest,
+      is_active: is_active === 1,
+      hasToken: token.trim() !== "",
+    }));
   }
 
   saveWebhookConfig(cfg: StoredWebhookConfig): void {
     this.db
       .prepare(
-        `INSERT INTO webhook_configs (name, url, token, payload, updated_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(name) DO UPDATE SET url = excluded.url, token = excluded.token, payload = excluded.payload, updated_at = excluded.updated_at`,
+        `INSERT INTO webhook_configs (name, url, token, payload, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET url = excluded.url, token = excluded.token, payload = excluded.payload, is_active = excluded.is_active, updated_at = excluded.updated_at`,
       )
-      .run(cfg.name, cfg.url, cfg.token, cfg.payload, cfg.updated_at);
+      .run(cfg.name, cfg.url, cfg.token, cfg.payload, cfg.is_active ? 1 : 0, cfg.updated_at);
   }
 
   deleteWebhookConfig(name: string): boolean {
