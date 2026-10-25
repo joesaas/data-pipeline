@@ -95,6 +95,22 @@ describe("buildRequest", () => {
       other: "{{unknown}}",
     });
   });
+  it("payload template precedence: override beats active beats single, then prompt", () => {
+    const now = new Date("2026-10-24T02:00:00.000Z");
+    const base = { ...resolveConfig(ENV), prompt: "state prompt", payload: '{"k":"single"}' };
+    const active = buildRequest({ ...base, activePayload: '{"k":"active"}' }, now);
+    assert.equal((JSON.parse(active.body) as { k: string }).k, "active");
+    const override = buildRequest(
+      { ...base, activePayload: '{"k":"active"}', payloadOverride: '{"k":"override"}' },
+      now,
+    );
+    assert.equal((JSON.parse(override.body) as { k: string }).k, "override");
+    const single = buildRequest(base, now);
+    assert.equal((JSON.parse(single.body) as { k: string }).k, "single");
+    // Blank override/active fall through to the next layer.
+    const fall = buildRequest({ ...base, activePayload: "  ", payloadOverride: "" }, now);
+    assert.equal((JSON.parse(fall.body) as { k: string }).k, "single");
+  });
   it("payload template must be valid JSON and an object", () => {
     const now = new Date("2026-10-24T02:00:00.000Z");
     assert.throws(

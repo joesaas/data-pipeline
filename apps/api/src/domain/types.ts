@@ -70,6 +70,22 @@ export interface WebhookConfigMeta {
 }
 
 /**
+ * One saved webhook payload template in the console's payload list. The
+ * content is a user-authored JSON object (it usually contains the
+ * `prompt`); at most one row is active, and the scheduled trigger sends
+ * the active one. Content is not a secret, so list/detail endpoints
+ * return it in full.
+ */
+export interface WebhookPayload {
+  id: string;
+  name: string;
+  content: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
  * Identity an admin token resolves to. Records are siloed per identity;
  * drivers treat this identity as unscoped for reads (find / get / list /
  * delete). An admin identity is a reader, not a bucket: nothing is ever

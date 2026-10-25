@@ -1,7 +1,13 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { StoredRecord, StoredToken, StoredWebhookConfig, WebhookConfigMeta } from "../domain/types.js";
+import type {
+  StoredRecord,
+  StoredToken,
+  StoredWebhookConfig,
+  WebhookConfigMeta,
+  WebhookPayload,
+} from "../domain/types.js";
 import { ADMIN_IDENTITY } from "../domain/types.js";
 import type { StorageDriver } from "./storage-driver.js";
 
@@ -85,6 +91,14 @@ export class SqliteDriver implements StorageDriver {
         url TEXT NOT NULL,
         token TEXT NOT NULL,
         payload TEXT,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS webhook_payloads (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        content TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
     `);
@@ -256,6 +270,37 @@ export class SqliteDriver implements StorageDriver {
 
   deleteWebhookConfig(name: string): boolean {
     const res = this.db.prepare("DELETE FROM webhook_configs WHERE name = ?").run(name);
+    return Number(res.changes) > 0;
+  }
+
+  listWebhookPayloads(): WebhookPayload[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT id, name, content, is_active, created_at, updated_at FROM webhook_payloads ORDER BY updated_at DESC, id ASC",
+        )
+        .all() as (Omit<WebhookPayload, "is_active"> & { is_active: number })[]
+    ).map((r) => ({ ...r, is_active: r.is_active === 1 }));
+  }
+
+  getWebhookPayload(id: string): WebhookPayload | null {
+    const row = this.db
+      .prepare("SELECT id, name, content, is_active, created_at, updated_at FROM webhook_payloads WHERE id = ?")
+      .get(id) as (Omit<WebhookPayload, "is_active"> & { is_active: number }) | undefined;
+    return row ? { ...row, is_active: row.is_active === 1 } : null;
+  }
+
+  saveWebhookPayload(p: WebhookPayload): void {
+    this.db
+      .prepare(
+        `INSERT INTO webhook_payloads (id, name, content, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, content = excluded.content, is_active = excluded.is_active, updated_at = excluded.updated_at`,
+      )
+      .run(p.id, p.name, p.content, p.is_active ? 1 : 0, p.created_at, p.updated_at);
+  }
+
+  deleteWebhookPayload(id: string): boolean {
+    const res = this.db.prepare("DELETE FROM webhook_payloads WHERE id = ?").run(id);
     return Number(res.changes) > 0;
   }
 

@@ -23,7 +23,7 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadDefaultEnv } from "../load-env.js";
-import { resolveWebhookConfig, triggerOnce } from "../trigger.js";
+import { resolveWebhookConfig, templateKind, triggerOnce } from "../trigger.js";
 import {
   loadState,
   resolveIntervalMinutes,
@@ -31,7 +31,7 @@ import {
   shouldTrigger,
   stateFilePath,
 } from "../cursor-state.js";
-import { apiDbPath, loadWebhookConfigFromDb } from "../webhook-config.js";
+import { apiDbPath, loadActivePayloadFromDb, loadWebhookConfigFromDb } from "../webhook-config.js";
 
 const envFile = loadDefaultEnv();
 const statePath = stateFilePath(envFile, dirname(fileURLToPath(import.meta.url)));
@@ -49,15 +49,20 @@ if (!shouldTrigger(state, intervalMinutes, now)) {
     // Database config (console-managed) wins; .env is only the fallback.
     // The read happens on every trigger attempt, so a console save takes
     // effect on the next tick with no runner restart.
-    const dbConfig = loadWebhookConfigFromDb(apiDbPath(envFile));
+    const dbPath = apiDbPath(envFile);
+    const dbConfig = loadWebhookConfigFromDb(dbPath);
     const config = resolveWebhookConfig(process.env, dbConfig);
-    const result = await triggerOnce(
-      { ...config, prompt: state.prompt ?? undefined },
-      now,
-    );
+    const full = {
+      ...config,
+      prompt: state.prompt ?? undefined,
+      activePayload: loadActivePayloadFromDb(dbPath),
+      payloadOverride: process.env.CURSOR_TRIGGER_PAYLOAD_OVERRIDE,
+    };
+    const result = await triggerOnce(full, now);
     saveState(statePath, { ...state, lastTriggeredAt: now.toISOString() });
     const origin = new URL(config.url).origin;
-    const bodyKind = config.payload ? "payload" : state.prompt ? "prompt" : "ping";
+    const kind = templateKind(full);
+    const bodyKind = kind ? `payload(${kind})` : state.prompt ? "prompt" : "ping";
     console.log(
       `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… interval=${intervalMinutes}m body=${bodyKind} cfg=${dbConfig ? "db" : "env"}`,
     );

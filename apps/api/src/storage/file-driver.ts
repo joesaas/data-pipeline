@@ -1,6 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { StoredRecord, StoredToken, StoredWebhookConfig, WebhookConfigMeta } from "../domain/types.js";
+import type {
+  StoredRecord,
+  StoredToken,
+  StoredWebhookConfig,
+  WebhookConfigMeta,
+  WebhookPayload,
+} from "../domain/types.js";
 import { ADMIN_IDENTITY } from "../domain/types.js";
 import type { StorageDriver } from "./storage-driver.js";
 
@@ -19,14 +25,17 @@ export class FileDriver implements StorageDriver {
   private recordsDir: string;
   private tokensPath: string;
   private webhookConfigsPath: string;
+  private webhookPayloadsPath: string;
 
   constructor(dir: string) {
     this.recordsDir = join(dir, "records");
     this.tokensPath = join(dir, "tokens.json");
     this.webhookConfigsPath = join(dir, "webhook-configs.json");
+    this.webhookPayloadsPath = join(dir, "webhook-payloads.json");
     mkdirSync(this.recordsDir, { recursive: true });
     if (!existsSync(this.tokensPath)) writeFileSync(this.tokensPath, "[]");
     if (!existsSync(this.webhookConfigsPath)) writeFileSync(this.webhookConfigsPath, "[]");
+    if (!existsSync(this.webhookPayloadsPath)) writeFileSync(this.webhookPayloadsPath, "[]");
   }
 
   private readAllRecords(): StoredRecord[] {
@@ -174,6 +183,40 @@ export class FileDriver implements StorageDriver {
     const kept = cfgs.filter((c) => c.name !== name);
     if (kept.length === cfgs.length) return false;
     this.writeWebhookConfigs(kept);
+    return true;
+  }
+
+  private readWebhookPayloads(): WebhookPayload[] {
+    return JSON.parse(readFileSync(this.webhookPayloadsPath, "utf8")) as WebhookPayload[];
+  }
+
+  private writeWebhookPayloads(items: WebhookPayload[]): void {
+    writeFileSync(this.webhookPayloadsPath, JSON.stringify(items, null, 1));
+  }
+
+  listWebhookPayloads(): WebhookPayload[] {
+    return this.readWebhookPayloads().sort(
+      (a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id),
+    );
+  }
+
+  getWebhookPayload(id: string): WebhookPayload | null {
+    return this.readWebhookPayloads().find((p) => p.id === id) ?? null;
+  }
+
+  saveWebhookPayload(p: WebhookPayload): void {
+    const items = this.readWebhookPayloads();
+    const i = items.findIndex((x) => x.id === p.id);
+    if (i >= 0) items[i] = p;
+    else items.push(p);
+    this.writeWebhookPayloads(items);
+  }
+
+  deleteWebhookPayload(id: string): boolean {
+    const items = this.readWebhookPayloads();
+    const kept = items.filter((p) => p.id !== id);
+    if (kept.length === items.length) return false;
+    this.writeWebhookPayloads(kept);
     return true;
   }
 

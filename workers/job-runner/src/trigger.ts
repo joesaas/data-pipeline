@@ -27,6 +27,16 @@ export interface TriggerConfig {
    * body shape is used.
    */
   payload?: string | null;
+  /**
+   * Content of the active payload-list item (console-managed, read from
+   * the database on every attempt). Wins over `payload` below.
+   */
+  activePayload?: string | null;
+  /**
+   * One-off template for a manual trigger of a specific list item (passed
+   * by the API through the child environment). Wins over everything.
+   */
+  payloadOverride?: string;
 }
 
 /** A webhook endpoint read from the database (console-managed config). */
@@ -104,15 +114,17 @@ export interface TriggerRequest {
 }
 
 /**
- * The body is either the user-authored payload template (when set) or the
- * built-in shape. The template usually contains the `prompt` itself, so
- * when it is set the state's single prompt is ignored — the template is
- * authoritative. Placeholders {{triggered_at}} / {{source}} inside string
- * values are replaced with the run's values; anything else is sent
- * verbatim. A template that is not valid JSON, or not a JSON object, fails
- * here with a readable message (never echoing the template itself).
- * Without a template, the body is the old shape: {source, triggered_at}
- * plus `prompt` when the state has one, else just the ping.
+ * The body is either a user-authored payload template or the built-in
+ * shape. Template precedence: a manual-trigger override first, then the
+ * active payload-list item, then the webhook row's single template. A
+ * template usually contains the `prompt` itself, so when one is used the
+ * state's single prompt is ignored — the template is authoritative.
+ * Placeholders {{triggered_at}} / {{source}} inside string values are
+ * replaced with the run's values; anything else is sent verbatim. A
+ * template that is not valid JSON, or not a JSON object, fails here with
+ * a readable message (never echoing the template itself). Without a
+ * template, the body is the old shape: {source, triggered_at} plus
+ * `prompt` when the state has one, else just the ping.
  * The prompt is never logged (it can be long); only its presence is.
  */
 export function buildRequest(config: TriggerConfig, now: Date): TriggerRequest {
@@ -120,7 +132,11 @@ export function buildRequest(config: TriggerConfig, now: Date): TriggerRequest {
     Authorization: `Bearer ${config.token}`,
     "Content-Type": "application/json",
   };
-  const template = config.payload?.trim() ? config.payload : null;
+  const template =
+    config.payloadOverride?.trim() ||
+    config.activePayload?.trim() ||
+    config.payload?.trim() ||
+    null;
   if (template) {
     let parsed: unknown;
     try {
@@ -148,6 +164,14 @@ export function buildRequest(config: TriggerConfig, now: Date): TriggerRequest {
       ...(prompt ? { prompt } : {}),
     }),
   };
+}
+
+/** Which template (if any) buildRequest would use, for the job log line. */
+export function templateKind(config: TriggerConfig): "override" | "active" | "single" | null {
+  if (config.payloadOverride?.trim()) return "override";
+  if (config.activePayload?.trim()) return "active";
+  if (config.payload?.trim()) return "single";
+  return null;
 }
 
 export interface TriggerResult {

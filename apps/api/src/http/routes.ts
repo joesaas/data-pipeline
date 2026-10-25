@@ -79,6 +79,9 @@ export function registerRoutes(
         admin_cursor_webhook_delete: `DELETE ${base}/api/v1/admin/jobs/cursor-trigger/webhook`,
         admin_cursor_restart: `POST ${base}/api/v1/admin/jobs/cursor-trigger/restart`,
         admin_cursor_prompt: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/prompt`,
+        admin_cursor_payloads: `GET ${base}/api/v1/admin/jobs/cursor-trigger/payloads`,
+        admin_cursor_payload: `POST ${base}/api/v1/admin/jobs/cursor-trigger/payloads`,
+        admin_cursor_payload_active: `POST ${base}/api/v1/admin/jobs/cursor-trigger/payloads/:id/active`,
       },
       console: `${base}/console`,
       docs: "https://github.com/joesaas/data-pipeline",
@@ -211,6 +214,21 @@ export function registerRoutes(
   );
   router.put("/api/v1/admin/jobs/cursor-trigger/prompt", (req, res) =>
     admin.setCursorPrompt(adminDeps, req, res),
+  );
+  router.get("/api/v1/admin/jobs/cursor-trigger/payloads", (req, res) =>
+    admin.listCursorPayloads(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/jobs/cursor-trigger/payloads", (req, res) =>
+    admin.createCursorPayload(adminDeps, req, res),
+  );
+  router.put("/api/v1/admin/jobs/cursor-trigger/payloads/:id", (req, res) =>
+    admin.updateCursorPayload(adminDeps, req, res),
+  );
+  router.delete("/api/v1/admin/jobs/cursor-trigger/payloads/:id", (req, res) =>
+    admin.deleteCursorPayload(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/jobs/cursor-trigger/payloads/:id/active", (req, res) =>
+    admin.setCursorPayloadActive(adminDeps, req, res),
   );
 
   if (config.basePath) app.use(config.basePath, router);

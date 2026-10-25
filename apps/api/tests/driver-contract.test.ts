@@ -152,6 +152,44 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.equal(driver.deleteWebhookConfig("cursor-trigger"), false);
       assert.equal(driver.getWebhookConfig("cursor-trigger"), null);
     });
+
+    it("webhook payloads: save upserts, list newest-updated first, delete removes", () => {
+      assert.deepEqual(driver.listWebhookPayloads(), []);
+      driver.saveWebhookPayload({
+        id: "p1",
+        name: "news",
+        content: JSON.stringify({ prompt: "news brief" }),
+        is_active: false,
+        created_at: "2026-10-25T00:00:00.000Z",
+        updated_at: "2026-10-25T00:00:00.000Z",
+      });
+      driver.saveWebhookPayload({
+        id: "p2",
+        name: "other",
+        content: JSON.stringify({ prompt: "other" }),
+        is_active: true,
+        created_at: "2026-10-25T01:00:00.000Z",
+        updated_at: "2026-10-25T01:00:00.000Z",
+      });
+      const listed = driver.listWebhookPayloads();
+      assert.equal(listed.length, 2);
+      assert.equal(listed[0].id, "p2");
+      assert.equal(listed[0].is_active, true);
+      assert.equal(driver.getWebhookPayload("p1")?.content, JSON.stringify({ prompt: "news brief" }));
+      driver.saveWebhookPayload({
+        id: "p1",
+        name: "news renamed",
+        content: JSON.stringify({ prompt: "news v2" }),
+        is_active: true,
+        created_at: "2026-10-25T00:00:00.000Z",
+        updated_at: "2026-10-25T02:00:00.000Z",
+      });
+      assert.equal(driver.getWebhookPayload("p1")?.name, "news renamed");
+      assert.equal(driver.listWebhookPayloads()[0].id, "p1");
+      assert.equal(driver.deleteWebhookPayload("p2"), true);
+      assert.equal(driver.deleteWebhookPayload("p2"), false);
+      assert.equal(driver.getWebhookPayload("p2"), null);
+    });
   });
 }
 

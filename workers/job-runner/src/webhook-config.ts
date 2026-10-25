@@ -47,3 +47,31 @@ export function loadWebhookConfigFromDb(dbPath: string): { url: string; token: s
     }
   }
 }
+
+/**
+ * Content of the active payload-list item, or null when there is none
+ * (no table yet, no active row, or any read failure — the caller falls
+ * back to the single template / prompt / ping).
+ */
+export function loadActivePayloadFromDb(dbPath: string): string | null {
+  if (!existsSync(dbPath)) return null;
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    db.exec("PRAGMA busy_timeout = 5000;");
+    const row = db
+      .prepare(
+        "SELECT content FROM webhook_payloads WHERE is_active = 1 ORDER BY updated_at DESC, id ASC LIMIT 1",
+      )
+      .get() as { content: string } | undefined;
+    return row?.content?.trim() ? row.content : null;
+  } catch {
+    return null;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // Already closed; nothing to do.
+    }
+  }
+}

@@ -53,7 +53,16 @@ export const adminApi = {
     api("POST", "/api/v1/admin/tokens", key, { name, role }),
   revokeToken: (key, id) => api("POST", `/api/v1/admin/tokens/${id}/revoke`, key),
   cursorStatus: (key) => api("GET", "/api/v1/admin/jobs/cursor-trigger", key),
-  cursorTrigger: (key) => api("POST", "/api/v1/admin/jobs/cursor-trigger/trigger", key),
+  cursorTrigger: (key, body) => api("POST", "/api/v1/admin/jobs/cursor-trigger/trigger", key, body),
+  cursorPayloads: (key) => api("GET", "/api/v1/admin/jobs/cursor-trigger/payloads", key),
+  cursorPayloadCreate: (key, body) =>
+    api("POST", "/api/v1/admin/jobs/cursor-trigger/payloads", key, body),
+  cursorPayloadUpdate: (key, id, body) =>
+    api("PUT", `/api/v1/admin/jobs/cursor-trigger/payloads/${id}`, key, body),
+  cursorPayloadDelete: (key, id) =>
+    api("DELETE", `/api/v1/admin/jobs/cursor-trigger/payloads/${id}`, key),
+  cursorPayloadActive: (key, id, active) =>
+    api("POST", `/api/v1/admin/jobs/cursor-trigger/payloads/${id}/active`, key, { active }),
   cursorInterval: (key, intervalMinutes) =>
     api("PUT", "/api/v1/admin/jobs/cursor-trigger/interval", key, { intervalMinutes }),
   cursorWebhook: (key, body) =>

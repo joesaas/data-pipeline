@@ -1,4 +1,10 @@
-import type { StoredRecord, StoredToken, StoredWebhookConfig, WebhookConfigMeta } from "../domain/types.js";
+import type {
+  StoredRecord,
+  StoredToken,
+  StoredWebhookConfig,
+  WebhookConfigMeta,
+  WebhookPayload,
+} from "../domain/types.js";
 
 /**
  * The single storage interface (design doc §4). The ingest service depends
@@ -43,5 +49,12 @@ export interface StorageDriver {
   /** Insert or replace by name. */
   saveWebhookConfig(cfg: StoredWebhookConfig): void;
   deleteWebhookConfig(name: string): boolean;
+
+  /** Saved payload templates for the cursor trigger's payload list. */
+  listWebhookPayloads(): WebhookPayload[];
+  getWebhookPayload(id: string): WebhookPayload | null;
+  /** Insert or replace by id. */
+  saveWebhookPayload(p: WebhookPayload): void;
+  deleteWebhookPayload(id: string): boolean;
   close(): void;
 }

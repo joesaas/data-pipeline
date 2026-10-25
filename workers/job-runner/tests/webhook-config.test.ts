@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
-import { apiDbPath, loadWebhookConfigFromDb } from "../src/webhook-config.js";
+import { apiDbPath, loadActivePayloadFromDb, loadWebhookConfigFromDb } from "../src/webhook-config.js";
 
 describe("webhook-config", () => {
   it("apiDbPath: absolute DATA_DIR wins, relative resolves against the .env dir, else cwd", () => {
@@ -55,6 +55,50 @@ describe("webhook-config", () => {
         token: "db-token",
         payload: JSON.stringify({ prompt: "db prompt" }),
       });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("loadActivePayloadFromDb: newest-updated active row, null otherwise", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dp-active-payload-"));
+    try {
+      const path = join(dir, "data.db");
+      const db = new DatabaseSync(path);
+      db.exec(
+        "CREATE TABLE webhook_payloads (id TEXT PRIMARY KEY, name TEXT NOT NULL, content TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);",
+      );
+      assert.equal(loadActivePayloadFromDb(path), null);
+      db.prepare("INSERT INTO webhook_payloads VALUES (?, ?, ?, ?, ?, ?)").run(
+        "old",
+        "old",
+        JSON.stringify({ prompt: "old active" }),
+        1,
+        "2026-10-25T00:00:00.000Z",
+        "2026-10-25T00:00:00.000Z",
+      );
+      db.prepare("INSERT INTO webhook_payloads VALUES (?, ?, ?, ?, ?, ?)").run(
+        "new",
+        "new",
+        JSON.stringify({ prompt: "new active" }),
+        1,
+        "2026-10-25T01:00:00.000Z",
+        "2026-10-25T01:00:00.000Z",
+      );
+      db.prepare("INSERT INTO webhook_payloads VALUES (?, ?, ?, ?, ?, ?)").run(
+        "idle",
+        "idle",
+        JSON.stringify({ prompt: "inactive" }),
+        0,
+        "2026-10-25T02:00:00.000Z",
+        "2026-10-25T02:00:00.000Z",
+      );
+      db.close();
+      assert.equal(
+        loadActivePayloadFromDb(path),
+        JSON.stringify({ prompt: "new active" }),
+      );
+      assert.equal(loadActivePayloadFromDb(join(dir, "missing.db")), null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

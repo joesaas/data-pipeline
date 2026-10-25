@@ -109,7 +109,7 @@
           <div><label>webhook 配置</label><div>{{ cursor.webhookConfigured ? "已配置" : "未配置" }}</div></div>
           <div><label>配置来源</label><div>{{ cursor.webhookSource === "db" ? "数据库" : cursor.webhookSource === "env" ? "服务器 .env（回落）" : "—" }}</div></div>
           <div><label>数据库配置更新于</label><div>{{ cursor.webhookUpdatedAt ? fmtTime(cursor.webhookUpdatedAt) : "—" }}</div></div>
-          <div><label>payload 模板</label><div>{{ cursor.webhookPayloadSet ? "已设置" : "未设置（用内置 body）" }}</div></div>
+          <div><label>payload 列表</label><div>{{ cursor.payloadCount > 0 ? "共 " + cursor.payloadCount + " 条，定时：" + (cursor.activePayloadName || "未设") : "未设置（用内置 body）" }}</div></div>
           <div><label>区间来源</label><div>{{ cursor.intervalMinutes !== null ? "控制台设置" : "环境变量 / 默认 60 分钟" }}</div></div>
           <div><label>runner 脚本</label><div>{{ cursor.runnerScriptPresent ? "存在" : "缺失（job-runner 未构建？）" }}</div></div>
         </div>
@@ -122,11 +122,52 @@
           <input v-model="webhookToken" type="password" placeholder="Webhook token（留空则不改）" class="input" autocomplete="off" />
           <button class="btn primary" :disabled="busy">保存 webhook 配置</button>
         </form>
-        <form class="create" @submit.prevent="saveWebhook">
-          <textarea v-model="payloadInput" rows="8" placeholder='Payload（JSON 对象，如 {"prompt": "…"}，留空则清除模板、恢复内置 body）' class="input"></textarea>
-          <button class="btn primary" :disabled="busy">保存 payload</button>
+        <div class="row space">
+          <h3>Payload 列表</h3>
+          <button class="btn" :disabled="busy" @click="startAddPayload">新增</button>
+        </div>
+        <p class="hint">每条 payload 是一份触发 body 的 JSON（里面通常含 prompt）。点一条看详情；定时触发发的是标为“定时”的那条；单条的“触发一次”只发那条，不改定时设置。定时未设时，触发按老规则走：单个 payload 模板 → 单个 prompt → 只发 ping。</p>
+        <div v-if="payloadView === 'list'">
+          <div v-if="payloads.length === 0" class="hint">还没有 payload，点“新增”写一份。</div>
+          <div v-for="p in payloads" :key="p.id" class="row space listrow" @click="openPayload(p)">
+            <div>
+              <strong>{{ p.name }}</strong>
+              <span v-if="p.is_active" class="badge">定时</span>
+              <div class="hint">{{ fmtTime(p.updated_at) }}</div>
+            </div>
+            <div class="row" @click.stop>
+              <button class="btn" :disabled="busy" @click="openPayload(p)">详情</button>
+              <button class="btn" :disabled="busy" @click="startEditPayload(p)">编辑</button>
+              <button class="btn" :disabled="busy" @click="triggerPayload(p)">触发一次</button>
+              <button v-if="!p.is_active" class="btn" :disabled="busy" @click="setPayloadActive(p, true)">设为定时</button>
+              <button v-else class="btn" :disabled="busy" @click="setPayloadActive(p, false)">取消定时</button>
+            </div>
+          </div>
+        </div>
+        <div v-if="payloadView === 'detail' && selectedPayload">
+          <h4>{{ selectedPayload.name }} <span v-if="selectedPayload.is_active" class="badge">定时</span></h4>
+          <div class="hint">更新于 {{ fmtTime(selectedPayload.updated_at) }}</div>
+          <pre class="out">{{ selectedPayload.content }}</pre>
+          <div class="row">
+            <button class="btn" @click="payloadView = 'list'">返回列表</button>
+            <button class="btn" :disabled="busy" @click="startEditPayload(selectedPayload)">编辑</button>
+            <button class="btn" :disabled="busy" @click="triggerPayload(selectedPayload)">触发一次</button>
+            <button v-if="!selectedPayload.is_active" class="btn" :disabled="busy" @click="setPayloadActive(selectedPayload, true)">设为定时</button>
+            <button v-else class="btn" :disabled="busy" @click="setPayloadActive(selectedPayload, false)">取消定时</button>
+            <button class="btn danger" :disabled="busy" @click="deletePayload(selectedPayload)">删除</button>
+          </div>
+        </div>
+        <form v-if="payloadView === 'edit'" class="create" @submit.prevent="savePayloadForm">
+          <input v-model="editName" placeholder="名字（如：新闻简报）" class="input" />
+          <textarea v-model="editContent" rows="10" placeholder='JSON 对象，如 {"prompt": "…"}' class="input"></textarea>
+          <div class="row">
+            <button class="btn primary" :disabled="busy">保存</button>
+            <button class="btn" type="button" @click="payloadView = 'list'">取消</button>
+          </div>
         </form>
-        <p class="hint">URL 与 token 留空则不改（token 永不回显）；payload 是完整值，留空即清除模板。设置了 payload 后，触发 body 就用这份 JSON（里面通常含 prompt），下面的单个 prompt 不再生效；body 里可用占位符 &#123;&#123;triggered_at&#125;&#125; 与 &#123;&#123;source&#125;&#125;，发送时替换为本次触发的值。</p>
+        <p v-if="payloadOk" class="ok">{{ payloadOk }}</p>
+        <p v-if="payloadError" class="err">{{ payloadError }}</p>
+        <p class="hint">URL 与 token 留空则不改（token 永不回显）。保存到数据库后，下次触发即生效，无需重启。</p>
         <p v-if="webhookOk" class="ok">{{ webhookOk }}</p>
         <p v-if="webhookError" class="err">{{ webhookError }}</p>
         <div class="row">
@@ -188,9 +229,15 @@ const triggering = ref(false);
 const triggerResult = ref("");
 const webhookUrl = ref("");
 const webhookToken = ref("");
-const payloadInput = ref("");
 const savedWebhookUrl = ref("");
-const savedPayload = ref("");
+const payloads = ref([]);
+const payloadView = ref("list");
+const selectedPayload = ref(null);
+const editId = ref(null);
+const editName = ref("");
+const editContent = ref("");
+const payloadError = ref("");
+const payloadOk = ref("");
 const webhookError = ref("");
 const webhookOk = ref("");
 const promptInput = ref("");
@@ -289,23 +336,130 @@ async function refreshCursor() {
       promptInput.value = serverPrompt;
     }
     savedPrompt.value = serverPrompt;
-    // Same guard for the webhook form: URL and payload are echoed back
-    // (the token never is), but a refresh must not clobber unsaved edits.
+    // Same guard for the webhook form: the URL is echoed back (the token
+    // never is), but a refresh must not clobber an unsaved edit.
     try {
       const hook = await adminApi.cursorWebhookGet(key.value);
       if (webhookUrl.value === savedWebhookUrl.value) {
         webhookUrl.value = hook.url ?? "";
         savedWebhookUrl.value = webhookUrl.value;
       }
-      if (payloadInput.value === savedPayload.value) {
-        payloadInput.value = hook.payload ?? "";
-        savedPayload.value = payloadInput.value;
-      }
     } catch {
       // No stored webhook row yet: leave the form alone.
     }
+    await refreshPayloads();
   } catch (e) {
     cursorError.value = e.message;
+  }
+}
+
+async function refreshPayloads() {
+  try {
+    payloads.value = await adminApi.cursorPayloads(key.value);
+    if (selectedPayload.value) {
+      selectedPayload.value =
+        payloads.value.find((p) => p.id === selectedPayload.value.id) ?? null;
+      if (!selectedPayload.value && payloadView.value === "detail") payloadView.value = "list";
+    }
+  } catch (e) {
+    payloadError.value = e.message;
+  }
+}
+
+function openPayload(p) {
+  selectedPayload.value = p;
+  payloadView.value = "detail";
+  payloadError.value = "";
+  payloadOk.value = "";
+}
+
+function startAddPayload() {
+  editId.value = null;
+  editName.value = "";
+  editContent.value = "";
+  payloadView.value = "edit";
+  payloadError.value = "";
+  payloadOk.value = "";
+}
+
+function startEditPayload(p) {
+  editId.value = p.id;
+  editName.value = p.name;
+  editContent.value = p.content;
+  payloadView.value = "edit";
+  payloadError.value = "";
+  payloadOk.value = "";
+}
+
+async function savePayloadForm() {
+  payloadError.value = "";
+  payloadOk.value = "";
+  busy.value = true;
+  try {
+    const body = { name: editName.value, content: editContent.value };
+    const saved = editId.value
+      ? await adminApi.cursorPayloadUpdate(key.value, editId.value, body)
+      : await adminApi.cursorPayloadCreate(key.value, body);
+    payloadView.value = "list";
+    payloadOk.value = editId.value ? "payload 已更新。" : "payload 已新增。";
+    selectedPayload.value = saved;
+    await refreshPayloads();
+    await refreshCursor();
+  } catch (e) {
+    payloadError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function deletePayload(p) {
+  if (!window.confirm(`删除 payload「${p.name}」？删除后不可恢复。`)) return;
+  payloadError.value = "";
+  payloadOk.value = "";
+  busy.value = true;
+  try {
+    await adminApi.cursorPayloadDelete(key.value, p.id);
+    payloadView.value = "list";
+    selectedPayload.value = null;
+    payloadOk.value = "payload 已删除。";
+    await refreshPayloads();
+    await refreshCursor();
+  } catch (e) {
+    payloadError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function setPayloadActive(p, active) {
+  payloadError.value = "";
+  payloadOk.value = "";
+  busy.value = true;
+  try {
+    await adminApi.cursorPayloadActive(key.value, p.id, active);
+    payloadOk.value = active ? `「${p.name}」已设为定时 payload。` : "已取消定时 payload。";
+    await refreshPayloads();
+    await refreshCursor();
+  } catch (e) {
+    payloadError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function triggerPayload(p) {
+  triggering.value = true;
+  triggerResult.value = "";
+  payloadError.value = "";
+  try {
+    const data = await adminApi.cursorTrigger(key.value, { payloadId: p.id });
+    triggerResult.value = data.output || "触发成功";
+    payloadOk.value = `已触发「${p.name}」。`;
+    await refreshCursor();
+  } catch (e) {
+    triggerResult.value = `触发失败：${e.message}\n${e.data?.output || ""}`.trim();
+  } finally {
+    triggering.value = false;
   }
 }
 
@@ -341,24 +495,21 @@ async function saveWebhook() {
   busy.value = true;
   webhookError.value = "";
   webhookOk.value = "";
-  // URL/token are partial updates (empty = keep); payload is the full
-  // desired template, so it is always sent — even empty, which clears it.
+  // URL/token are partial updates (empty = keep).
   const body = {};
   if (webhookUrl.value.trim()) body.webhookUrl = webhookUrl.value.trim();
   if (webhookToken.value.trim()) body.webhookToken = webhookToken.value.trim();
-  body.payload = payloadInput.value;
-  if (!body.webhookUrl && !body.webhookToken && payloadInput.value === savedPayload.value) {
-    webhookError.value = "至少改一项（URL、token 或 payload）";
+  if (!body.webhookUrl && !body.webhookToken) {
+    webhookError.value = "至少填一项（URL 或 token）";
     busy.value = false;
     return;
   }
   try {
     cursor.value = await adminApi.cursorWebhook(key.value, body);
     intervalInput.value = cursor.value.effectiveIntervalMinutes;
-    // The token never comes back; the visible values stay as displayed.
+    // The token never comes back; the visible URL stays as displayed.
     webhookToken.value = "";
     savedWebhookUrl.value = webhookUrl.value;
-    savedPayload.value = payloadInput.value;
     webhookOk.value = "已保存到数据库，下次触发即生效，无需重启。";
   } catch (e) {
     webhookError.value = e.message;
@@ -461,6 +612,7 @@ body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", 
 .hint code { background: #f0f0f0; padding: 1px 6px; border-radius: 4px; }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .row.space { justify-content: space-between; }
+.listrow { cursor: pointer; border-bottom: 1px solid #eee; padding: 10px 0; }
 .input { border: 1px solid #ccc; border-radius: 8px; padding: 9px 12px; font-size: 14px; }
 .create textarea.input { width: 100%; min-height: 120px; font-family: inherit; line-height: 1.5; }
 .login .input { width: 100%; margin: 12px 0; }

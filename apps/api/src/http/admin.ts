@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { Request, Response } from "express";
@@ -169,6 +170,9 @@ export function cursorStatus(config: AppConfig, envFile: string | null, driver: 
   webhookUpdatedAt: string | null;
   /** Whether the database row carries a payload template. */
   webhookPayloadSet: boolean;
+  /** Payload-list summary (the list is the console's payload surface). */
+  payloadCount: number;
+  activePayloadName: string | null;
   runnerScriptPresent: boolean;
   /** The instruction text itself — not a secret, the console shows it. */
   prompt: string | null;
@@ -179,6 +183,8 @@ export function cursorStatus(config: AppConfig, envFile: string | null, driver: 
   const effective = effectiveIntervalMinutes(state, process.env);
   const dbRow = driver.getWebhookConfig(CURSOR_WEBHOOK_NAME);
   const inEnv = envWebhookPresent(config, envFile);
+  const payloads = driver.listWebhookPayloads();
+  const active = payloads.find((p) => p.is_active) ?? null;
   return {
     stateFilePresent: present,
     lastTriggeredAt: state.lastTriggeredAt,
@@ -192,6 +198,8 @@ export function cursorStatus(config: AppConfig, envFile: string | null, driver: 
     webhookInEnv: inEnv,
     webhookUpdatedAt: dbRow?.updated_at ?? null,
     webhookPayloadSet: Boolean(dbRow?.payload?.trim()),
+    payloadCount: payloads.length,
+    activePayloadName: active?.name ?? null,
     runnerScriptPresent: existsSync(cursorRunnerScript(config, envFile)),
     prompt: state.prompt,
   };
@@ -404,6 +412,132 @@ export function getCursorWebhook(deps: AdminDeps, req: Request, res: Response): 
   });
 }
 
+/** Shared validation for a payload template: must be a JSON object. */
+function parsePayloadTemplate(raw: unknown): { content: string } | { error: string } {
+  if (typeof raw !== "string") return { error: "payload must be a string" };
+  const trimmed = raw.trim();
+  if (trimmed.length > 200_000) return { error: "payload must be at most 200000 chars" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return { error: "payload must be valid JSON" };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { error: "payload must be a JSON object" };
+  }
+  return { content: trimmed };
+}
+
+function parsePayloadName(raw: unknown): { name: string } | { error: string } {
+  if (typeof raw !== "string") return { error: "name must be a string" };
+  const name = raw.trim();
+  if (!name) return { error: "name is required" };
+  if (name.length > 200) return { error: "name must be at most 200 chars" };
+  return { name };
+}
+
+/**
+ * Payload list (console-managed, content is not a secret): list, create,
+ * update, delete, and set-active. At most one row is active — activating
+ * one clears the others. The scheduled trigger sends the active row's
+ * content; a per-item "trigger once" passes its id to the trigger route.
+ */
+export function listCursorPayloads(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  res.json(deps.driver.listWebhookPayloads());
+}
+
+export function createCursorPayload(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const body = (req.body ?? {}) as { name?: unknown; content?: unknown };
+  const name = parsePayloadName(body.name);
+  if ("error" in name) {
+    res.status(400).json({ error: name.error, field: "name" });
+    return;
+  }
+  const content = parsePayloadTemplate(body.content);
+  if ("error" in content) {
+    res.status(400).json({ error: content.error, field: "content" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const row = {
+    id: randomUUID(),
+    name: name.name,
+    content: content.content,
+    is_active: false,
+    created_at: now,
+    updated_at: now,
+  };
+  deps.driver.saveWebhookPayload(row);
+  res.status(201).json(row);
+}
+
+export function updateCursorPayload(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const existing = deps.driver.getWebhookPayload(req.params.id);
+  if (!existing) {
+    res.status(404).json({ error: "payload not found" });
+    return;
+  }
+  const body = (req.body ?? {}) as { name?: unknown; content?: unknown };
+  let name = existing.name;
+  let content = existing.content;
+  if ("name" in body) {
+    const parsed = parsePayloadName(body.name);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error, field: "name" });
+      return;
+    }
+    name = parsed.name;
+  }
+  if ("content" in body) {
+    const parsed = parsePayloadTemplate(body.content);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error, field: "content" });
+      return;
+    }
+    content = parsed.content;
+  }
+  const row = { ...existing, name, content, updated_at: new Date().toISOString() };
+  deps.driver.saveWebhookPayload(row);
+  res.json(row);
+}
+
+export function deleteCursorPayload(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  if (!deps.driver.deleteWebhookPayload(req.params.id)) {
+    res.status(404).json({ error: "payload not found" });
+    return;
+  }
+  res.json({ ok: true });
+}
+
+export function setCursorPayloadActive(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const target = deps.driver.getWebhookPayload(req.params.id);
+  if (!target) {
+    res.status(404).json({ error: "payload not found" });
+    return;
+  }
+  const body = (req.body ?? {}) as { active?: unknown };
+  if (typeof body.active !== "boolean") {
+    res.status(400).json({ error: "active must be a boolean", field: "active" });
+    return;
+  }
+  const now = new Date().toISOString();
+  if (body.active) {
+    for (const p of deps.driver.listWebhookPayloads()) {
+      if (p.is_active && p.id !== target.id) {
+        deps.driver.saveWebhookPayload({ ...p, is_active: false, updated_at: now });
+      }
+    }
+  }
+  deps.driver.saveWebhookPayload({ ...target, is_active: body.active, updated_at: now });
+  res.json({ ...target, is_active: body.active, updated_at: now });
+}
+
 /**
  * One-click migration: copy the .env webhook values into the database
  * row, server-side — the values never travel to the browser. After this,
@@ -470,6 +604,22 @@ export function triggerCursor(deps: AdminDeps, req: Request, res: Response): voi
     res.status(409).json({ error: "trigger already running" });
     return;
   }
+  // Optional per-item trigger: fire this list item's content now, without
+  // changing what the scheduled trigger sends.
+  let payloadOverride: string | null = null;
+  const body = (req.body ?? {}) as { payloadId?: unknown };
+  if (body.payloadId !== undefined) {
+    if (typeof body.payloadId !== "string" || !body.payloadId) {
+      res.status(400).json({ error: "payloadId must be a string", field: "payloadId" });
+      return;
+    }
+    const row = deps.driver.getWebhookPayload(body.payloadId);
+    if (!row) {
+      res.status(404).json({ error: "payload not found" });
+      return;
+    }
+    payloadOverride = row.content;
+  }
   const script = cursorRunnerScript(deps.config, deps.envFile);
   if (!existsSync(script)) {
     res.status(500).json({ ok: false, error: "job runner script not found (is the runner built?)" });
@@ -490,6 +640,9 @@ export function triggerCursor(deps: AdminDeps, req: Request, res: Response): voi
   for (const k of ["CURSOR_WEBHOOK_URL", "CURSOR_AUTOMATION_TOKEN", "CURSOR_TRIGGER_INTERVAL_MINUTES"]) {
     if (fileVals.get(k)) delete childEnv[k];
   }
+  // Set after the scrub: the override is per-trigger, never a .env value,
+  // and the child's env loader never overwrites variables already present.
+  if (payloadOverride !== null) childEnv.CURSOR_TRIGGER_PAYLOAD_OVERRIDE = payloadOverride;
   execFile(
     process.execPath,
     [script, "--run", "cursor-trigger"],

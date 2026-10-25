@@ -359,6 +359,66 @@ describe("admin routes", () => {
     assert.equal(after.body.payload, null);
   });
 
+  it("payload list: create/validate/update/activate-uniquely/delete, trigger rejects unknown id", async () => {
+    const P = "/data-pipeline/api/v1/admin/jobs/cursor-trigger/payloads";
+    type Row = { id: string; name: string; is_active: boolean; content: string };
+    const asList = (b: unknown) => b as Row[];
+    const before = await req(ctx, "GET", P, ctx.adminKey);
+    const base = asList(before.body).length;
+    const mk = (name: string, content: string) => req(ctx, "POST", P, ctx.adminKey, { name, content });
+    const a = await mk("news", JSON.stringify({ prompt: "hi" }));
+    assert.equal(a.status, 201);
+    assert.equal(a.body.is_active, false);
+    const aId = a.body.id as string;
+    const b = await mk("other", JSON.stringify({ prompt: "other" }));
+    assert.equal(b.status, 201);
+    const bId = b.body.id as string;
+    for (const bad of [
+      { name: "", content: "{}" },
+      { name: "x", content: "{bad" },
+      { name: "x", content: '["array"]' },
+      { name: "x" },
+    ]) {
+      assert.equal((await req(ctx, "POST", P, ctx.adminKey, bad)).status, 400);
+    }
+    const list = await req(ctx, "GET", P, ctx.adminKey);
+    assert.equal(asList(list.body).length, base + 2);
+    const act = (id: string, active: boolean) =>
+      req(ctx, "POST", `${P}/${id}/active`, ctx.adminKey, { active });
+    assert.equal((await act(aId, true)).body.is_active, true);
+    const afterA = await req(ctx, "GET", P, ctx.adminKey);
+    assert.equal(asList(afterA.body).find((p) => p.id === aId)?.is_active, true);
+    assert.equal(asList(afterA.body).find((p) => p.id === bId)?.is_active, false);
+    assert.equal((await act(bId, true)).body.is_active, true);
+    const afterB = await req(ctx, "GET", P, ctx.adminKey);
+    assert.equal(asList(afterB.body).find((p) => p.id === aId)?.is_active, false);
+    assert.equal((await act(bId, false)).body.is_active, false);
+    const status = await req(ctx, "GET", "/data-pipeline/api/v1/admin/jobs/cursor-trigger", ctx.adminKey);
+    assert.equal(status.body.payloadCount, base + 2);
+    assert.equal(status.body.activePayloadName, null);
+    const renamed = await req(ctx, "PUT", `${P}/${aId}`, ctx.adminKey, { name: "news2" });
+    assert.equal(renamed.body.name, "news2");
+    assert.equal(renamed.body.content, JSON.stringify({ prompt: "hi" }));
+    const rewritten = await req(ctx, "PUT", `${P}/${aId}`, ctx.adminKey, {
+      content: JSON.stringify({ prompt: "v2" }),
+    });
+    assert.equal(rewritten.body.content, JSON.stringify({ prompt: "v2" }));
+    assert.equal((await req(ctx, "PUT", `${P}/nope`, ctx.adminKey, { name: "x" })).status, 404);
+    assert.equal((await req(ctx, "DELETE", `${P}/nope`, ctx.adminKey)).status, 404);
+    assert.equal((await act("nope", true)).status, 404);
+    assert.equal(
+      (await req(ctx, "POST", "/data-pipeline/api/v1/admin/jobs/cursor-trigger/trigger", ctx.adminKey, {
+        payloadId: "nope",
+      })).status,
+      404,
+    );
+    assert.equal((await req(ctx, "DELETE", `${P}/${aId}`, ctx.adminKey)).status, 200);
+    const gone = await req(ctx, "GET", P, ctx.adminKey);
+    assert.equal(asList(gone.body).some((p) => p.id === aId), false);
+    // Leave the other row behind for later tests to ignore (they filter by id).
+    assert.equal(asList(gone.body).some((p) => p.id === bId), true);
+  });
+
   it("webhook import copies .env into the database, delete falls back to .env then nothing", async () => {
     // Clear the row from the previous tests, then import from .env.
     const cleared = await req(
