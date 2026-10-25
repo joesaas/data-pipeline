@@ -13,5 +13,10 @@ const dbFile =
   join(process.env.CLEANER_DATA_DIR?.trim() || join(repoRoot, "workers/cleaner/data"), "cleaned.sqlite");
 const outDir = process.env.WEB_EXPORT_DIR?.trim() || join(repoRoot, "web-dist");
 
-const result = exportSite({ dbFile, outDir, publicApiPath: process.env.PUBLIC_API_PATH });
+const result = exportSite({
+  dbFile,
+  outDir,
+  publicApiPath: process.env.PUBLIC_API_PATH,
+  publicSiteUrl: process.env.PUBLIC_SITE_URL,
+});
 console.log(`[exporter] exported ${result.items} items -> ${result.currentLink}`);

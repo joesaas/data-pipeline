@@ -48,7 +48,12 @@ function maybeExport(stats: BatchStats): void {
   if (process.env.WEB_EXPORT_ON_CLEAN === "false") return;
   try {
     const outDir = process.env.WEB_EXPORT_DIR?.trim() || join(repoRoot(), "web-dist");
-    const result = exportSite({ dbFile: store.filePath, outDir, publicApiPath: process.env.PUBLIC_API_PATH });
+    const result = exportSite({
+      dbFile: store.filePath,
+      outDir,
+      publicApiPath: process.env.PUBLIC_API_PATH,
+      publicSiteUrl: process.env.PUBLIC_SITE_URL,
+    });
     console.log(`[cleaner] exported static site: ${result.items} items -> ${result.currentLink}`);
   } catch (err) {
     console.error(`[cleaner] export failed (ignored): ${err instanceof Error ? err.message : String(err)}`);

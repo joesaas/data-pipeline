@@ -63,7 +63,36 @@ const REFRESH_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none
 const CONTACT_URL = "https://x.com/agentci_101";
 const CONTACT_LINK = `<a href="${CONTACT_URL}" target="_blank" rel="noreferrer">X @agentci_101</a>`;
 
-function head(title: string, cssHref: string, base = "./", showSearch = false, cssVersion = ""): string {
+/** Default public URL of the news site; exportSite overrides it from
+ *  PUBLIC_SITE_URL. Canonical / OG / sitemap URLs all derive from it, so
+ *  a staging export never canonicalizes to production by accident. */
+export const DEFAULT_SITE_URL = "https://agent101.uk/news";
+
+interface SeoOpts {
+  description: string;
+  canonical: string;
+  ogType: "website" | "article";
+  /** Extra <meta> lines, e.g. article:published_time (already escaped by the caller). */
+  articleMeta?: string;
+  /** A complete <script type="application/ld+json"> block, or "". */
+  jsonLd?: string;
+}
+
+/** Collapse whitespace and cap at ~160 chars — meta descriptions longer
+ *  than that are truncated by search engines anyway. */
+export function metaDesc(text: string, len = 160): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  return t.length > len ? `${t.slice(0, len - 1)}…` : t;
+}
+
+function head(
+  title: string,
+  cssHref: string,
+  base = "./",
+  showSearch = false,
+  cssVersion = "",
+  seo: SeoOpts = { description: "", canonical: "", ogType: "website" },
+): string {
   const versioned = cssVersion ? `${cssHref}?v=${cssVersion}` : cssHref;
   return `<!doctype html>
 <html lang="zh-CN">
@@ -71,6 +100,18 @@ function head(title: string, cssHref: string, base = "./", showSearch = false, c
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${esc(title)}</title>
+<meta name="description" content="${esc(seo.description)}" />
+<link rel="canonical" href="${esc(seo.canonical)}" />
+<meta property="og:title" content="${esc(title)}" />
+<meta property="og:description" content="${esc(seo.description)}" />
+<meta property="og:type" content="${seo.ogType}" />
+<meta property="og:url" content="${esc(seo.canonical)}" />
+<meta property="og:site_name" content="Agent 101 资讯" />
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="${esc(title)}" />
+<meta name="twitter:description" content="${esc(seo.description)}" />
+${seo.articleMeta ?? ""}
+${seo.jsonLd ?? ""}
 <link rel="stylesheet" href="${versioned}" />
 </head>
 <body>
@@ -251,7 +292,20 @@ function weightBadge(item: ExportItem): string {
   return `<span class="wt wt-${weightTier(w)}" data-wt>权重 ${w}</span>`;
 }
 
-export function renderIndex(data: ExportData, generatedAt: string, cssVersion = ""): string {
+/** Homepage title/description: the keywords li wants found (2026-10-25) —
+ *  agent101 / agent 101 / web3 / ai agent / defi protocol / 安全 — all
+ *  appear here, in the H1 and in the intro line below, not just in meta
+ *  tags, because on-page text is what actually ranks. */
+export const INDEX_TITLE = "Agent 101 资讯 | AI Agent、Web3、DeFi 协议与安全资讯";
+export const INDEX_DESCRIPTION =
+  "Agent101（Agent 101）资讯站：每日更新 AI Agent、Web3、DeFi 协议（DeFi protocol）与网络安全资讯，覆盖最新协议动态、Agent 工具与安全事件。";
+
+export function renderIndex(
+  data: ExportData,
+  generatedAt: string,
+  cssVersion = "",
+  siteUrl: string = DEFAULT_SITE_URL,
+): string {
   const sidebar = `<aside>
   <nav>
     <div data-group="category">
@@ -290,17 +344,31 @@ export function renderIndex(data: ExportData, generatedAt: string, cssVersion = 
     })
     .join("\n");
 
-  return `${head("Agent 101 资讯 · 全部资讯", "./styles.css", "./", true, cssVersion)}
+  const siteJsonLd = `<script type="application/ld+json">${JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: "Agent 101 资讯",
+    alternateName: "Agent101",
+    url: `${siteUrl}/`,
+    inLanguage: "zh-CN",
+  })}</script>`;
+  return `${head(INDEX_TITLE, "./styles.css", "./", true, cssVersion, {
+    description: INDEX_DESCRIPTION,
+    canonical: `${siteUrl}/`,
+    ogType: "website",
+    jsonLd: siteJsonLd,
+  })}
 <div class="layout">
 ${sidebar}
 <section class="content">
   <div class="page-head">
-    <h1 id="pageTitle">全部资讯</h1><span class="muted" id="count">${data.items.length} 条</span>
+    <h1 id="pageTitle">Agent 101 资讯</h1><span class="muted" id="count">${data.items.length} 条</span>
     <div class="seg" data-gran-group>
       <button type="button" class="seg-btn on" data-gran="day">日</button><button type="button" class="seg-btn" data-gran="week">周</button><button type="button" class="seg-btn" data-gran="month">月</button><button type="button" class="seg-btn" data-gran="year">年</button>
     </div>
     <button type="button" class="refresh-btn" id="refreshBtn" title="刷新列表" aria-label="刷新列表">${REFRESH_ICON}</button>
   </div>
+  <p class="muted" style="margin:0 0 16px">AI Agent、Web3、DeFi 协议与安全资讯，每日更新。</p>
   ${
     data.items.length === 0
       ? `<div class="card empty"><p>这里还没有资讯</p><p class="muted">新的简报清洗完成后会自动出现在这里</p></div>`
@@ -317,7 +385,12 @@ ${PAGE_JS}
 `;
 }
 
-export function renderItem(item: ExportItem, publicApiPath: string, cssVersion = ""): string {
+export function renderItem(
+  item: ExportItem,
+  publicApiPath: string,
+  cssVersion = "",
+  siteUrl: string = DEFAULT_SITE_URL,
+): string {
   const tags = item.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("");
   const detail = item.detail
     ? `<h2>细节</h2><div class="card"><p class="summary">${esc(item.detail)}</p></div>`
@@ -329,7 +402,29 @@ export function renderItem(item: ExportItem, publicApiPath: string, cssVersion =
           .join("")}</div>`
       : "";
   const displayDate = item.event_date ?? item.cleaned_at.slice(0, 10);
-  return `${head(item.title, "../../styles.css", "../../", false, cssVersion)}
+  const shownTitle = item.title_zh || item.title;
+  const desc = metaDesc(item.summary_zh || item.summary);
+  const canonical = `${siteUrl}/item/${encodeURIComponent(item.id)}/`;
+  const itemJsonLd = `<script type="application/ld+json">${JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "NewsArticle",
+    headline: shownTitle,
+    description: desc,
+    datePublished: item.cleaned_at,
+    dateModified: item.cleaned_at,
+    inLanguage: "zh-CN",
+    articleSection: item.category,
+    author: { "@type": "Organization", name: "Agent 101 资讯", url: `${siteUrl}/` },
+    publisher: { "@type": "Organization", name: "Agent 101 资讯", url: `${siteUrl}/` },
+    mainEntityOfPage: canonical,
+  })}</script>`;
+  return `${head(`${shownTitle} | Agent 101 资讯`, "../../styles.css", "../../", false, cssVersion, {
+    description: desc,
+    canonical,
+    ogType: "article",
+    articleMeta: `<meta property="article:published_time" content="${esc(item.cleaned_at)}" />\n<meta property="article:section" content="${esc(item.category)}" />`,
+    jsonLd: itemJsonLd,
+  })}
 <p class="muted"><a href="../../" style="color:var(--accent-strong)">← 返回列表</a></p>
 <div class="card-top" style="margin-top:12px">
   <span class="pill" style="background:${categoryColor(item.category)}">${esc(item.category)}</span>

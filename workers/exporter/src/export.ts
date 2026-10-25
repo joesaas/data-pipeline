@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync,
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readExportData } from "./reader.js";
-import { renderIndex, renderItem } from "./render.js";
+import { DEFAULT_SITE_URL, esc, renderIndex, renderItem } from "./render.js";
 
 export interface ExportResult {
   items: number;
@@ -29,10 +29,13 @@ export function exportSite(options: {
   dbFile: string;
   outDir: string;
   publicApiPath?: string;
+  /** Public base URL of the news site, e.g. https://agent101.uk/news (no trailing slash). */
+  publicSiteUrl?: string;
   now?: Date;
 }): ExportResult {
   const { dbFile, outDir } = options;
   const publicApiPath = (options.publicApiPath ?? "/data-pipeline").replace(/\/$/, "");
+  const siteUrl = (options.publicSiteUrl ?? DEFAULT_SITE_URL).replace(/\/$/, "");
   const now = options.now ?? new Date();
   const data = readExportData(dbFile);
 
@@ -46,14 +49,39 @@ export function exportSite(options: {
   // serve a stale styles.css for hours (Cloudflare defaults CSS to 4h),
   // which once shipped new markup with old styles. A new hash = a new URL.
   const cssVersion = createHash("md5").update(readFileSync(stylesPath())).digest("hex").slice(0, 8);
-  writeFileSync(join(releaseDir, "index.html"), renderIndex(data, now.toISOString(), cssVersion), "utf8");
+  writeFileSync(join(releaseDir, "index.html"), renderIndex(data, now.toISOString(), cssVersion, siteUrl), "utf8");
   writeFileSync(join(releaseDir, "items.json"), JSON.stringify({ generated_at: now.toISOString(), ...data }, null, 2), "utf8");
   copyFileSync(stylesPath(), join(releaseDir, "styles.css"));
   for (const item of data.items) {
     const dir = join(releaseDir, "item", item.id);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "index.html"), renderItem(item, publicApiPath, cssVersion), "utf8");
+    writeFileSync(join(dir, "index.html"), renderItem(item, publicApiPath, cssVersion, siteUrl), "utf8");
   }
+  // Sitemap for search engines (2026-10-25 SEO): homepage + every detail
+  // page, lastmod from the cleaning time. It is served at
+  // <siteUrl>/sitemap.xml by the same nginx location as the site; the
+  // domain-root robots.txt (outside this repo) should point at it, and
+  // it should be submitted in Search Console — a sitemap file under
+  // /news/ alone does not make crawlers discover the site.
+  const today = now.toISOString().slice(0, 10);
+  const urlEntry = (loc: string, lastmod: string, changefreq: string, priority: string): string =>
+    `  <url><loc>${esc(loc)}</loc><lastmod>${lastmod}</lastmod><changefreq>${changefreq}</changefreq><priority>${priority}</priority></url>`;
+  const sitemap = [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`,
+    urlEntry(`${siteUrl}/`, today, "daily", "1.0"),
+    ...data.items.map((item) =>
+      urlEntry(
+        `${siteUrl}/item/${encodeURIComponent(item.id)}/`,
+        item.cleaned_at.slice(0, 10),
+        "weekly",
+        "0.8",
+      ),
+    ),
+    `</urlset>`,
+    ``,
+  ].join("\n");
+  writeFileSync(join(releaseDir, "sitemap.xml"), sitemap, "utf8");
 
   // Flip `current` atomically: build a temp symlink, then rename over.
   const currentLink = join(outDir, "current");
