@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { Request, Response } from "express";
 import type { AppConfig } from "../config.js";
@@ -16,8 +16,10 @@ import type { StorageDriver } from "../storage/storage-driver.js";
  * stay closed — that is deliberate, not a bug.
  *
  * These handlers never reveal secrets: token listings omit key_hash (and
- * plaintext keys are never stored anywhere), and the cursor job status
- * reports webhook configuration as presence booleans only.
+ * plaintext keys are never stored anywhere), the cursor job status
+ * reports webhook configuration as presence booleans only, and webhook
+ * values set through the console are write-only — they are never read
+ * back to any client.
  */
 
 export interface AdminDeps {
@@ -89,6 +91,93 @@ export function effectiveIntervalMinutes(state: CursorJobState, env: NodeJS.Proc
   return Math.max(1, fromEnv);
 }
 
+// --- Root .env file access (webhook configuration) -------------------------
+// The console writes webhook settings to the repo-root .env (the single
+// source of truth for these values, per the repo's own convention: pm2 env
+// deliberately does NOT set them). Parsing is intentionally small: KEY=VALUE
+// lines with an optional `export ` prefix; surrounding quotes are stripped
+// for reads. Values written here are validated upstream (no whitespace,
+// no quotes that would break the file), so writes stay round-trippable.
+
+const ENV_LINE = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
+
+export function parseEnvValues(text: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const line of text.split("\n")) {
+    const m = line.match(ENV_LINE);
+    if (!m) continue;
+    let v = m[2].trim();
+    if (
+      (v.startsWith('"') && v.endsWith('"') && v.length >= 2) ||
+      (v.startsWith("'") && v.endsWith("'") && v.length >= 2)
+    ) {
+      v = v.slice(1, -1);
+    }
+    map.set(m[1], v);
+  }
+  return map;
+}
+
+function readEnvFileValues(envPath: string): Map<string, string> {
+  try {
+    return parseEnvValues(readFileSync(envPath, "utf8"));
+  } catch {
+    return new Map();
+  }
+}
+
+/** Presence only — never returns a value. File OR real environment counts. */
+function webhookConfigured(config: AppConfig, envFile: string | null): boolean {
+  const fileVals = readEnvFileValues(join(repoRoot(config, envFile), ".env"));
+  const url = fileVals.get("CURSOR_WEBHOOK_URL") || process.env.CURSOR_WEBHOOK_URL || "";
+  const token =
+    fileVals.get("CURSOR_AUTOMATION_TOKEN") || process.env.CURSOR_AUTOMATION_TOKEN || "";
+  return url.trim() !== "" && token.trim() !== "";
+}
+
+function quoteEnvValue(v: string): string {
+  // Caller rejects values containing a single quote; # " ` are safe
+  // inside single quotes for dotenv parsing, raw otherwise.
+  if (/[#"`]/.test(v)) return `'${v}'`;
+  return v;
+}
+
+/** Replace-or-append the given keys, preserving every other line verbatim. */
+export function updateEnvText(text: string, updates: Map<string, string>): string {
+  const replaced = new Set<string>();
+  const lines = text === "" ? [] : text.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const out = lines.map((line) => {
+    const m = line.match(/^(export\s+)?([A-Za-z_][A-Za-z0-9_]*)=/);
+    if (m && updates.has(m[2]) && !replaced.has(m[2])) {
+      replaced.add(m[2]);
+      return `${m[1] ?? ""}${m[2]}=${quoteEnvValue(updates.get(m[2])!)}`;
+    }
+    return line;
+  });
+  for (const [k, v] of updates) {
+    if (!replaced.has(k)) out.push(`${k}=${quoteEnvValue(v)}`);
+  }
+  return out.length === 0 ? "" : `${out.join("\n")}\n`;
+}
+
+function validWebhookUrl(s: string): boolean {
+  try {
+    const u = new URL(s);
+    if (u.protocol === "https:") return true;
+    // Loopback http only, for local testing against a mock receiver.
+    if (
+      u.protocol === "http:" &&
+      (u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.hostname === "::1")
+    ) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function cursorStatus(config: AppConfig, envFile: string | null): {
   stateFilePresent: boolean;
   lastTriggeredAt: string | null;
@@ -110,7 +199,7 @@ export function cursorStatus(config: AppConfig, envFile: string | null): {
     nextDueAt: state.lastTriggeredAt
       ? new Date(Date.parse(state.lastTriggeredAt) + effective * 60_000).toISOString()
       : null,
-    webhookConfigured: Boolean(process.env.CURSOR_WEBHOOK_URL) && Boolean(process.env.CURSOR_AUTOMATION_TOKEN),
+    webhookConfigured: webhookConfigured(config, envFile),
     runnerScriptPresent: existsSync(cursorRunnerScript(config, envFile)),
   };
 }
@@ -188,6 +277,76 @@ export function setCursorInterval(deps: AdminDeps, req: Request, res: Response):
   res.json(cursorStatus(deps.config, deps.envFile));
 }
 
+/**
+ * Set the cursor webhook configuration in the repo-root .env (write-only:
+ * the response carries the status object, never the values). Only the
+ * fields actually sent are changed; an omitted field keeps its old line.
+ * Validation keeps the file round-trippable: URLs must be https (loopback
+ * http allowed for local testing), tokens must be a single whitespace-free
+ * token without quotes. The write is atomic (tmp file + rename) and
+ * preserves every other line byte-for-byte.
+ *
+ * Freshness contract: the status endpoint reads the file, so it reflects
+ * a save immediately. A manual trigger also picks the new values up at
+ * once (see triggerCursor's env scrub). The SCHEDULED job-runner process
+ * loaded its environment at startup, so it needs a restart (see
+ * restartJobRunner) before timed ticks use the new values.
+ */
+export function setCursorWebhook(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const body = (req.body ?? {}) as { webhookUrl?: unknown; webhookToken?: unknown };
+  const urlRaw = typeof body.webhookUrl === "string" ? body.webhookUrl.trim() : "";
+  const tokenRaw = typeof body.webhookToken === "string" ? body.webhookToken.trim() : "";
+  if (!urlRaw && !tokenRaw) {
+    res.status(400).json({ error: "provide webhookUrl and/or webhookToken", field: "webhookUrl" });
+    return;
+  }
+  if (urlRaw && !validWebhookUrl(urlRaw)) {
+    res.status(400).json({ error: "webhookUrl must be an https URL (loopback http allowed)", field: "webhookUrl" });
+    return;
+  }
+  if (tokenRaw && (tokenRaw.length > 2000 || /\s/.test(tokenRaw) || tokenRaw.includes("'"))) {
+    res.status(400).json({ error: "webhookToken must be a single token without whitespace or quotes", field: "webhookToken" });
+    return;
+  }
+  const updates = new Map<string, string>();
+  if (urlRaw) updates.set("CURSOR_WEBHOOK_URL", urlRaw);
+  if (tokenRaw) updates.set("CURSOR_AUTOMATION_TOKEN", tokenRaw);
+  const envPath = join(repoRoot(deps.config, deps.envFile), ".env");
+  let text = "";
+  try {
+    text = readFileSync(envPath, "utf8");
+  } catch {
+    text = "";
+  }
+  try {
+    writeFileSync(`${envPath}.tmp`, updateEnvText(text, updates));
+    renameSync(`${envPath}.tmp`, envPath);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: `failed to write .env: ${err instanceof Error ? err.message : String(err)}` });
+    return;
+  }
+  res.json(cursorStatus(deps.config, deps.envFile));
+}
+
+/**
+ * Restart the job-runner pm2 process so scheduled ticks pick up a changed
+ * .env (webhook settings, interval env). Restarting is safe: the trigger
+ * state file survives, so the gate keeps counting from the last trigger
+ * and no extra webhook fires on restart.
+ */
+export function restartJobRunner(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  execFile("pm2", ["restart", "data-job-runner"], { timeout: 30_000 }, (err, stdout, stderr) => {
+    const output = `${stdout}\n${stderr}`.trim().slice(-2000);
+    if (err) {
+      res.status(500).json({ ok: false, error: err.message, output });
+      return;
+    }
+    res.json({ ok: true, output });
+  });
+}
+
 let triggerInFlight = false;
 
 /**
@@ -208,10 +367,23 @@ export function triggerCursor(deps: AdminDeps, req: Request, res: Response): voi
     return;
   }
   triggerInFlight = true;
+  // Fresh-environment scrub: the child reloads the repo-root .env at
+  // startup via loadDefaultEnv, but that loader never overwrites variables
+  // already present — and this process inherited the .env values from ITS
+  // startup. Without scrubbing, a webhook edit made through the console
+  // would never reach a manual trigger until the API itself restarts.
+  // Only keys the .env file actually defines are scrubbed: if a value
+  // comes from the real environment only (pm2 env, not the file), the
+  // inherited value is kept, so that deployment shape keeps working.
+  const childEnv = { ...process.env };
+  const fileVals = readEnvFileValues(join(repoRoot(deps.config, deps.envFile), ".env"));
+  for (const k of ["CURSOR_WEBHOOK_URL", "CURSOR_AUTOMATION_TOKEN", "CURSOR_TRIGGER_INTERVAL_MINUTES"]) {
+    if (fileVals.get(k)) delete childEnv[k];
+  }
   execFile(
     process.execPath,
     [script, "--run", "cursor-trigger"],
-    { cwd: repoRoot(deps.config, deps.envFile), timeout: 90_000 },
+    { cwd: repoRoot(deps.config, deps.envFile), timeout: 90_000, env: childEnv },
     (err, stdout, stderr) => {
       triggerInFlight = false;
       const output = `${stdout}\n${stderr}`.trim().slice(-2000);

@@ -73,6 +73,8 @@ export function registerRoutes(
         admin_cursor_status: `GET ${base}/api/v1/admin/jobs/cursor-trigger`,
         admin_cursor_trigger: `POST ${base}/api/v1/admin/jobs/cursor-trigger/trigger`,
         admin_cursor_interval: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/interval`,
+        admin_cursor_webhook: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/webhook`,
+        admin_cursor_restart: `POST ${base}/api/v1/admin/jobs/cursor-trigger/restart`,
       },
       console: `${base}/console`,
       docs: "https://github.com/joesaas/data-pipeline",
@@ -187,6 +189,12 @@ export function registerRoutes(
   );
   router.post("/api/v1/admin/jobs/cursor-trigger/trigger", (req, res) =>
     admin.triggerCursor(adminDeps, req, res),
+  );
+  router.put("/api/v1/admin/jobs/cursor-trigger/webhook", (req, res) =>
+    admin.setCursorWebhook(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/jobs/cursor-trigger/restart", (req, res) =>
+    admin.restartJobRunner(adminDeps, req, res),
   );
 
   if (config.basePath) app.use(config.basePath, router);

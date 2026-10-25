@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -245,6 +245,148 @@ describe("admin routes", () => {
       assert.equal(r.body.ok, false);
     } finally {
       ctx2.close();
+    }
+  });
+
+  it("webhook save writes .env, preserves other lines, never echoes values", async () => {
+    const envPath = join(dir, ".env");
+    writeFileSync(
+      envPath,
+      "# keep me\nOTHER_KEEP=hello\nCURSOR_WEBHOOK_URL=https://old.example/hook\nCURSOR_AUTOMATION_TOKEN=old-token\n",
+    );
+    const r = await req(
+      ctx,
+      "PUT",
+      "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhook",
+      ctx.adminKey,
+      { webhookUrl: "https://hooks.example/new", webhookToken: "new-token-123" },
+    );
+    assert.equal(r.status, 200);
+    assert.equal(r.body.webhookConfigured, true);
+    assert.equal(JSON.stringify(r.body).includes("new-token-123"), false);
+    const after = readFileSync(envPath, "utf8");
+    assert.match(after, /^# keep me$/m);
+    assert.match(after, /^OTHER_KEEP=hello$/m);
+    assert.match(after, /^CURSOR_WEBHOOK_URL=https:\/\/hooks\.example\/new$/m);
+    assert.match(after, /^CURSOR_AUTOMATION_TOKEN=new-token-123$/m);
+    assert.equal(after.includes("old-token"), false);
+  });
+
+  it("webhook save is partial and validates input", async () => {
+    const envPath = join(dir, ".env");
+    writeFileSync(envPath, "CURSOR_WEBHOOK_URL=https://keep.example/hook\n");
+    const partial = await req(
+      ctx,
+      "PUT",
+      "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhook",
+      ctx.adminKey,
+      { webhookToken: "only-token" },
+    );
+    assert.equal(partial.status, 200);
+    assert.match(readFileSync(envPath, "utf8"), /^CURSOR_WEBHOOK_URL=https:\/\/keep\.example\/hook$/m);
+    assert.match(readFileSync(envPath, "utf8"), /^CURSOR_AUTOMATION_TOKEN=only-token$/m);
+    for (const bad of [
+      {},
+      { webhookUrl: "not a url" },
+      { webhookUrl: "http://example.com/hook" },
+      { webhookToken: "has\nnewline" },
+    ]) {
+      assert.equal(
+        (
+          await req(
+            ctx,
+            "PUT",
+            "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhook",
+            ctx.adminKey,
+            bad,
+          )
+        ).status,
+        400,
+      );
+    }
+    assert.equal(
+      (
+        await req(ctx, "PUT", "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhook", undefined, {
+          webhookToken: "x",
+        })
+      ).status,
+      401,
+    );
+  });
+
+  it("manual trigger scrubs stale inherited CURSOR_* so the child reloads .env", async () => {
+    const scriptDir = join(dir, "workers/job-runner/dist/src");
+    mkdirSync(scriptDir, { recursive: true });
+    const dumpPath = join(dir, "trigger-env.json");
+    writeFileSync(
+      join(scriptDir, "main.js"),
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(dumpPath)}, JSON.stringify({ url: process.env.CURSOR_WEBHOOK_URL ?? null, token: process.env.CURSOR_AUTOMATION_TOKEN ?? null, interval: process.env.CURSOR_TRIGGER_INTERVAL_MINUTES ?? null }));\nconsole.log("dump done");\n`,
+    );
+    writeFileSync(
+      join(dir, ".env"),
+      "CURSOR_WEBHOOK_URL=https://file.example/hook\nCURSOR_AUTOMATION_TOKEN=file-token\nCURSOR_TRIGGER_INTERVAL_MINUTES=99\n",
+    );
+    const saved = {
+      url: process.env.CURSOR_WEBHOOK_URL,
+      token: process.env.CURSOR_AUTOMATION_TOKEN,
+      interval: process.env.CURSOR_TRIGGER_INTERVAL_MINUTES,
+    };
+    process.env.CURSOR_WEBHOOK_URL = "stale-url";
+    process.env.CURSOR_AUTOMATION_TOKEN = "stale-token";
+    process.env.CURSOR_TRIGGER_INTERVAL_MINUTES = "7";
+    try {
+      const r = await req(
+        ctx,
+        "POST",
+        "/data-pipeline/api/v1/admin/jobs/cursor-trigger/trigger",
+        ctx.adminKey,
+      );
+      assert.equal(r.status, 200);
+      const dump = JSON.parse(readFileSync(dumpPath, "utf8")) as Record<string, unknown>;
+      assert.equal(dump.url, null);
+      assert.equal(dump.token, null);
+      assert.equal(dump.interval, null);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        const key = `CURSOR_${k === "url" ? "WEBHOOK_URL" : k === "token" ? "AUTOMATION_TOKEN" : "TRIGGER_INTERVAL_MINUTES"}`;
+        if (v === undefined) delete process.env[key];
+        else process.env[key] = v;
+      }
+    }
+  });
+
+  it("restart runs pm2 restart and reports failure", async () => {
+    const okBin = join(dir, "bin-ok");
+    const failBin = join(dir, "bin-fail");
+    mkdirSync(okBin, { recursive: true });
+    mkdirSync(failBin, { recursive: true });
+    writeFileSync(join(okBin, "pm2"), `#!/usr/bin/env bash\necho "pm2 restart ok $@"\n`);
+    writeFileSync(join(failBin, "pm2"), `#!/usr/bin/env bash\necho "pm2 boom" >&2\nexit 1\n`);
+    chmodSync(join(okBin, "pm2"), 0o755);
+    chmodSync(join(failBin, "pm2"), 0o755);
+    const savedPath = process.env.PATH ?? "";
+    try {
+      process.env.PATH = `${okBin}:${savedPath}`;
+      const ok = await req(
+        ctx,
+        "POST",
+        "/data-pipeline/api/v1/admin/jobs/cursor-trigger/restart",
+        ctx.adminKey,
+      );
+      assert.equal(ok.status, 200);
+      assert.equal(ok.body.ok, true);
+      assert.match(ok.body.output as string, /pm2 restart ok restart data-job-runner/);
+      process.env.PATH = `${failBin}:${savedPath}`;
+      const bad = await req(
+        ctx,
+        "POST",
+        "/data-pipeline/api/v1/admin/jobs/cursor-trigger/restart",
+        ctx.adminKey,
+      );
+      assert.equal(bad.status, 500);
+      assert.equal(bad.body.ok, false);
+    } finally {
+      process.env.PATH = savedPath;
     }
   });
 });

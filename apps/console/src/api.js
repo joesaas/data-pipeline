@@ -56,4 +56,7 @@ export const adminApi = {
   cursorTrigger: (key) => api("POST", "/api/v1/admin/jobs/cursor-trigger/trigger", key),
   cursorInterval: (key, intervalMinutes) =>
     api("PUT", "/api/v1/admin/jobs/cursor-trigger/interval", key, { intervalMinutes }),
+  cursorWebhook: (key, body) =>
+    api("PUT", "/api/v1/admin/jobs/cursor-trigger/webhook", key, body),
+  cursorRestart: (key) => api("POST", "/api/v1/admin/jobs/cursor-trigger/restart", key),
 };

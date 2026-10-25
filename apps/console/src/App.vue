@@ -100,7 +100,7 @@
         </div>
         <p class="hint">
           定时任务现在跑在 job-runner 里：每 1 分钟 tick 一次，到 interval 才真正发一次 webhook。
-          webhook 地址和 token 只存在服务器根 .env 里，这里只显示「已配置 / 未配置」，不读、不显示它们的值。
+          webhook 地址和 token 只存在服务器根 .env 里——这里可以设置它们，但永远不显示已有值。
         </p>
         <div v-if="cursor" class="grid">
           <div><label>上次触发</label><div>{{ cursor.lastTriggeredAt ? fmtTime(cursor.lastTriggeredAt) : "从未" }}</div></div>
@@ -114,6 +114,21 @@
           <input v-model.number="intervalInput" type="number" min="1" max="1440" class="input" />
           <button class="btn primary" :disabled="busy">保存区间（分钟）</button>
         </form>
+        <form class="create" @submit.prevent="saveWebhook">
+          <input v-model="webhookUrl" placeholder="Webhook URL（https://…，留空则不改）" class="input" />
+          <input v-model="webhookToken" type="password" placeholder="Webhook token（留空则不改）" class="input" autocomplete="off" />
+          <button class="btn primary" :disabled="busy">保存 webhook 配置</button>
+        </form>
+        <p class="hint">只写不回显：保存后这里不显示已有值；只填要改的项，空着不动。保存后定时任务需重启 job-runner 才用新配置，手动触发则立即用新配置。</p>
+        <p v-if="webhookOk" class="ok">{{ webhookOk }}</p>
+        <p v-if="webhookError" class="err">{{ webhookError }}</p>
+        <div class="row">
+          <button class="btn" :disabled="busy || restarting" @click="restartRunner">
+            {{ restarting ? "重启中…" : "重启 job-runner（使新配置对定时任务生效）" }}
+          </button>
+        </div>
+        <p class="hint">重启不会导致重复触发：触发状态文件还在，门控按上次触发时间继续算。</p>
+        <pre v-if="restartResult" class="out">{{ restartResult }}</pre>
         <div class="row">
           <button class="btn primary" :disabled="busy || triggering" @click="trigger">
             {{ triggering ? "触发中…" : "手动触发一次" }}
@@ -149,6 +164,12 @@ const cursorError = ref("");
 const intervalInput = ref(60);
 const triggering = ref(false);
 const triggerResult = ref("");
+const webhookUrl = ref("");
+const webhookToken = ref("");
+const webhookError = ref("");
+const webhookOk = ref("");
+const restarting = ref(false);
+const restartResult = ref("");
 
 function fmtTime(iso) {
   if (!iso) return "";
@@ -262,6 +283,46 @@ async function trigger() {
     triggerResult.value = `触发失败：${e.message}\n${e.data?.output || ""}`.trim();
   } finally {
     triggering.value = false;
+  }
+}
+
+async function saveWebhook() {
+  busy.value = true;
+  webhookError.value = "";
+  webhookOk.value = "";
+  const body = {};
+  if (webhookUrl.value.trim()) body.webhookUrl = webhookUrl.value.trim();
+  if (webhookToken.value.trim()) body.webhookToken = webhookToken.value.trim();
+  if (Object.keys(body).length === 0) {
+    webhookError.value = "至少填一项（URL 或 token）";
+    busy.value = false;
+    return;
+  }
+  try {
+    cursor.value = await adminApi.cursorWebhook(key.value, body);
+    intervalInput.value = cursor.value.effectiveIntervalMinutes;
+    webhookUrl.value = "";
+    webhookToken.value = "";
+    webhookOk.value = "已保存到服务器 .env（值不会回显）。定时任务需重启 job-runner 后生效，手动触发立即用新配置。";
+  } catch (e) {
+    webhookError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function restartRunner() {
+  restarting.value = true;
+  restartResult.value = "";
+  cursorError.value = "";
+  try {
+    const data = await adminApi.cursorRestart(key.value);
+    restartResult.value = data.output || "重启成功";
+    await refreshCursor();
+  } catch (e) {
+    restartResult.value = `重启失败：${e.message}\n${e.data?.output || ""}`.trim();
+  } finally {
+    restarting.value = false;
   }
 }
 
