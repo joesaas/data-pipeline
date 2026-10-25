@@ -76,4 +76,16 @@ export const adminApi = {
     return api("GET", `/api/v1/records?${q}`, key);
   },
   deleteRecord: (key, id) => api("DELETE", `/api/v1/records/${id}`, key),
+  // News: the cleaned items the news site renders (exporter static pages
+  // and these endpoints read the same cleaned_items table). Read-only:
+  // the cleaner owns this data, the console never writes it.
+  listNews: (key, { category, q, limit, offset }) => {
+    const qs = new URLSearchParams();
+    if (category) qs.set("category", category);
+    if (q) qs.set("q", q);
+    qs.set("limit", String(limit));
+    qs.set("offset", String(offset));
+    return api("GET", `/api/v1/cleaned/items?${qs}`, key);
+  },
+  getNewsStats: (key) => api("GET", "/api/v1/cleaned/stats", key),
 };

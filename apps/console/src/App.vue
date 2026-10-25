@@ -37,6 +37,7 @@
         <button :class="{ active: tab === 'tokens' }" @click="openTokensTab">Tokens</button>
         <button :class="{ active: tab === 'webhooks' }" @click="openWebhooksTab">Webhooks</button>
         <button :class="{ active: tab === 'records' }" @click="openRecordsTab">Records</button>
+        <button :class="{ active: tab === 'news' }" @click="openNewsTab">News</button>
       </nav>
 
       <!-- Tokens -->
@@ -266,6 +267,97 @@
         <p v-if="recordsOk" class="ok">{{ recordsOk }}</p>
         <p v-if="recordsError" class="err">{{ recordsError }}</p>
       </section>
+
+      <!-- News -->
+      <section v-if="tab === 'news'" class="card">
+        <div class="row space">
+          <h2>News</h2>
+          <button class="btn" :disabled="newsRefreshing" @click="refreshNews">
+            <span v-if="newsRefreshing" class="spin">⟳</span>
+            {{ newsRefreshing ? "刷新中…" : "刷新" }}
+          </button>
+        </div>
+        <p class="hint">
+          这里就是新闻站（agent101.uk/news）展示的那份数据：cleaner 清洗后的
+          cleaned_items 条目。控制台只读不改——清洗结果归 cleaner 所有，没有
+          新建、编辑、删除。列表只显示标题等摘要，摘要与详情只在详情页展开。
+        </p>
+        <p class="hint">
+          上次刷新：{{ newsLastRefreshed || "尚未刷新" }}
+          <span v-if="newsRefreshing"> · 正在从服务器拉取最新数据…</span>
+          <span v-else-if="newsStats"> · 共 {{ newsStats.items }} 条 · 清洗记录 {{ newsStats.records }} 条 · 最近清洗 {{ newsStats.last_cleaned_at ? fmtTime(newsStats.last_cleaned_at) : "—" }}</span>
+        </p>
+        <p v-if="newsStats && newsStats.categories.length" class="hint">
+          分类：{{ newsStats.categories.map((c) => `${c.name} ${c.count}`).join(" · ") }}
+        </p>
+        <form class="create" @submit.prevent="applyNewsFilter">
+          <input v-model="newsFilterCategory" placeholder="按分类筛选，如 Web3 DeFi" class="input" />
+          <input v-model="newsFilterQ" placeholder="按关键词搜索标题/摘要" class="input" />
+          <button class="btn primary" :disabled="newsRefreshing">筛选</button>
+          <button class="btn" type="button" :disabled="newsRefreshing" @click="clearNewsFilter">清除筛选</button>
+        </form>
+        <div v-if="newsView === 'list'">
+          <table v-if="news.length">
+            <thead>
+              <tr><th>标题</th><th>分类</th><th>事件日期</th><th>权重</th><th>来源</th><th>清洗时间</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="n in news" :key="n.id" @click="openNews(n)">
+                <td class="short">{{ n.title || "(无标题)" }}</td>
+                <td>{{ n.category }}</td>
+                <td>{{ n.event_date || "—" }}</td>
+                <td>{{ n.weight }}</td>
+                <td class="short">{{ (n.sources || []).map((s) => s.name).join(", ") || n.source_agent || "—" }}</td>
+                <td>{{ fmtTime(n.cleaned_at) }}</td>
+                <td @click.stop>
+                  <button class="btn small" :disabled="newsRefreshing" @click="openNews(n)">详情</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="hint">没有符合条件的新闻条目。</p>
+          <div class="row space">
+            <span class="hint">共 {{ newsTotal }} 条，当前第 {{ newsOffset + 1 }}–{{ newsOffset + news.length }} 条</span>
+            <span class="row">
+              <button class="btn small" :disabled="newsRefreshing || newsOffset === 0" @click="newsPage(-1)">上一页</button>
+              <button class="btn small" :disabled="newsRefreshing || newsOffset + news.length >= newsTotal" @click="newsPage(1)">下一页</button>
+            </span>
+          </div>
+        </div>
+        <div v-if="newsView === 'detail' && selectedNews">
+          <h4>{{ selectedNews.title || "(无标题)" }}</h4>
+          <p v-if="selectedNews.title_zh" class="hint">{{ selectedNews.title_zh }}</p>
+          <div class="grid">
+            <div><label>分类</label><div>{{ selectedNews.category }}</div></div>
+            <div><label>事件日期</label><div>{{ selectedNews.event_date || "—" }}</div></div>
+            <div><label>权重 / 档</label><div>{{ selectedNews.weight }} / {{ selectedNews.weight_tier }}</div></div>
+            <div><label>标签</label><div>{{ (selectedNews.tags || []).join(", ") || "—" }}</div></div>
+            <div><label>推送 agent</label><div>{{ selectedNews.source_agent || "—" }}</div></div>
+            <div><label>清洗模型</label><div>{{ selectedNews.provider }} / {{ selectedNews.model }}</div></div>
+            <div><label>清洗时间</label><div>{{ fmtTime(selectedNews.cleaned_at) }}</div></div>
+            <div><label>原始记录 id</label><div class="mono short">{{ selectedNews.source_record_id }}</div></div>
+          </div>
+          <h4>摘要</h4>
+          <pre class="out">{{ selectedNews.summary }}</pre>
+          <p v-if="selectedNews.summary_zh" class="hint">{{ selectedNews.summary_zh }}</p>
+          <div v-if="selectedNews.detail">
+            <h4>详情</h4>
+            <pre class="out">{{ selectedNews.detail }}</pre>
+          </div>
+          <div v-if="(selectedNews.sources || []).length">
+            <h4>来源</h4>
+            <ul>
+              <li v-for="s in selectedNews.sources" :key="s.url">
+                <a :href="s.url" target="_blank" rel="noreferrer">{{ s.name }}</a>
+              </li>
+            </ul>
+          </div>
+          <div class="row">
+            <button class="btn" @click="newsView = 'list'">返回列表</button>
+          </div>
+        </div>
+        <p v-if="newsError" class="err">{{ newsError }}</p>
+      </section>
     </template>
   </div>
 </template>
@@ -324,6 +416,20 @@ const recordsRefreshing = ref(false);
 const recordsLastRefreshed = ref("");
 let recordsRefreshSeq = 0;
 
+const news = ref([]);
+const newsTotal = ref(0);
+const newsOffset = ref(0);
+const newsPageSize = 20;
+const newsFilterCategory = ref("");
+const newsFilterQ = ref("");
+const newsView = ref("list");
+const selectedNews = ref(null);
+const newsStats = ref(null);
+const newsError = ref("");
+const newsRefreshing = ref(false);
+const newsLastRefreshed = ref("");
+let newsRefreshSeq = 0;
+
 function fmtTime(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -338,7 +444,7 @@ async function login() {
     saveKey(keyInput.value.trim());
     key.value = keyInput.value.trim();
     keyInput.value = "";
-    await Promise.all([refreshTokens(), refreshWebhooks(), refreshRecords()]);
+    await Promise.all([refreshTokens(), refreshWebhooks(), refreshRecords(), refreshNews()]);
   } catch (e) {
     loginError.value = e.status === 401 ? "钥匙无效（401）" : e.status === 403 ? "这把不是 admin 钥匙（403）" : e.message;
   } finally {
@@ -358,6 +464,12 @@ function logout() {
   recordsLastRefreshed.value = "";
   tokensLastRefreshed.value = "";
   webhooksLastRefreshed.value = "";
+  news.value = [];
+  newsTotal.value = 0;
+  newsStats.value = null;
+  selectedNews.value = null;
+  newsView.value = "list";
+  newsLastRefreshed.value = "";
 }
 
 function openTokensTab() {
@@ -609,6 +721,69 @@ function openRecordsTab() {
   refreshRecords();
 }
 
+async function refreshNews() {
+  const seq = ++newsRefreshSeq;
+  newsRefreshing.value = true;
+  newsError.value = "";
+  try {
+    const [data, stats] = await Promise.all([
+      adminApi.listNews(key.value, {
+        category: newsFilterCategory.value.trim() || undefined,
+        q: newsFilterQ.value.trim() || undefined,
+        limit: newsPageSize,
+        offset: newsOffset.value,
+      }),
+      adminApi.getNewsStats(key.value),
+    ]);
+    if (seq !== newsRefreshSeq) return;
+    news.value = data.items;
+    newsTotal.value = data.total;
+    newsStats.value = stats;
+    newsLastRefreshed.value = new Date().toLocaleString();
+    if (selectedNews.value) {
+      selectedNews.value =
+        news.value.find((n) => n.id === selectedNews.value.id) ?? null;
+      if (!selectedNews.value && newsView.value === "detail") newsView.value = "list";
+    }
+  } catch (e) {
+    if (seq === newsRefreshSeq) newsError.value = e.message;
+  } finally {
+    if (seq === newsRefreshSeq) newsRefreshing.value = false;
+  }
+}
+
+function openNewsTab() {
+  tab.value = "news";
+  refreshNews();
+}
+
+function openNews(n) {
+  selectedNews.value = n;
+  newsView.value = "detail";
+}
+
+function applyNewsFilter() {
+  newsOffset.value = 0;
+  newsView.value = "list";
+  refreshNews();
+}
+
+function clearNewsFilter() {
+  newsFilterCategory.value = "";
+  newsFilterQ.value = "";
+  newsOffset.value = 0;
+  newsView.value = "list";
+  refreshNews();
+}
+
+function newsPage(dir) {
+  const next = newsOffset.value + dir * newsPageSize;
+  if (next < 0 || (dir > 0 && newsOffset.value + news.value.length >= newsTotal.value)) return;
+  newsOffset.value = next;
+  newsView.value = "list";
+  refreshNews();
+}
+
 function openRecord(r) {
   selectedRecord.value = r;
   recordsView.value = "detail";
@@ -664,7 +839,7 @@ onMounted(async () => {
     healthOk.value = false;
   }
   if (key.value) {
-    await Promise.all([refreshTokens(), refreshWebhooks(), refreshRecords()]);
+    await Promise.all([refreshTokens(), refreshWebhooks(), refreshRecords(), refreshNews()]);
   }
 });
 </script>
