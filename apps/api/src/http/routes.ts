@@ -195,10 +195,28 @@ export function registerRoutes(
   // Web console (Vue SPA), served by this same process — no new pm2 app.
   // Silent when the console has not been built (e.g. CLI runs, or a
   // deploy that predates the console): /console then simply 404s.
+  //
+  // redirect: false is load-bearing, not cosmetic. nginx proxies
+  // /data-pipeline/ to this process with the prefix stripped, so the app
+  // sees /console where the browser asked for /data-pipeline/console.
+  // With the default redirect: true, a bare /console request answers
+  // 301 Location: /console/ — a prefix-less URL the browser then
+  // resolves against the public host, landing on whatever owns /console/
+  // there (2026-10-25: the doc site, not this console). With redirect
+  // false the index is served in place, no Location is ever emitted, and
+  // the absolute asset base in the console build (see vite.config.js)
+  // keeps assets resolving under both proxy shapes.
   const consoleDir = join(admin.repoRoot(config, adminDeps.envFile), "apps/console/dist");
   if (existsSync(consoleDir)) {
     const prefixes = [...new Set(["/console", config.basePath ? `${config.basePath}/console` : "/console"])];
-    app.use(prefixes, express.static(consoleDir));
+    app.use(prefixes, express.static(consoleDir, { redirect: false }));
+    // Bare mount paths (no trailing slash, no extra segment): serve the
+    // SPA entry directly. express.static with redirect: false already
+    // does this for directory requests; the explicit handler makes the
+    // behaviour independent of static internals.
+    app.get(prefixes, (_req, res) => {
+      res.sendFile(join(consoleDir, "index.html"));
+    });
     app.get(
       prefixes.map((p) => `${p}/*`),
       (_req, res) => {

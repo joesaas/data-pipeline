@@ -30,3 +30,13 @@ npm run dev -w @data-pipeline/console     # 仅调界面；API 请求需同源�
 API 在启动时检查 `apps/console/dist/` 是否存在：存在才挂载 `/console`，
 不存在则静默跳过（CLI、旧部署都不受影响）。部署顺序保证构建先于重启，
 所以 `deploy.sh deploy` 后控制台即随 API 一起上线。
+
+## 路由与反向代理注意事项
+
+- 构建产物用绝对资源基址 `/data-pipeline/console/`（见 vite.config.js），
+  而不用相对路径：控制台必须在带尾斜杠与不带尾斜杠两种 URL 下都能用，
+  相对基址在无斜杠 URL 下会把资源解析到父目录而 404。
+- API 挂载静态资源时关掉了重定向（`redirect: false`，见 routes.ts）：
+  nginx 代理会剥掉 `/data-pipeline` 前缀，默认重定向会发出不带前缀的
+  `Location: /console/`，浏览器会被带到别的站点（2026-10-25 实测：落到
+  doc 站）。关掉重定向后，无斜杠地址直接返回首页，不再发出 Location。
