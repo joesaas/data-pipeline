@@ -17,75 +17,66 @@ export function apiDbPath(envFile: string | null): string {
 }
 
 /**
- * Read the cursor-trigger webhook endpoint from the API's database
- * (webhook_configs table, console-managed). Read-only open with a busy
+ * Read the trigger webhook endpoint from the API's database (webhooks
+ * table, console-managed) — the only source. Read-only open with a busy
  * timeout: the API runs WAL mode, so readers proceed alongside writers,
  * and a contended read waits briefly instead of failing outright.
  *
- * Resolution order for the scheduled trigger: the row marked active
- * (newest-updated wins if several are marked — the API keeps at most one
- * active, this is belt and braces), then the legacy cursor-trigger row
- * (databases from before the webhook list existed, where the migration
- * has not marked it yet), then null — the caller falls back to the
- * environment instead of failing the trigger.
+ * There is no environment fallback: when no row is marked active, the
+ * scheduled trigger skips the tick (see the job file) instead of sending
+ * anywhere.
  *
- * Returns null on ANY failure — missing file, missing table or column (a
- * database from before the table/column existed), locked, unreadable.
+ * Returns null on ANY failure — missing file, missing table or column,
+ * locked, unreadable.
  */
-export function loadWebhookConfigFromDb(dbPath: string): { url: string; token: string; payload: string | null } | null {
-  return loadActiveWebhookFromDb(dbPath) ?? loadWebhookConfigByName(dbPath, "cursor-trigger");
+export interface DbWebhook {
+  url: string;
+  token: string;
+  payload: string | null;
+}
+
+function readWebhookRow(
+  dbPath: string,
+  where: string,
+  params: (string | number)[],
+): DbWebhook | null {
+  if (!existsSync(dbPath)) return null;
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    db.exec("PRAGMA busy_timeout = 5000;");
+    const row = db
+      .prepare(`SELECT url, token, payload FROM webhooks ${where}`)
+      .get(...params) as { url: string; token: string; payload: string | null } | undefined;
+    if (!row || !row.url || !row.token) return null;
+    return { url: row.url, token: row.token, payload: row.payload ?? null };
+  } catch {
+    return null;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // Already closed; nothing to do.
+    }
+  }
 }
 
 /** The row marked scheduled (is_active), newest-updated first, or null. */
-export function loadActiveWebhookFromDb(dbPath: string): { url: string; token: string; payload: string | null } | null {
-  if (!existsSync(dbPath)) return null;
-  let db: DatabaseSync | null = null;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    db.exec("PRAGMA busy_timeout = 5000;");
-    const row = db
-      .prepare("SELECT url, token, payload FROM webhook_configs WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1")
-      .get() as { url: string; token: string; payload: string | null } | undefined;
-    if (!row || !row.url || !row.token) return null;
-    return { url: row.url, token: row.token, payload: row.payload ?? null };
-  } catch {
-    return null;
-  } finally {
-    try {
-      db?.close();
-    } catch {
-      // Already closed; nothing to do.
-    }
-  }
+export function loadActiveWebhookFromDb(dbPath: string): DbWebhook | null {
+  return readWebhookRow(dbPath, "WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1", []);
 }
 
-/** One row by name (used for test-firing a specific webhook), or null. */
-export function loadWebhookConfigByName(dbPath: string, name: string): { url: string; token: string; payload: string | null } | null {
-  if (!existsSync(dbPath)) return null;
-  let db: DatabaseSync | null = null;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    db.exec("PRAGMA busy_timeout = 5000;");
-    const row = db
-      .prepare("SELECT url, token, payload FROM webhook_configs WHERE name = ?")
-      .get(name) as { url: string; token: string; payload: string | null } | undefined;
-    if (!row || !row.url || !row.token) return null;
-    return { url: row.url, token: row.token, payload: row.payload ?? null };
-  } catch {
-    return null;
-  } finally {
-    try {
-      db?.close();
-    } catch {
-      // Already closed; nothing to do.
-    }
-  }
+/** One row by id (used for test-firing a specific webhook), or null. */
+export function loadWebhookByIdFromDb(dbPath: string, id: number): DbWebhook | null {
+  return readWebhookRow(dbPath, "WHERE id = ?", [id]);
 }
 
 /**
  * Content of the active payload-list item, or null when there is none
  * (no table yet, no active row, or any read failure — the caller falls
- * back to the single template / prompt / ping).
+ * back to the single template / prompt / ping). The payloads table is
+ * still read here even though the console no longer manages it: a row
+ * left active keeps shaping the body until it is cleared in the database.
  */
 export function loadActivePayloadFromDb(dbPath: string): string | null {
   if (!existsSync(dbPath)) return null;

@@ -70,23 +70,13 @@ export function registerRoutes(
         admin_tokens: `GET ${base}/api/v1/admin/tokens`,
         admin_token_create: `POST ${base}/api/v1/admin/tokens`,
         admin_token_revoke: `POST ${base}/api/v1/admin/tokens/:id/revoke`,
-        admin_cursor_status: `GET ${base}/api/v1/admin/jobs/cursor-trigger`,
-        admin_cursor_webhook_get: `GET ${base}/api/v1/admin/jobs/cursor-trigger/webhook`,
-        admin_cursor_trigger: `POST ${base}/api/v1/admin/jobs/cursor-trigger/trigger`,
-        admin_cursor_interval: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/interval`,
-        admin_cursor_webhook: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/webhook`,
-        admin_cursor_webhook_import: `POST ${base}/api/v1/admin/jobs/cursor-trigger/webhook/import`,
-        admin_cursor_webhook_delete: `DELETE ${base}/api/v1/admin/jobs/cursor-trigger/webhook`,
-        admin_cursor_restart: `POST ${base}/api/v1/admin/jobs/cursor-trigger/restart`,
-        admin_cursor_prompt: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/prompt`,
-        admin_cursor_payloads: `GET ${base}/api/v1/admin/jobs/cursor-trigger/payloads`,
-        admin_cursor_payload: `POST ${base}/api/v1/admin/jobs/cursor-trigger/payloads`,
-        admin_cursor_payload_active: `POST ${base}/api/v1/admin/jobs/cursor-trigger/payloads/:id/active`,
-        admin_cursor_webhooks: `GET ${base}/api/v1/admin/jobs/cursor-trigger/webhooks`,
-        admin_cursor_webhook_create: `POST ${base}/api/v1/admin/jobs/cursor-trigger/webhooks`,
-        admin_cursor_webhook_detail: `GET ${base}/api/v1/admin/jobs/cursor-trigger/webhooks/:name`,
-        admin_cursor_webhook_active: `POST ${base}/api/v1/admin/jobs/cursor-trigger/webhooks/:name/active`,
-        admin_cursor_webhook_test: `POST ${base}/api/v1/admin/jobs/cursor-trigger/webhooks/:name/test`,
+        admin_webhooks: `GET ${base}/api/v1/admin/webhooks`,
+        admin_webhook_create: `POST ${base}/api/v1/admin/webhooks`,
+        admin_webhook_detail: `GET ${base}/api/v1/admin/webhooks/:id`,
+        admin_webhook_update: `PUT ${base}/api/v1/admin/webhooks/:id`,
+        admin_webhook_delete: `DELETE ${base}/api/v1/admin/webhooks/:id`,
+        admin_webhook_active: `POST ${base}/api/v1/admin/webhooks/:id/active`,
+        admin_webhook_test: `POST ${base}/api/v1/admin/webhooks/:id/test`,
       },
       console: `${base}/console`,
       docs: "https://github.com/joesaas/data-pipeline",
@@ -195,65 +185,15 @@ export function registerRoutes(
   router.get("/api/v1/admin/tokens", (req, res) => admin.listTokens(adminDeps, req, res));
   router.post("/api/v1/admin/tokens", (req, res) => admin.createToken(adminDeps, req, res));
   router.post("/api/v1/admin/tokens/:id/revoke", (req, res) => admin.revokeToken(adminDeps, req, res));
-  router.get("/api/v1/admin/jobs/cursor-trigger", (req, res) => admin.getCursorStatus(adminDeps, req, res));
-  router.get("/api/v1/admin/jobs/cursor-trigger/webhook", (req, res) =>
-    admin.getCursorWebhook(adminDeps, req, res),
-  );
-  router.put("/api/v1/admin/jobs/cursor-trigger/interval", (req, res) =>
-    admin.setCursorInterval(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/jobs/cursor-trigger/trigger", (req, res) =>
-    admin.triggerCursor(adminDeps, req, res),
-  );
-  router.put("/api/v1/admin/jobs/cursor-trigger/webhook", (req, res) =>
-    admin.setCursorWebhook(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/jobs/cursor-trigger/webhook/import", (req, res) =>
-    admin.importCursorWebhook(adminDeps, req, res),
-  );
-  router.delete("/api/v1/admin/jobs/cursor-trigger/webhook", (req, res) =>
-    admin.deleteCursorWebhook(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/jobs/cursor-trigger/restart", (req, res) =>
-    admin.restartJobRunner(adminDeps, req, res),
-  );
-  router.put("/api/v1/admin/jobs/cursor-trigger/prompt", (req, res) =>
-    admin.setCursorPrompt(adminDeps, req, res),
-  );
-  router.get("/api/v1/admin/jobs/cursor-trigger/payloads", (req, res) =>
-    admin.listCursorPayloads(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/jobs/cursor-trigger/payloads", (req, res) =>
-    admin.createCursorPayload(adminDeps, req, res),
-  );
-  router.put("/api/v1/admin/jobs/cursor-trigger/payloads/:id", (req, res) =>
-    admin.updateCursorPayload(adminDeps, req, res),
-  );
-  router.delete("/api/v1/admin/jobs/cursor-trigger/payloads/:id", (req, res) =>
-    admin.deleteCursorPayload(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/jobs/cursor-trigger/payloads/:id/active", (req, res) =>
-    admin.setCursorPayloadActive(adminDeps, req, res),
-  );
-  router.get("/api/v1/admin/jobs/cursor-trigger/webhooks", (req, res) =>
-    admin.listWebhooks(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/jobs/cursor-trigger/webhooks", (req, res) =>
-    admin.createWebhook(adminDeps, req, res),
-  );
-  router.get("/api/v1/admin/jobs/cursor-trigger/webhooks/:name", (req, res) =>
-    admin.getWebhook(adminDeps, req, res),
-  );
-  router.put("/api/v1/admin/jobs/cursor-trigger/webhooks/:name", (req, res) =>
-    admin.updateWebhook(adminDeps, req, res),
-  );
-  router.delete("/api/v1/admin/jobs/cursor-trigger/webhooks/:name", (req, res) =>
-    admin.deleteWebhook(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/jobs/cursor-trigger/webhooks/:name/active", (req, res) =>
+  router.get("/api/v1/admin/webhooks", (req, res) => admin.listWebhooks(adminDeps, req, res));
+  router.post("/api/v1/admin/webhooks", (req, res) => admin.createWebhook(adminDeps, req, res));
+  router.get("/api/v1/admin/webhooks/:id", (req, res) => admin.getWebhook(adminDeps, req, res));
+  router.put("/api/v1/admin/webhooks/:id", (req, res) => admin.updateWebhook(adminDeps, req, res));
+  router.delete("/api/v1/admin/webhooks/:id", (req, res) => admin.deleteWebhook(adminDeps, req, res));
+  router.post("/api/v1/admin/webhooks/:id/active", (req, res) =>
     admin.setWebhookActive(adminDeps, req, res),
   );
-  router.post("/api/v1/admin/jobs/cursor-trigger/webhooks/:name/test", (req, res) =>
+  router.post("/api/v1/admin/webhooks/:id/test", (req, res) =>
     admin.testWebhook(adminDeps, req, res),
   );
 

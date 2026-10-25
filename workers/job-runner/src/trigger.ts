@@ -4,20 +4,19 @@
  * or a real token.
  *
  * Secrets rule (same as the cleaner's LLM key): the webhook URL and the
- * Bearer token come from the database webhook_configs table first (console
- * managed), falling back to the environment (server root .env). They are
- * never hard-coded, never logged, and never included in errors.
+ * Bearer token come only from the database webhooks table (console
+ * managed). They are never hard-coded, never logged, and never included
+ * in errors. There is no environment fallback.
  */
 
 export interface TriggerConfig {
   url: string;
   token: string;
-  intervalMinutes: number;
   /**
    * Instruction text for the receiving automation. NOT resolved from the
-   * environment: the job fills it from the trigger state file (console
-   * setting). Undefined/empty means "no prompt" — the body stays the old
-   * ping shape and the receiver decides on its own.
+   * environment: the job fills it from the trigger state file. Undefined/
+   * empty means "no prompt" — the body stays the old ping shape and the
+   * receiver decides on its own.
    */
   prompt?: string;
   /**
@@ -28,8 +27,8 @@ export interface TriggerConfig {
    */
   payload?: string | null;
   /**
-   * Content of the active payload-list item (console-managed, read from
-   * the database on every attempt). Wins over `payload` below.
+   * Content of the active payload-list item (read from the database on
+   * every attempt). Wins over `payload` below.
    */
   activePayload?: string | null;
   /**
@@ -45,32 +44,22 @@ export interface DbWebhookConfig {
   token: string;
   payload: string | null;
 }
-/** Defaults mirror the cleaner: hourly, minimum 1 minute. */
-export function resolveConfig(env: NodeJS.ProcessEnv): TriggerConfig {
-  return resolveWebhookConfig(env, null);
-}
 
 /**
- * Resolve the webhook endpoint, preferring the database configuration
- * (managed from the console) over the environment, per field: a database
- * row wins where it has a value, otherwise the corresponding .env value
- * is used. That keeps old .env-only deployments working until the config
- * is saved once from the console, after which the database wins.
+ * Resolve the webhook endpoint from the database row. A null row means
+ * "no webhook is scheduled" and fails here with a readable message —
+ * the caller (the job) skips the tick instead of reaching this, so this
+ * is a backstop, not a normal path.
  */
-export function resolveWebhookConfig(
-  env: NodeJS.ProcessEnv,
-  db: DbWebhookConfig | null,
-): TriggerConfig {
-  const url = (db?.url.trim() ? db.url.trim() : env.CURSOR_WEBHOOK_URL?.trim()) ?? "";
-  const token = (db?.token.trim() ? db.token.trim() : env.CURSOR_AUTOMATION_TOKEN?.trim()) ?? "";
-  const missing: string[] = [];
-  if (!url) missing.push("CURSOR_WEBHOOK_URL");
-  if (!token) missing.push("CURSOR_AUTOMATION_TOKEN");
-  if (missing.length > 0) {
-    // Name the variables only — never their (absent) values.
-    throw new Error(`missing webhook config: ${missing.join(", ")} (save it from the console, or set it in the repo root .env on the server)`);
+export function resolveWebhookConfig(db: DbWebhookConfig | null): TriggerConfig {
+  if (!db) {
+    throw new Error("no active webhook configured (add one in the console and set it as scheduled)");
   }
-  const intervalMinutes = Math.max(1, Number(env.CURSOR_TRIGGER_INTERVAL_MINUTES ?? 60) || 60);
+  const url = db.url.trim();
+  const token = db.token.trim();
+  if (!url || !token) {
+    throw new Error("no active webhook configured (add one in the console and set it as scheduled)");
+  }
   // Shape checks: a bad value (e.g. a pasted placeholder with brackets,
   // spaces or non-ASCII text) must fail here with a readable message, not
   // later as a cryptic ByteString error from fetch. Messages name the
@@ -79,14 +68,14 @@ export function resolveWebhookConfig(
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("bad protocol");
   } catch {
-    throw new Error("CURSOR_WEBHOOK_URL is not a valid http(s) URL — check the value in the console webhook settings or the repo root .env");
+    throw new Error("CURSOR_WEBHOOK_URL is not a valid http(s) URL — check the value in the console webhook settings");
   }
   if (!/^[\x21-\x7E]+$/.test(token)) {
     throw new Error(
       "CURSOR_AUTOMATION_TOKEN is not a plain ASCII token (it contains spaces, brackets or non-ASCII characters) — the stored value must be the raw crsr_ token only, with no placeholder text",
     );
   }
-  return { url, token, intervalMinutes, payload: db?.payload ?? null };
+  return { url, token, payload: db.payload ?? null };
 }
 
 /** Replace {{triggered_at}} / {{source}} inside string values (keys untouched). */

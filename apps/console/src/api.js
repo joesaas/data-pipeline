@@ -52,33 +52,11 @@ export const adminApi = {
   createToken: (key, name, role) =>
     api("POST", "/api/v1/admin/tokens", key, { name, role }),
   revokeToken: (key, id) => api("POST", `/api/v1/admin/tokens/${id}/revoke`, key),
-  cursorStatus: (key) => api("GET", "/api/v1/admin/jobs/cursor-trigger", key),
-  cursorTrigger: (key, body) => api("POST", "/api/v1/admin/jobs/cursor-trigger/trigger", key, body),
-  cursorPayloads: (key) => api("GET", "/api/v1/admin/jobs/cursor-trigger/payloads", key),
-  cursorPayloadCreate: (key, body) =>
-    api("POST", "/api/v1/admin/jobs/cursor-trigger/payloads", key, body),
-  cursorPayloadUpdate: (key, id, body) =>
-    api("PUT", `/api/v1/admin/jobs/cursor-trigger/payloads/${id}`, key, body),
-  cursorPayloadDelete: (key, id) =>
-    api("DELETE", `/api/v1/admin/jobs/cursor-trigger/payloads/${id}`, key),
-  cursorPayloadActive: (key, id, active) =>
-    api("POST", `/api/v1/admin/jobs/cursor-trigger/payloads/${id}/active`, key, { active }),
-  cursorInterval: (key, intervalMinutes) =>
-    api("PUT", "/api/v1/admin/jobs/cursor-trigger/interval", key, { intervalMinutes }),
-  cursorWebhooks: (key) => api("GET", "/api/v1/admin/jobs/cursor-trigger/webhooks", key),
-  cursorWebhookCreate: (key, body) =>
-    api("POST", "/api/v1/admin/jobs/cursor-trigger/webhooks", key, body),
-  cursorWebhookUpdate: (key, name, body) =>
-    api("PUT", `/api/v1/admin/jobs/cursor-trigger/webhooks/${encodeURIComponent(name)}`, key, body),
-  cursorWebhookDelete: (key, name) =>
-    api("DELETE", `/api/v1/admin/jobs/cursor-trigger/webhooks/${encodeURIComponent(name)}`, key),
-  cursorWebhookActive: (key, name, active) =>
-    api("POST", `/api/v1/admin/jobs/cursor-trigger/webhooks/${encodeURIComponent(name)}/active`, key, { active }),
-  cursorWebhookTest: (key, name) =>
-    api("POST", `/api/v1/admin/jobs/cursor-trigger/webhooks/${encodeURIComponent(name)}/test`, key, {}),
-  cursorWebhookImport: (key) =>
-    api("POST", "/api/v1/admin/jobs/cursor-trigger/webhook/import", key),
-  cursorPrompt: (key, prompt) =>
-    api("PUT", "/api/v1/admin/jobs/cursor-trigger/prompt", key, { prompt }),
-  cursorRestart: (key) => api("POST", "/api/v1/admin/jobs/cursor-trigger/restart", key),
+  listWebhooks: (key) => api("GET", "/api/v1/admin/webhooks", key),
+  createWebhook: (key, body) => api("POST", "/api/v1/admin/webhooks", key, body),
+  updateWebhook: (key, id, body) => api("PUT", `/api/v1/admin/webhooks/${id}`, key, body),
+  deleteWebhook: (key, id) => api("DELETE", `/api/v1/admin/webhooks/${id}`, key),
+  setWebhookActive: (key, id, active) =>
+    api("POST", `/api/v1/admin/webhooks/${id}/active`, key, { active }),
+  testWebhook: (key, id) => api("POST", `/api/v1/admin/webhooks/${id}/test`, key, {}),
 };

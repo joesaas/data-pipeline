@@ -45,26 +45,29 @@ export interface StoredToken {
 }
 
 /**
- * A webhook configuration (e.g. the cursor-trigger automation endpoint).
- * The token is stored in plaintext by necessity — it must be sent as a
- * Bearer token on every trigger — so it is never returned to clients:
- * listings and status reports carry the metadata view only.
+ * One webhook endpoint in the console's webhooks table — the only webhook
+ * table. The token is stored in plaintext by necessity — it must be sent
+ * as a Bearer token on every trigger — so it is never returned to clients:
+ * listings and detail views carry the metadata view only.
  * `payload` is the user-authored JSON body template for the trigger
  * request (it usually contains the `prompt`); null means "no template —
  * use the built-in body shape".
  */
-export interface StoredWebhookConfig {
+export interface StoredWebhook {
+  id: number;
   name: string;
   url: string;
   token: string;
   payload: string | null;
   /** True when this is the webhook the scheduled trigger fires. At most one row is active. */
   is_active: boolean;
+  created_at: string;
   updated_at: string;
 }
 
-/** Public view of a webhook configuration: everything except the token. */
-export interface WebhookConfigMeta {
+/** Public view of a webhook: everything except the token. */
+export interface WebhookMeta {
+  id: number;
   name: string;
   url: string;
   payload: string | null;
@@ -75,11 +78,11 @@ export interface WebhookConfigMeta {
 }
 
 /**
- * One saved webhook payload template in the console's payload list. The
- * content is a user-authored JSON object (it usually contains the
- * `prompt`); at most one row is active, and the scheduled trigger sends
- * the active one. Content is not a secret, so list/detail endpoints
- * return it in full.
+ * One saved webhook payload template. The content is a user-authored JSON
+ * object (it usually contains the `prompt`); at most one row is active,
+ * and the scheduled trigger sends the active one. Content is not a secret.
+ * The table is still read by the trigger job; the console no longer
+ * manages this list.
  */
 export interface WebhookPayload {
   id: string;

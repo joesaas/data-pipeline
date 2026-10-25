@@ -3,8 +3,8 @@ import { join } from "node:path";
 import type {
   StoredRecord,
   StoredToken,
-  StoredWebhookConfig,
-  WebhookConfigMeta,
+  StoredWebhook,
+  WebhookMeta,
   WebhookPayload,
 } from "../domain/types.js";
 import { ADMIN_IDENTITY } from "../domain/types.js";
@@ -24,17 +24,45 @@ function inScope(identity: string, rec: StoredRecord): boolean {
 export class FileDriver implements StorageDriver {
   private recordsDir: string;
   private tokensPath: string;
-  private webhookConfigsPath: string;
+  private webhooksPath: string;
   private webhookPayloadsPath: string;
 
   constructor(dir: string) {
     this.recordsDir = join(dir, "records");
     this.tokensPath = join(dir, "tokens.json");
-    this.webhookConfigsPath = join(dir, "webhook-configs.json");
+    this.webhooksPath = join(dir, "webhooks.json");
     this.webhookPayloadsPath = join(dir, "webhook-payloads.json");
     mkdirSync(this.recordsDir, { recursive: true });
     if (!existsSync(this.tokensPath)) writeFileSync(this.tokensPath, "[]");
-    if (!existsSync(this.webhookConfigsPath)) writeFileSync(this.webhookConfigsPath, "[]");
+    // One-time migration from the old webhook-configs.json (name-keyed)
+    // to webhooks.json (id-keyed); the old file is removed once migrated.
+    const legacyPath = join(dir, "webhook-configs.json");
+    if (!existsSync(this.webhooksPath)) {
+      if (existsSync(legacyPath)) {
+        const old = JSON.parse(readFileSync(legacyPath, "utf8")) as {
+          name: string;
+          url: string;
+          token: string;
+          payload?: string | null;
+          is_active?: boolean;
+          updated_at: string;
+        }[];
+        const rows: StoredWebhook[] = old.map((c, i) => ({
+          id: i + 1,
+          name: c.name,
+          url: c.url,
+          token: c.token,
+          payload: c.payload ?? null,
+          is_active: c.is_active ?? c.name === "cursor-trigger",
+          created_at: c.updated_at,
+          updated_at: c.updated_at,
+        }));
+        writeFileSync(this.webhooksPath, JSON.stringify(rows, null, 1));
+      } else {
+        writeFileSync(this.webhooksPath, "[]");
+      }
+    }
+    if (existsSync(legacyPath)) rmSync(legacyPath);
     if (!existsSync(this.webhookPayloadsPath)) writeFileSync(this.webhookPayloadsPath, "[]");
   }
 
@@ -142,59 +170,53 @@ export class FileDriver implements StorageDriver {
     return true;
   }
 
-  private readWebhookConfigs(): StoredWebhookConfig[] {
-    return JSON.parse(readFileSync(this.webhookConfigsPath, "utf8")) as StoredWebhookConfig[];
+  private readWebhooks(): StoredWebhook[] {
+    return JSON.parse(readFileSync(this.webhooksPath, "utf8")) as StoredWebhook[];
   }
 
-  private writeWebhookConfigs(cfgs: StoredWebhookConfig[]): void {
-    writeFileSync(this.webhookConfigsPath, JSON.stringify(cfgs, null, 1));
+  private writeWebhooks(rows: StoredWebhook[]): void {
+    writeFileSync(this.webhooksPath, JSON.stringify(rows, null, 1));
   }
 
-  getWebhookConfig(name: string): StoredWebhookConfig | null {
-    const found = this.readWebhookConfigs().find((c) => c.name === name);
-    if (!found) return null;
-    // Rows written before the payload column existed lack the field at
-    // runtime even though the type requires it. Rows written before the
-    // webhook list existed lack is_active too — the old single row was
-    // the scheduled webhook, so it normalizes to active (mirroring the
-    // SQLite migration, which marks the cursor-trigger row active).
-    const row = found as StoredWebhookConfig & { payload?: string | null; is_active?: boolean };
-    return {
-      ...row,
-      payload: row.payload ?? null,
-      is_active: row.is_active ?? row.name === "cursor-trigger",
-    };
+  getWebhook(id: number): StoredWebhook | null {
+    return this.readWebhooks().find((w) => w.id === id) ?? null;
   }
 
-  listWebhookConfigs(): WebhookConfigMeta[] {
-    return this.readWebhookConfigs()
-      .map((c) => {
-        const row = c as StoredWebhookConfig & { payload?: string | null; is_active?: boolean };
-        return {
-          name: row.name,
-          url: row.url,
-          payload: (row.payload ?? null) as string | null,
-          is_active: row.is_active ?? row.name === "cursor-trigger",
-          hasToken: (row.token ?? "").trim() !== "",
-          updated_at: row.updated_at,
-        };
-      })
-      .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.name.localeCompare(b.name));
+  listWebhooks(): WebhookMeta[] {
+    return this.readWebhooks()
+      .map((w) => ({
+        id: w.id,
+        name: w.name,
+        url: w.url,
+        payload: w.payload ?? null,
+        is_active: w.is_active ?? false,
+        hasToken: (w.token ?? "").trim() !== "",
+        updated_at: w.updated_at,
+      }))
+      .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.id - b.id);
   }
 
-  saveWebhookConfig(cfg: StoredWebhookConfig): void {
-    const cfgs = this.readWebhookConfigs();
-    const i = cfgs.findIndex((c) => c.name === cfg.name);
-    if (i >= 0) cfgs[i] = cfg;
-    else cfgs.push(cfg);
-    this.writeWebhookConfigs(cfgs);
+  saveWebhook(w: StoredWebhook): StoredWebhook {
+    const rows = this.readWebhooks();
+    if (w.id > 0) {
+      const i = rows.findIndex((x) => x.id === w.id);
+      if (i >= 0) rows[i] = w;
+      else rows.push(w);
+      this.writeWebhooks(rows);
+      return w;
+    }
+    const next = rows.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+    const saved = { ...w, id: next };
+    rows.push(saved);
+    this.writeWebhooks(rows);
+    return saved;
   }
 
-  deleteWebhookConfig(name: string): boolean {
-    const cfgs = this.readWebhookConfigs();
-    const kept = cfgs.filter((c) => c.name !== name);
-    if (kept.length === cfgs.length) return false;
-    this.writeWebhookConfigs(kept);
+  deleteWebhook(id: number): boolean {
+    const rows = this.readWebhooks();
+    const kept = rows.filter((w) => w.id !== id);
+    if (kept.length === rows.length) return false;
+    this.writeWebhooks(kept);
     return true;
   }
 

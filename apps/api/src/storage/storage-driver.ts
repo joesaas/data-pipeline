@@ -1,8 +1,8 @@
 import type {
   StoredRecord,
   StoredToken,
-  StoredWebhookConfig,
-  WebhookConfigMeta,
+  StoredWebhook,
+  WebhookMeta,
   WebhookPayload,
 } from "../domain/types.js";
 
@@ -40,17 +40,18 @@ export interface StorageDriver {
   listTokens(): StoredToken[];
   revokeToken(id: string): boolean;
 
-  /** Webhook configurations (e.g. the cursor-trigger endpoint). Tokens are
-   *  plaintext by necessity (Bearer auth) and are never exposed: only
-   *  getWebhookConfig returns one, and only to server-side callers. */
-  getWebhookConfig(name: string): StoredWebhookConfig | null;
+  /** Webhooks (the only webhook table). Tokens are plaintext by
+   *  necessity (Bearer auth) and are never exposed: only getWebhook
+   *  returns one, and only to server-side callers. */
+  getWebhook(id: number): StoredWebhook | null;
   /** Metadata views (no tokens), oldest-updated first. */
-  listWebhookConfigs(): WebhookConfigMeta[];
-  /** Insert or replace by name. */
-  saveWebhookConfig(cfg: StoredWebhookConfig): void;
-  deleteWebhookConfig(name: string): boolean;
+  listWebhooks(): WebhookMeta[];
+  /** Insert (id <= 0 assigns the next id) or replace by id. Returns the stored row. */
+  saveWebhook(w: StoredWebhook): StoredWebhook;
+  deleteWebhook(id: number): boolean;
 
-  /** Saved payload templates for the cursor trigger's payload list. */
+  /** Saved payload templates the trigger job still reads for its active
+   *  row (the console no longer manages this list). */
   listWebhookPayloads(): WebhookPayload[];
   getWebhookPayload(id: string): WebhookPayload | null;
   /** Insert or replace by id. */

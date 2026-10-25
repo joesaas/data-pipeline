@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -120,43 +120,47 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.throws(() => ingest.push("anonymous", { prompt: "x", content: "" }), /content is required/);
     });
 
-    it("webhook configs: save upserts, get returns the token, list hides it, delete removes", () => {
-      assert.equal(driver.getWebhookConfig("cursor-trigger"), null);
-      driver.saveWebhookConfig({
-        name: "cursor-trigger",
+    it("webhooks: save assigns ids and upserts, get returns the token, list hides it, delete removes", () => {
+      const created = driver.saveWebhook({
+        id: 0,
+        name: "hook-a",
         url: "https://hooks.example/hook",
         token: "tok-1",
         payload: null,
         is_active: false,
+        created_at: "2026-10-25T00:00:00.000Z",
         updated_at: "2026-10-25T00:00:00.000Z",
       });
-      assert.equal(driver.getWebhookConfig("cursor-trigger")?.token, "tok-1");
-      assert.equal(driver.getWebhookConfig("cursor-trigger")?.payload, null);
-      assert.equal(driver.getWebhookConfig("cursor-trigger")?.is_active, false);
-      driver.saveWebhookConfig({
-        name: "cursor-trigger",
+      assert.ok(created.id > 0);
+      assert.equal(driver.getWebhook(created.id)?.token, "tok-1");
+      assert.equal(driver.getWebhook(created.id)?.payload, null);
+      assert.equal(driver.getWebhook(created.id)?.is_active, false);
+      driver.saveWebhook({
+        ...created,
         url: "https://hooks.example/hook2",
         token: "tok-2",
         payload: JSON.stringify({ prompt: "do it" }),
         is_active: true,
         updated_at: "2026-10-25T01:00:00.000Z",
       });
-      const row = driver.getWebhookConfig("cursor-trigger");
+      const row = driver.getWebhook(created.id);
       assert.equal(row?.url, "https://hooks.example/hook2");
       assert.equal(row?.token, "tok-2");
       assert.equal(row?.payload, JSON.stringify({ prompt: "do it" }));
       assert.equal(row?.is_active, true);
-      const listed = driver.listWebhookConfigs();
+      assert.equal(row?.created_at, "2026-10-25T00:00:00.000Z");
+      const listed = driver.listWebhooks();
       assert.equal(listed.length, 1);
-      assert.equal(listed[0].name, "cursor-trigger");
+      assert.equal(listed[0].id, created.id);
+      assert.equal(listed[0].name, "hook-a");
       assert.equal(listed[0].url, "https://hooks.example/hook2");
       assert.equal(listed[0].payload, JSON.stringify({ prompt: "do it" }));
       assert.equal(listed[0].is_active, true);
       assert.equal(listed[0].hasToken, true);
       assert.equal("token" in listed[0], false);
-      assert.equal(driver.deleteWebhookConfig("cursor-trigger"), true);
-      assert.equal(driver.deleteWebhookConfig("cursor-trigger"), false);
-      assert.equal(driver.getWebhookConfig("cursor-trigger"), null);
+      assert.equal(driver.deleteWebhook(created.id), true);
+      assert.equal(driver.deleteWebhook(created.id), false);
+      assert.equal(driver.getWebhook(created.id), null);
     });
 
     it("webhook payloads: save upserts, list newest-updated first, delete removes", () => {
@@ -202,11 +206,13 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
 contract("sqlite", (dir) => new SqliteDriver(join(dir, "test.db")));
 contract("file", (dir) => new FileDriver(join(dir, "files")));
 
-// SQLite-only: opening a database created before the webhook list existed
-// migrates the legacy single row to scheduled (is_active), and rows of
-// other names stay unscheduled.
+// SQLite-only: opening a database that still has the old webhook_configs
+// table migrates its rows into webhooks (id-keyed, payload kept), marks
+// the legacy cursor-trigger row scheduled, leaves other rows unscheduled,
+// and drops the old table. A database whose old table predates the payload
+// column migrates with payload null.
 describe("sqlite webhook migration", () => {
-  it("marks the legacy cursor-trigger row active, others inactive", async () => {
+  it("migrates legacy rows into webhooks and drops the old table", async () => {
     const { DatabaseSync } = await import("node:sqlite");
     const dir = mkdtempSync(join(tmpdir(), "dp-migration-"));
     try {
@@ -219,7 +225,7 @@ describe("sqlite webhook migration", () => {
         "cursor-trigger",
         "https://old.example/hook",
         "old-token",
-        null,
+        JSON.stringify({ prompt: "old template" }),
         "2026-10-25T00:00:00.000Z",
       );
       db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?, ?)").run(
@@ -232,10 +238,106 @@ describe("sqlite webhook migration", () => {
       db.close();
       const driver = new SqliteDriver(path);
       try {
-        assert.equal(driver.getWebhookConfig("cursor-trigger")?.is_active, true);
-        assert.equal(driver.getWebhookConfig("other")?.is_active, false);
-        const active = driver.listWebhookConfigs().filter((m) => m.is_active);
-        assert.deepEqual(active.map((m) => m.name), ["cursor-trigger"]);
+        const rows = driver.listWebhooks();
+        assert.equal(rows.length, 2);
+        const legacy = rows.find((w) => w.name === "cursor-trigger");
+        assert.ok(legacy);
+        assert.equal(legacy.is_active, true);
+        assert.equal(legacy.payload, JSON.stringify({ prompt: "old template" }));
+        assert.equal(legacy.hasToken, true);
+        assert.equal("token" in legacy, false);
+        assert.equal(rows.find((w) => w.name === "other")?.is_active, false);
+        // Full row round-trips by id, and the old table is gone.
+        const full = driver.getWebhook(legacy.id);
+        assert.equal(full?.url, "https://old.example/hook");
+        assert.equal(full?.token, "old-token");
+        const check = new DatabaseSync(path, { readOnly: true });
+        try {
+          const tables = check
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'webhook_configs'")
+            .all();
+          assert.equal(tables.length, 0);
+        } finally {
+          check.close();
+        }
+      } finally {
+        driver.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates an old table without payload/is_active columns", async () => {
+    const { DatabaseSync } = await import("node:sqlite");
+    const dir = mkdtempSync(join(tmpdir(), "dp-migration-nopayload-"));
+    try {
+      const path = join(dir, "old.db");
+      const db = new DatabaseSync(path);
+      db.exec(
+        "CREATE TABLE webhook_configs (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL, updated_at TEXT NOT NULL);",
+      );
+      db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?)").run(
+        "cursor-trigger",
+        "https://ancient.example/hook",
+        "ancient-token",
+        "2026-10-25T00:00:00.000Z",
+      );
+      db.close();
+      const driver = new SqliteDriver(path);
+      try {
+        const rows = driver.listWebhooks();
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].name, "cursor-trigger");
+        assert.equal(rows[0].is_active, true);
+        assert.equal(rows[0].payload, null);
+      } finally {
+        driver.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// File-only: a directory that still has webhook-configs.json migrates its
+// rows into webhooks.json (id-keyed) and removes the old file.
+describe("file webhook migration", () => {
+  it("migrates legacy rows and drops the old file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dp-file-migration-"));
+    try {
+      writeFileSync(
+        join(dir, "webhook-configs.json"),
+        JSON.stringify([
+          {
+            name: "cursor-trigger",
+            url: "https://old.example/hook",
+            token: "old-token",
+            payload: JSON.stringify({ prompt: "old template" }),
+            is_active: true,
+            updated_at: "2026-10-25T00:00:00.000Z",
+          },
+          {
+            name: "other",
+            url: "https://other.example/hook",
+            token: "other-token",
+            updated_at: "2026-10-25T00:00:00.000Z",
+          },
+        ]),
+      );
+      const driver = new FileDriver(dir);
+      try {
+        const rows = driver.listWebhooks();
+        assert.equal(rows.length, 2);
+        const legacy = rows.find((w) => w.name === "cursor-trigger");
+        assert.ok(legacy);
+        assert.ok(legacy.id > 0);
+        assert.equal(legacy.is_active, true);
+        assert.equal(legacy.payload, JSON.stringify({ prompt: "old template" }));
+        assert.equal(driver.getWebhook(legacy.id)?.token, "old-token");
+        assert.equal(rows.find((w) => w.name === "other")?.is_active, false);
+        assert.equal(existsSync(join(dir, "webhook-configs.json")), false);
+        assert.equal(existsSync(join(dir, "webhooks.json")), true);
       } finally {
         driver.close();
       }
