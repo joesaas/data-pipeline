@@ -32,15 +32,18 @@ describe("resolveConfig", () => {
 
 describe("resolveWebhookConfig", () => {
   it("prefers the database config per field, falls back to env", () => {
-    const db = { url: "https://db.example/hook", token: "db-token" };
+    const db = { url: "https://db.example/hook", token: "db-token", payload: '{"prompt":"db"}' };
     const cfg = resolveWebhookConfig(ENV, db);
     assert.equal(cfg.url, "https://db.example/hook");
     assert.equal(cfg.token, "db-token");
-    const mixed = resolveWebhookConfig(ENV, { url: "https://db.example/hook", token: "" });
+    assert.equal(cfg.payload, '{"prompt":"db"}');
+    const mixed = resolveWebhookConfig(ENV, { url: "https://db.example/hook", token: "", payload: null });
     assert.equal(mixed.url, "https://db.example/hook");
     assert.equal(mixed.token, "crsr_test_token");
+    assert.equal(mixed.payload, null);
     const envOnly = resolveWebhookConfig(ENV, null);
     assert.equal(envOnly.url, ENV.CURSOR_WEBHOOK_URL);
+    assert.equal(envOnly.payload, null);
   });
   it("throws when neither source has the values", () => {
     assert.throws(() => resolveWebhookConfig({}, null), /missing webhook config/);
@@ -75,6 +78,36 @@ describe("buildRequest", () => {
     assert.equal("prompt" in JSON.parse(blank.body), false);
     const unset = buildRequest(resolveConfig(ENV), new Date("2026-10-24T02:00:00.000Z"));
     assert.equal("prompt" in JSON.parse(unset.body), false);
+  });
+  it("payload template is the body verbatim (placeholders replaced), prompt ignored", () => {
+    const req = buildRequest(
+      {
+        ...resolveConfig(ENV),
+        prompt: "ignored when payload is set",
+        payload: JSON.stringify({ prompt: "template prompt", at: "{{triggered_at}}", from: "{{source}}", other: "{{unknown}}" }),
+      },
+      new Date("2026-10-24T02:00:00.000Z"),
+    );
+    assert.deepEqual(JSON.parse(req.body), {
+      prompt: "template prompt",
+      at: "2026-10-24T02:00:00.000Z",
+      from: "data-pipeline/cursor-trigger",
+      other: "{{unknown}}",
+    });
+  });
+  it("payload template must be valid JSON and an object", () => {
+    const now = new Date("2026-10-24T02:00:00.000Z");
+    assert.throws(
+      () => buildRequest({ ...resolveConfig(ENV), payload: "{not json" }, now),
+      /not valid JSON/,
+    );
+    assert.throws(
+      () => buildRequest({ ...resolveConfig(ENV), payload: '["array"]' }, now),
+      /must be a JSON object/,
+    );
+    // Blank template falls back to the built-in body shape.
+    const blank = buildRequest({ ...resolveConfig(ENV), payload: "   " }, now);
+    assert.equal((JSON.parse(blank.body) as { source: string }).source, "data-pipeline/cursor-trigger");
   });
 });
 

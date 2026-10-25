@@ -109,6 +109,7 @@
           <div><label>webhook 配置</label><div>{{ cursor.webhookConfigured ? "已配置" : "未配置" }}</div></div>
           <div><label>配置来源</label><div>{{ cursor.webhookSource === "db" ? "数据库" : cursor.webhookSource === "env" ? "服务器 .env（回落）" : "—" }}</div></div>
           <div><label>数据库配置更新于</label><div>{{ cursor.webhookUpdatedAt ? fmtTime(cursor.webhookUpdatedAt) : "—" }}</div></div>
+          <div><label>payload 模板</label><div>{{ cursor.webhookPayloadSet ? "已设置" : "未设置（用内置 body）" }}</div></div>
           <div><label>区间来源</label><div>{{ cursor.intervalMinutes !== null ? "控制台设置" : "环境变量 / 默认 60 分钟" }}</div></div>
           <div><label>runner 脚本</label><div>{{ cursor.runnerScriptPresent ? "存在" : "缺失（job-runner 未构建？）" }}</div></div>
         </div>
@@ -121,7 +122,11 @@
           <input v-model="webhookToken" type="password" placeholder="Webhook token（留空则不改）" class="input" autocomplete="off" />
           <button class="btn primary" :disabled="busy">保存 webhook 配置</button>
         </form>
-        <p class="hint">只写不回显：保存后这里不显示已有值；只填要改的项，空着不动。保存到数据库后，下次触发即生效，无需重启。</p>
+        <form class="create" @submit.prevent="saveWebhook">
+          <textarea v-model="payloadInput" rows="8" placeholder='Payload（JSON 对象，如 {"prompt": "…"}，留空则清除模板、恢复内置 body）' class="input"></textarea>
+          <button class="btn primary" :disabled="busy">保存 payload</button>
+        </form>
+        <p class="hint">URL 与 token 留空则不改（token 永不回显）；payload 是完整值，留空即清除模板。设置了 payload 后，触发 body 就用这份 JSON（里面通常含 prompt），下面的单个 prompt 不再生效；body 里可用占位符 &#123;&#123;triggered_at&#125;&#125; 与 &#123;&#123;source&#125;&#125;，发送时替换为本次触发的值。</p>
         <p v-if="webhookOk" class="ok">{{ webhookOk }}</p>
         <p v-if="webhookError" class="err">{{ webhookError }}</p>
         <div class="row">
@@ -183,6 +188,9 @@ const triggering = ref(false);
 const triggerResult = ref("");
 const webhookUrl = ref("");
 const webhookToken = ref("");
+const payloadInput = ref("");
+const savedWebhookUrl = ref("");
+const savedPayload = ref("");
 const webhookError = ref("");
 const webhookOk = ref("");
 const promptInput = ref("");
@@ -281,6 +289,21 @@ async function refreshCursor() {
       promptInput.value = serverPrompt;
     }
     savedPrompt.value = serverPrompt;
+    // Same guard for the webhook form: URL and payload are echoed back
+    // (the token never is), but a refresh must not clobber unsaved edits.
+    try {
+      const hook = await adminApi.cursorWebhookGet(key.value);
+      if (webhookUrl.value === savedWebhookUrl.value) {
+        webhookUrl.value = hook.url ?? "";
+        savedWebhookUrl.value = webhookUrl.value;
+      }
+      if (payloadInput.value === savedPayload.value) {
+        payloadInput.value = hook.payload ?? "";
+        savedPayload.value = payloadInput.value;
+      }
+    } catch {
+      // No stored webhook row yet: leave the form alone.
+    }
   } catch (e) {
     cursorError.value = e.message;
   }
@@ -318,19 +341,24 @@ async function saveWebhook() {
   busy.value = true;
   webhookError.value = "";
   webhookOk.value = "";
+  // URL/token are partial updates (empty = keep); payload is the full
+  // desired template, so it is always sent — even empty, which clears it.
   const body = {};
   if (webhookUrl.value.trim()) body.webhookUrl = webhookUrl.value.trim();
   if (webhookToken.value.trim()) body.webhookToken = webhookToken.value.trim();
-  if (Object.keys(body).length === 0) {
-    webhookError.value = "至少填一项（URL 或 token）";
+  body.payload = payloadInput.value;
+  if (!body.webhookUrl && !body.webhookToken && payloadInput.value === savedPayload.value) {
+    webhookError.value = "至少改一项（URL、token 或 payload）";
     busy.value = false;
     return;
   }
   try {
     cursor.value = await adminApi.cursorWebhook(key.value, body);
     intervalInput.value = cursor.value.effectiveIntervalMinutes;
-    webhookUrl.value = "";
+    // The token never comes back; the visible values stay as displayed.
     webhookToken.value = "";
+    savedWebhookUrl.value = webhookUrl.value;
+    savedPayload.value = payloadInput.value;
     webhookOk.value = "已保存到数据库，下次触发即生效，无需重启。";
   } catch (e) {
     webhookError.value = e.message;

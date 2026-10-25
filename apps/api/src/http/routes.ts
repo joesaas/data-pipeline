@@ -71,6 +71,7 @@ export function registerRoutes(
         admin_token_create: `POST ${base}/api/v1/admin/tokens`,
         admin_token_revoke: `POST ${base}/api/v1/admin/tokens/:id/revoke`,
         admin_cursor_status: `GET ${base}/api/v1/admin/jobs/cursor-trigger`,
+        admin_cursor_webhook_get: `GET ${base}/api/v1/admin/jobs/cursor-trigger/webhook`,
         admin_cursor_trigger: `POST ${base}/api/v1/admin/jobs/cursor-trigger/trigger`,
         admin_cursor_interval: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/interval`,
         admin_cursor_webhook: `PUT ${base}/api/v1/admin/jobs/cursor-trigger/webhook`,
@@ -187,6 +188,9 @@ export function registerRoutes(
   router.post("/api/v1/admin/tokens", (req, res) => admin.createToken(adminDeps, req, res));
   router.post("/api/v1/admin/tokens/:id/revoke", (req, res) => admin.revokeToken(adminDeps, req, res));
   router.get("/api/v1/admin/jobs/cursor-trigger", (req, res) => admin.getCursorStatus(adminDeps, req, res));
+  router.get("/api/v1/admin/jobs/cursor-trigger/webhook", (req, res) =>
+    admin.getCursorWebhook(adminDeps, req, res),
+  );
   router.put("/api/v1/admin/jobs/cursor-trigger/interval", (req, res) =>
     admin.setCursorInterval(adminDeps, req, res),
   );

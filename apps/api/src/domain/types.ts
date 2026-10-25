@@ -49,11 +49,15 @@ export interface StoredToken {
  * The token is stored in plaintext by necessity — it must be sent as a
  * Bearer token on every trigger — so it is never returned to clients:
  * listings and status reports carry the metadata view only.
+ * `payload` is the user-authored JSON body template for the trigger
+ * request (it usually contains the `prompt`); null means "no template —
+ * use the built-in body shape".
  */
 export interface StoredWebhookConfig {
   name: string;
   url: string;
   token: string;
+  payload: string | null;
   updated_at: string;
 }
 
@@ -61,6 +65,7 @@ export interface StoredWebhookConfig {
 export interface WebhookConfigMeta {
   name: string;
   url: string;
+  payload: string | null;
   updated_at: string;
 }
 

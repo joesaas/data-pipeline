@@ -58,6 +58,7 @@ export const adminApi = {
     api("PUT", "/api/v1/admin/jobs/cursor-trigger/interval", key, { intervalMinutes }),
   cursorWebhook: (key, body) =>
     api("PUT", "/api/v1/admin/jobs/cursor-trigger/webhook", key, body),
+  cursorWebhookGet: (key) => api("GET", "/api/v1/admin/jobs/cursor-trigger/webhook", key),
   cursorWebhookImport: (key) =>
     api("POST", "/api/v1/admin/jobs/cursor-trigger/webhook/import", key),
   cursorWebhookDelete: (key) =>

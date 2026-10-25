@@ -57,8 +57,9 @@ if (!shouldTrigger(state, intervalMinutes, now)) {
     );
     saveState(statePath, { ...state, lastTriggeredAt: now.toISOString() });
     const origin = new URL(config.url).origin;
+    const bodyKind = config.payload ? "payload" : state.prompt ? "prompt" : "ping";
     console.log(
-      `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… interval=${intervalMinutes}m prompt=${state.prompt ? "set" : "unset"} cfg=${dbConfig ? "db" : "env"}`,
+      `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… interval=${intervalMinutes}m body=${bodyKind} cfg=${dbConfig ? "db" : "env"}`,
     );
   } catch (err) {
     console.error(

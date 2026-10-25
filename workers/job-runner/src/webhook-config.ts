@@ -26,17 +26,17 @@ export function apiDbPath(envFile: string | null): string {
  * from before the table existed), locked, unreadable — so the caller
  * falls back to the environment instead of failing the trigger.
  */
-export function loadWebhookConfigFromDb(dbPath: string): { url: string; token: string } | null {
+export function loadWebhookConfigFromDb(dbPath: string): { url: string; token: string; payload: string | null } | null {
   if (!existsSync(dbPath)) return null;
   let db: DatabaseSync | null = null;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
     db.exec("PRAGMA busy_timeout = 5000;");
     const row = db
-      .prepare("SELECT url, token FROM webhook_configs WHERE name = ?")
-      .get("cursor-trigger") as { url: string; token: string } | undefined;
+      .prepare("SELECT url, token, payload FROM webhook_configs WHERE name = ?")
+      .get("cursor-trigger") as { url: string; token: string; payload: string | null } | undefined;
     if (!row || !row.url || !row.token) return null;
-    return { url: row.url, token: row.token };
+    return { url: row.url, token: row.token, payload: row.payload ?? null };
   } catch {
     return null;
   } finally {

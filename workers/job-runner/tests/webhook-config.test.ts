@@ -32,25 +32,28 @@ describe("webhook-config", () => {
       const path = join(dir, "data.db");
       const db = new DatabaseSync(path);
       db.exec(
-        "CREATE TABLE webhook_configs (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL, updated_at TEXT NOT NULL);",
+        "CREATE TABLE webhook_configs (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL, payload TEXT, updated_at TEXT NOT NULL);",
       );
       assert.equal(loadWebhookConfigFromDb(path), null);
-      db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?)").run(
+      db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?, ?)").run(
         "cursor-trigger",
         "https://db.example/hook",
         "db-token",
+        JSON.stringify({ prompt: "db prompt" }),
         "2026-10-25T00:00:00.000Z",
       );
-      db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?)").run(
+      db.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?, ?)").run(
         "other",
         "https://other.example/hook",
         "other-token",
+        null,
         "2026-10-25T00:00:00.000Z",
       );
       db.close();
       assert.deepEqual(loadWebhookConfigFromDb(path), {
         url: "https://db.example/hook",
         token: "db-token",
+        payload: JSON.stringify({ prompt: "db prompt" }),
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -64,18 +67,20 @@ describe("webhook-config", () => {
       const writer = new DatabaseSync(path);
       writer.exec("PRAGMA journal_mode = WAL;");
       writer.exec(
-        "CREATE TABLE webhook_configs (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL, updated_at TEXT NOT NULL);",
+        "CREATE TABLE webhook_configs (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL, payload TEXT, updated_at TEXT NOT NULL);",
       );
-      writer.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?)").run(
+      writer.prepare("INSERT INTO webhook_configs VALUES (?, ?, ?, ?, ?)").run(
         "cursor-trigger",
         "https://wal.example/hook",
         "wal-token",
+        null,
         "2026-10-25T00:00:00.000Z",
       );
       // Writer stays open (like the running API) while the reader opens.
       assert.deepEqual(loadWebhookConfigFromDb(path), {
         url: "https://wal.example/hook",
         token: "wal-token",
+        payload: null,
       });
       writer.close();
     } finally {

@@ -20,12 +20,20 @@ export interface TriggerConfig {
    * ping shape and the receiver decides on its own.
    */
   prompt?: string;
+  /**
+   * User-authored JSON body template (console webhook setting, stored in
+   * the database). When set, it IS the request body (after placeholder
+   * substitution) and `prompt` above is ignored; when unset, the built-in
+   * body shape is used.
+   */
+  payload?: string | null;
 }
 
 /** A webhook endpoint read from the database (console-managed config). */
 export interface DbWebhookConfig {
   url: string;
   token: string;
+  payload: string | null;
 }
 /** Defaults mirror the cleaner: hourly, minimum 1 minute. */
 export function resolveConfig(env: NodeJS.ProcessEnv): TriggerConfig {
@@ -68,7 +76,24 @@ export function resolveWebhookConfig(
       "CURSOR_AUTOMATION_TOKEN is not a plain ASCII token (it contains spaces, brackets or non-ASCII characters) — the stored value must be the raw crsr_ token only, with no placeholder text",
     );
   }
-  return { url, token, intervalMinutes };
+  return { url, token, intervalMinutes, payload: db?.payload ?? null };
+}
+
+/** Replace {{triggered_at}} / {{source}} inside string values (keys untouched). */
+export function substitutePlaceholders(value: unknown, vars: Record<string, string>): unknown {
+  if (typeof value === "string") {
+    return value.replace(/\{\{(\w+)\}\}/g, (m, k: string) => vars[k] ?? m);
+  }
+  if (Array.isArray(value)) return value.map((v) => substitutePlaceholders(v, vars));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        k,
+        substitutePlaceholders(v, vars),
+      ]),
+    );
+  }
+  return value;
 }
 
 export interface TriggerRequest {
@@ -79,21 +104,44 @@ export interface TriggerRequest {
 }
 
 /**
- * The body is the trigger context plus, when the console has set one, the
- * instruction itself: receivers that run a routine off the `prompt` field
- * (see the console docs) execute it; without a prompt the body is just
- * the ping the old service sent, and the receiver decides on its own.
+ * The body is either the user-authored payload template (when set) or the
+ * built-in shape. The template usually contains the `prompt` itself, so
+ * when it is set the state's single prompt is ignored — the template is
+ * authoritative. Placeholders {{triggered_at}} / {{source}} inside string
+ * values are replaced with the run's values; anything else is sent
+ * verbatim. A template that is not valid JSON, or not a JSON object, fails
+ * here with a readable message (never echoing the template itself).
+ * Without a template, the body is the old shape: {source, triggered_at}
+ * plus `prompt` when the state has one, else just the ping.
  * The prompt is never logged (it can be long); only its presence is.
  */
 export function buildRequest(config: TriggerConfig, now: Date): TriggerRequest {
+  const headers = {
+    Authorization: `Bearer ${config.token}`,
+    "Content-Type": "application/json",
+  };
+  const template = config.payload?.trim() ? config.payload : null;
+  if (template) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(template);
+    } catch {
+      throw new Error("webhook payload is not valid JSON — check the value in the console webhook settings");
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("webhook payload must be a JSON object — check the value in the console webhook settings");
+    }
+    const body = substitutePlaceholders(parsed, {
+      triggered_at: now.toISOString(),
+      source: "data-pipeline/cursor-trigger",
+    });
+    return { url: config.url, method: "POST", headers, body: JSON.stringify(body) };
+  }
   const prompt = config.prompt?.trim() ? config.prompt : undefined;
   return {
     url: config.url,
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
       source: "data-pipeline/cursor-trigger",
       triggered_at: now.toISOString(),

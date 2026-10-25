@@ -142,12 +142,22 @@ export class FileDriver implements StorageDriver {
   }
 
   getWebhookConfig(name: string): StoredWebhookConfig | null {
-    return this.readWebhookConfigs().find((c) => c.name === name) ?? null;
+    const found = this.readWebhookConfigs().find((c) => c.name === name);
+    if (!found) return null;
+    // Rows written before the payload column existed lack the field at
+    // runtime even though the type requires it.
+    const row = found as StoredWebhookConfig & { payload?: string | null };
+    return { ...row, payload: row.payload ?? null };
   }
 
   listWebhookConfigs(): WebhookConfigMeta[] {
     return this.readWebhookConfigs()
-      .map(({ name, url, updated_at }) => ({ name, url, updated_at }))
+      .map(({ name, url, payload, updated_at }) => ({
+        name,
+        url,
+        payload: (payload ?? null) as string | null,
+        updated_at,
+      }))
       .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.name.localeCompare(b.name));
   }
 

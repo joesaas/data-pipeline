@@ -126,22 +126,27 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
         name: "cursor-trigger",
         url: "https://hooks.example/hook",
         token: "tok-1",
+        payload: null,
         updated_at: "2026-10-25T00:00:00.000Z",
       });
       assert.equal(driver.getWebhookConfig("cursor-trigger")?.token, "tok-1");
+      assert.equal(driver.getWebhookConfig("cursor-trigger")?.payload, null);
       driver.saveWebhookConfig({
         name: "cursor-trigger",
         url: "https://hooks.example/hook2",
         token: "tok-2",
+        payload: JSON.stringify({ prompt: "do it" }),
         updated_at: "2026-10-25T01:00:00.000Z",
       });
       const row = driver.getWebhookConfig("cursor-trigger");
       assert.equal(row?.url, "https://hooks.example/hook2");
       assert.equal(row?.token, "tok-2");
+      assert.equal(row?.payload, JSON.stringify({ prompt: "do it" }));
       const listed = driver.listWebhookConfigs();
       assert.equal(listed.length, 1);
       assert.equal(listed[0].name, "cursor-trigger");
       assert.equal(listed[0].url, "https://hooks.example/hook2");
+      assert.equal(listed[0].payload, JSON.stringify({ prompt: "do it" }));
       assert.equal("token" in listed[0], false);
       assert.equal(driver.deleteWebhookConfig("cursor-trigger"), true);
       assert.equal(driver.deleteWebhookConfig("cursor-trigger"), false);

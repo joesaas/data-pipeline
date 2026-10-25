@@ -167,6 +167,8 @@ export function cursorStatus(config: AppConfig, envFile: string | null, driver: 
   webhookSource: "db" | "env" | null;
   webhookInEnv: boolean;
   webhookUpdatedAt: string | null;
+  /** Whether the database row carries a payload template. */
+  webhookPayloadSet: boolean;
   runnerScriptPresent: boolean;
   /** The instruction text itself — not a secret, the console shows it. */
   prompt: string | null;
@@ -189,6 +191,7 @@ export function cursorStatus(config: AppConfig, envFile: string | null, driver: 
     webhookSource: dbRow !== null ? "db" : inEnv ? "env" : null,
     webhookInEnv: inEnv,
     webhookUpdatedAt: dbRow?.updated_at ?? null,
+    webhookPayloadSet: Boolean(dbRow?.payload?.trim()),
     runnerScriptPresent: existsSync(cursorRunnerScript(config, envFile)),
     prompt: state.prompt,
   };
@@ -298,11 +301,16 @@ export function setCursorPrompt(deps: AdminDeps, req: Request, res: Response): v
 
 /**
  * Set the cursor webhook configuration in the database webhook_configs
- * table (write-only: the response carries the status object, never the
- * values). Only the fields actually sent are changed; an omitted field
- * keeps its stored value. First setup requires both fields. URLs must be
- * https (loopback http allowed for local testing); tokens must be a
- * single whitespace-free token without quotes.
+ * table (write-only for the token: the response carries the status object,
+ * never the values). Only the URL/token fields actually sent are changed;
+ * an omitted field keeps its stored value. First setup requires both
+ * fields. URLs must be https (loopback http allowed for local testing);
+ * tokens must be a single whitespace-free token without quotes.
+ *
+ * `payload` is the user-authored JSON body template (it usually contains
+ * the `prompt`); when set it is authoritative and the state's single
+ * prompt is ignored. It is a full value, not a partial update: an absent
+ * key keeps the stored template, an empty string clears it.
  *
  * Freshness contract: the trigger job reads the database on every trigger
  * attempt, so a console save takes effect on the next tick — no runner
@@ -311,11 +319,11 @@ export function setCursorPrompt(deps: AdminDeps, req: Request, res: Response): v
  */
 export function setCursorWebhook(deps: AdminDeps, req: Request, res: Response): void {
   if (adminOf(deps, req, res) === null) return;
-  const body = (req.body ?? {}) as { webhookUrl?: unknown; webhookToken?: unknown };
+  const body = (req.body ?? {}) as { webhookUrl?: unknown; webhookToken?: unknown; payload?: unknown };
   const urlRaw = typeof body.webhookUrl === "string" ? body.webhookUrl.trim() : "";
   const tokenRaw = typeof body.webhookToken === "string" ? body.webhookToken.trim() : "";
-  if (!urlRaw && !tokenRaw) {
-    res.status(400).json({ error: "provide webhookUrl and/or webhookToken", field: "webhookUrl" });
+  if (!urlRaw && !tokenRaw && !("payload" in body)) {
+    res.status(400).json({ error: "provide webhookUrl and/or webhookToken and/or payload", field: "webhookUrl" });
     return;
   }
   if (urlRaw && !validWebhookUrl(urlRaw)) {
@@ -325,6 +333,39 @@ export function setCursorWebhook(deps: AdminDeps, req: Request, res: Response): 
   if (tokenRaw && (tokenRaw.length > 2000 || /\s/.test(tokenRaw) || tokenRaw.includes("'"))) {
     res.status(400).json({ error: "webhookToken must be a single token without whitespace or quotes", field: "webhookToken" });
     return;
+  }
+  // `payload` is the full desired template, not a partial update: an
+  // absent key keeps the stored template, an empty string clears it back
+  // to the built-in body shape. A non-empty payload must be a JSON object
+  // (max 200000 chars); it usually contains the `prompt` itself, and when
+  // set it is authoritative — the state's single prompt is then ignored.
+  let payload: string | null | undefined;
+  if ("payload" in body) {
+    if (typeof body.payload !== "string") {
+      res.status(400).json({ error: "payload must be a string (empty clears it)", field: "payload" });
+      return;
+    }
+    const trimmed = body.payload.trim();
+    if (trimmed) {
+      if (trimmed.length > 200_000) {
+        res.status(400).json({ error: "payload must be at most 200000 chars", field: "payload" });
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        res.status(400).json({ error: "payload must be valid JSON", field: "payload" });
+        return;
+      }
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        res.status(400).json({ error: "payload must be a JSON object", field: "payload" });
+        return;
+      }
+      payload = trimmed;
+    } else {
+      payload = null;
+    }
   }
   const existing = deps.driver.getWebhookConfig(CURSOR_WEBHOOK_NAME);
   const url = urlRaw || existing?.url;
@@ -340,9 +381,27 @@ export function setCursorWebhook(deps: AdminDeps, req: Request, res: Response): 
     name: CURSOR_WEBHOOK_NAME,
     url,
     token,
+    payload: payload === undefined ? (existing?.payload ?? null) : payload,
     updated_at: new Date().toISOString(),
   });
   res.json(cursorStatus(deps.config, deps.envFile, deps.driver));
+}
+
+/** Read the stored webhook row without the token, for the console form. */
+export function getCursorWebhook(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const row = deps.driver.getWebhookConfig(CURSOR_WEBHOOK_NAME);
+  if (!row) {
+    res.json({ name: CURSOR_WEBHOOK_NAME, url: null, payload: null, updated_at: null, configured: false });
+    return;
+  }
+  res.json({
+    name: row.name,
+    url: row.url,
+    payload: row.payload,
+    updated_at: row.updated_at,
+    configured: true,
+  });
 }
 
 /**
@@ -364,6 +423,7 @@ export function importCursorWebhook(deps: AdminDeps, req: Request, res: Response
     name: CURSOR_WEBHOOK_NAME,
     url: url.trim(),
     token: token.trim(),
+    payload: deps.driver.getWebhookConfig(CURSOR_WEBHOOK_NAME)?.payload ?? null,
     updated_at: new Date().toISOString(),
   });
   res.json(cursorStatus(deps.config, deps.envFile, deps.driver));

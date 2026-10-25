@@ -84,9 +84,15 @@ export class SqliteDriver implements StorageDriver {
         name TEXT PRIMARY KEY,
         url TEXT NOT NULL,
         token TEXT NOT NULL,
+        payload TEXT,
         updated_at TEXT NOT NULL
       );
     `);
+    // Migration for databases created before the payload template existed.
+    const webhookCols = this.db.prepare("PRAGMA table_info(webhook_configs)").all() as { name: string }[];
+    if (!webhookCols.some((c) => c.name === "payload")) {
+      this.db.exec("ALTER TABLE webhook_configs ADD COLUMN payload TEXT");
+    }
     // Migration for databases created before token roles existed.
     const tokenCols = this.db.prepare("PRAGMA table_info(tokens)").all() as { name: string }[];
     if (!tokenCols.some((c) => c.name === "role")) {
@@ -228,24 +234,24 @@ export class SqliteDriver implements StorageDriver {
 
   getWebhookConfig(name: string): StoredWebhookConfig | null {
     const row = this.db
-      .prepare("SELECT name, url, token, updated_at FROM webhook_configs WHERE name = ?")
+      .prepare("SELECT name, url, token, payload, updated_at FROM webhook_configs WHERE name = ?")
       .get(name) as StoredWebhookConfig | undefined;
     return row ?? null;
   }
 
   listWebhookConfigs(): WebhookConfigMeta[] {
     return this.db
-      .prepare("SELECT name, url, updated_at FROM webhook_configs ORDER BY updated_at ASC, name ASC")
+      .prepare("SELECT name, url, payload, updated_at FROM webhook_configs ORDER BY updated_at ASC, name ASC")
       .all() as WebhookConfigMeta[];
   }
 
   saveWebhookConfig(cfg: StoredWebhookConfig): void {
     this.db
       .prepare(
-        `INSERT INTO webhook_configs (name, url, token, updated_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(name) DO UPDATE SET url = excluded.url, token = excluded.token, updated_at = excluded.updated_at`,
+        `INSERT INTO webhook_configs (name, url, token, payload, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET url = excluded.url, token = excluded.token, payload = excluded.payload, updated_at = excluded.updated_at`,
       )
-      .run(cfg.name, cfg.url, cfg.token, cfg.updated_at);
+      .run(cfg.name, cfg.url, cfg.token, cfg.payload, cfg.updated_at);
   }
 
   deleteWebhookConfig(name: string): boolean {

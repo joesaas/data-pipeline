@@ -331,6 +331,34 @@ describe("admin routes", () => {
     );
   });
 
+  it("webhook payload: full-value save, GET echoes it without the token, empty clears", async () => {
+    const put = (body: unknown) =>
+      req(ctx, "PUT", "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhook", ctx.adminKey, body);
+    const get = () =>
+      req(ctx, "GET", "/data-pipeline/api/v1/admin/jobs/cursor-trigger/webhook", ctx.adminKey);
+    const saved = await put({ payload: JSON.stringify({ prompt: "hello payload" }) });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.body.webhookPayloadSet, true);
+    const echoed = await get();
+    assert.equal(echoed.status, 200);
+    assert.equal(echoed.body.payload, JSON.stringify({ prompt: "hello payload" }));
+    assert.equal(echoed.body.url, "https://hooks.example/new");
+    assert.equal("token" in echoed.body, false);
+    // A save without the payload key keeps the stored template.
+    await put({ webhookToken: "tok-keep" });
+    assert.equal((await get()).body.payload, JSON.stringify({ prompt: "hello payload" }));
+    // Invalid templates are rejected.
+    for (const bad of [{ payload: "{bad" }, { payload: '["array"]' }, { payload: 123 }]) {
+      assert.equal((await put(bad)).status, 400);
+    }
+    // Empty payload clears the template; status flips back.
+    const cleared = await put({ payload: "" });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.webhookPayloadSet, false);
+    const after = await get();
+    assert.equal(after.body.payload, null);
+  });
+
   it("webhook import copies .env into the database, delete falls back to .env then nothing", async () => {
     // Clear the row from the previous tests, then import from .env.
     const cleared = await req(
