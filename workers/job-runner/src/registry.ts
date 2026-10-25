@@ -9,6 +9,10 @@
  * A job is deliberately NOT discovered by scanning the directory: an
  * explicit list means a stray file can never start running in production.
  *
+ * The `interval` is the tick. A job may tick more often than it acts —
+ * cursor-trigger ticks every minute and gates on its own state file —
+ * and must say so in its description.
+ *
  * Durations use a small human syntax, restricted here to
  * `<number><ms|s|m|h|d>` (e.g. "30m", "1h"). `maxRunMs` is the hung-job
  * killer: Bree terminates a run that exceeds it (closeWorkerAfterMs),
@@ -36,6 +40,13 @@ export const JOBS: JobDef[] = [
     interval: "30m",
     maxRunMs: "1m",
     description: "Proves the runner is alive: one log line per tick, no side effects.",
+  },
+  {
+    name: "cursor-trigger",
+    interval: "1m",
+    maxRunMs: "1m",
+    description:
+      "POSTs the Cursor automation webhook when its interval has elapsed. Ticks every minute and self-gates on cursor-state (interval from console override, else CURSOR_TRIGGER_INTERVAL_MINUTES, default 60m); the 1m here is the tick, not the trigger cadence.",
   },
 ];
 
