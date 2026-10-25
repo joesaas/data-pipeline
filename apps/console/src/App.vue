@@ -132,27 +132,36 @@
             清除数据库配置（回落到 .env，如有）
           </button>
         </div>
-        <div class="row space">
-          <h4>Payload 列表</h4>
-          <button class="btn" :disabled="busy" @click="startAddPayload">新增</button>
-        </div>
-        <p class="hint">每条 payload 是一份触发 body 的 JSON（里面通常含 prompt）。点一条看详情；定时触发发的是标为“定时”的那条；单条的“触发一次”只发那条，不改定时设置。定时未设时，触发按老规则走：单个 payload 模板 → 单个 prompt → 只发 ping。</p>
+        <h4>Payload 列表</h4>
+        <p class="hint">每条 payload 是一份触发 body 的 JSON（里面通常含 prompt）。定时触发发的是标为“定时”的那条；单条的“触发一次”只发那条，不改定时设置。定时未设时，触发按老规则走：单个 payload 模板 → 单个 prompt → 只发 ping。</p>
         <div v-if="payloadView === 'list'">
-          <div v-if="payloads.length === 0" class="hint">还没有 payload，点“新增”写一份。</div>
-          <div v-for="p in payloads" :key="p.id" class="row space listrow" @click="openPayload(p)">
-            <div>
-              <strong>{{ p.name }}</strong>
-              <span v-if="p.is_active" class="badge">定时</span>
-              <div class="hint">{{ fmtTime(p.updated_at) }}</div>
-            </div>
-            <div class="row" @click.stop>
-              <button class="btn" :disabled="busy" @click="openPayload(p)">详情</button>
-              <button class="btn" :disabled="busy" @click="startEditPayload(p)">编辑</button>
-              <button class="btn" :disabled="busy" @click="triggerPayload(p)">触发一次</button>
-              <button v-if="!p.is_active" class="btn" :disabled="busy" @click="setPayloadActive(p, true)">设为定时</button>
-              <button v-else class="btn" :disabled="busy" @click="setPayloadActive(p, false)">取消定时</button>
-            </div>
-          </div>
+          <table v-if="payloads.length">
+            <thead>
+              <tr><th>名字</th><th>内容预览</th><th>定时</th><th>更新时间</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in payloads" :key="p.id" @click="openPayload(p)">
+                <td>{{ p.name }}</td>
+                <td class="mono short">{{ payloadPreview(p.content) }}</td>
+                <td><span v-if="p.is_active" class="badge">定时</span><span v-else>—</span></td>
+                <td>{{ fmtTime(p.updated_at) }}</td>
+                <td @click.stop>
+                  <button class="btn small" :disabled="busy" @click="openPayload(p)">详情</button>
+                  <button class="btn small" :disabled="busy" @click="startEditPayload(p)">编辑</button>
+                  <button class="btn small" :disabled="busy" @click="triggerPayload(p)">触发一次</button>
+                  <button v-if="!p.is_active" class="btn small" :disabled="busy" @click="setPayloadActive(p, true)">设为定时</button>
+                  <button v-else class="btn small" :disabled="busy" @click="setPayloadActive(p, false)">取消定时</button>
+                  <button class="btn danger small" :disabled="busy" @click="deletePayload(p)">删除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="hint">还没有 payload，在下方新建一份。</p>
+          <form class="create" @submit.prevent="createPayload">
+            <input v-model="newPayloadName" placeholder="新 payload 名字，如：新闻简报" class="input" />
+            <textarea v-model="newPayloadContent" rows="4" placeholder='JSON 对象，如 {"prompt": "…"}' class="input"></textarea>
+            <button class="btn primary" :disabled="busy">新建</button>
+          </form>
         </div>
         <div v-if="payloadView === 'detail' && selectedPayload">
           <h4>{{ selectedPayload.name }} <span v-if="selectedPayload.is_active" class="badge">定时</span></h4>
@@ -236,6 +245,8 @@ const savedWebhookUrl = ref("");
 const payloads = ref([]);
 const payloadView = ref("list");
 const selectedPayload = ref(null);
+const newPayloadName = ref("");
+const newPayloadContent = ref("");
 const editId = ref(null);
 const editName = ref("");
 const editContent = ref("");
@@ -380,13 +391,41 @@ function openPayload(p) {
   payloadOk.value = "";
 }
 
-function startAddPayload() {
-  editId.value = null;
-  editName.value = "";
-  editContent.value = "";
-  payloadView.value = "edit";
+/** Table preview: the prompt inside the JSON when there is one, else the
+ * raw JSON — truncated so the row stays one line. */
+function payloadPreview(content) {
+  let text = content || "";
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && typeof parsed.prompt === "string" && parsed.prompt) {
+      text = parsed.prompt;
+    }
+  } catch {
+    // Not JSON (should not happen — the server validates): show it raw.
+  }
+  return text.length > 40 ? text.slice(0, 40) + "…" : text;
+}
+
+async function createPayload() {
   payloadError.value = "";
   payloadOk.value = "";
+  busy.value = true;
+  try {
+    const saved = await adminApi.cursorPayloadCreate(key.value, {
+      name: newPayloadName.value,
+      content: newPayloadContent.value,
+    });
+    newPayloadName.value = "";
+    newPayloadContent.value = "";
+    payloadOk.value = "payload 已新增。";
+    selectedPayload.value = saved;
+    await refreshPayloads();
+    await refreshCursor();
+  } catch (e) {
+    payloadError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
 }
 
 function startEditPayload(p) {
@@ -638,7 +677,6 @@ body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", 
 .hint code { background: #f0f0f0; padding: 1px 6px; border-radius: 4px; }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .row.space { justify-content: space-between; }
-.listrow { cursor: pointer; border-bottom: 1px solid #eee; padding: 10px 0; }
 .input { border: 1px solid #ccc; border-radius: 8px; padding: 9px 12px; font-size: 14px; }
 .create textarea.input { width: 100%; min-height: 120px; font-family: inherit; line-height: 1.5; }
 .login .input { width: 100%; margin: 12px 0; }
