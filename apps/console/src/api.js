@@ -57,6 +57,7 @@ export const adminApi = {
   createToken: (key, name, role) =>
     api("POST", "/api/v1/admin/tokens", key, { name, role }),
   revokeToken: (key, id) => api("POST", `/api/v1/admin/tokens/${id}/revoke`, key),
+  deleteToken: (key, id) => api("DELETE", `/api/v1/admin/tokens/${id}`, key),
   listWebhooks: (key) => api("GET", "/api/v1/admin/webhooks", key),
   createWebhook: (key, body) => api("POST", "/api/v1/admin/webhooks", key, body),
   updateWebhook: (key, id, body) => api("PUT", `/api/v1/admin/webhooks/${id}`, key, body),

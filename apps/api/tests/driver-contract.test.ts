@@ -106,6 +106,10 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.equal(driver.findTokenByHash("h1")?.id, "t1");
       assert.equal(driver.revokeToken("t1"), true);
       assert.notEqual(driver.findTokenByHash("h1")?.revoked_at, null);
+      assert.equal(driver.deleteToken("t1"), true);
+      assert.equal(driver.findTokenByHash("h1"), null);
+      assert.ok(!driver.listTokens().some((t) => t.id === "t1"));
+      assert.equal(driver.deleteToken("t1"), false);
     });
 
     it("lists tokens oldest first", () => {

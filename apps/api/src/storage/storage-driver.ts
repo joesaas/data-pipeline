@@ -42,6 +42,9 @@ export interface StorageDriver {
   /** All tokens, oldest first. Never includes plaintext keys (only hashes are stored). */
   listTokens(): StoredToken[];
   revokeToken(id: string): boolean;
+  /** Hard-delete a token row. The API only calls this for revoked
+   *  rows; records pushed with the token are NOT deleted with it. */
+  deleteToken(id: string): boolean;
 
   /** Webhooks (the only webhook table). Tokens are plaintext by
    *  necessity (Bearer auth) and are never exposed: only getWebhook

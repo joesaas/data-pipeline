@@ -320,6 +320,11 @@ export class SqliteDriver implements StorageDriver {
     return Number(res.changes) > 0;
   }
 
+  deleteToken(id: string): boolean {
+    const res = this.db.prepare("DELETE FROM tokens WHERE id = ?").run(id);
+    return Number(res.changes) > 0;
+  }
+
   getWebhook(id: number): StoredWebhook | null {
     type RawRow = Omit<StoredWebhook, "is_active"> & { is_active: number };
     const row = this.db

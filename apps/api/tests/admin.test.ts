@@ -151,6 +151,41 @@ describe("admin routes", () => {
     );
   });
 
+  it("deletes only revoked tokens; records are untouched", async () => {
+    const created = await req(ctx, "POST", "/data-pipeline/api/v1/admin/tokens", ctx.adminKey, {
+      name: "trash",
+    });
+    const id = created.body.id as string;
+    // Still active: 409, and the row stays.
+    assert.equal(
+      (await req(ctx, "DELETE", `/data-pipeline/api/v1/admin/tokens/${id}`, ctx.adminKey)).status,
+      409,
+    );
+    const stillThere = await req(ctx, "GET", "/data-pipeline/api/v1/admin/tokens", ctx.adminKey);
+    assert.ok((stillThere.body.items as Record<string, unknown>[]).some((t) => t.id === id));
+    // Auth gates: anonymous 401, valid non-admin 403.
+    assert.equal((await req(ctx, "DELETE", `/data-pipeline/api/v1/admin/tokens/${id}`)).status, 401);
+    assert.equal(
+      (await req(ctx, "DELETE", `/data-pipeline/api/v1/admin/tokens/${id}`, ctx.userKey)).status,
+      403,
+    );
+    // Revoke, then delete: gone from the list, second delete 404.
+    await req(ctx, "POST", `/data-pipeline/api/v1/admin/tokens/${id}/revoke`, ctx.adminKey);
+    const deleted = await req(ctx, "DELETE", `/data-pipeline/api/v1/admin/tokens/${id}`, ctx.adminKey);
+    assert.equal(deleted.status, 200);
+    assert.equal(deleted.body.ok, true);
+    const gone = await req(ctx, "GET", "/data-pipeline/api/v1/admin/tokens", ctx.adminKey);
+    assert.ok(!(gone.body.items as Record<string, unknown>[]).some((t) => t.id === id));
+    assert.equal(
+      (await req(ctx, "DELETE", `/data-pipeline/api/v1/admin/tokens/${id}`, ctx.adminKey)).status,
+      404,
+    );
+    assert.equal(
+      (await req(ctx, "DELETE", "/data-pipeline/api/v1/admin/tokens/nope", ctx.adminKey)).status,
+      404,
+    );
+  });
+
   it("webhooks: create/list/get/update/active/delete, token never returned", async () => {
     const W = "/data-pipeline/api/v1/admin/webhooks";
     const a = await req(ctx, "POST", W, ctx.adminKey, {

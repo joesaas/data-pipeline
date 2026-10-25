@@ -108,6 +108,30 @@ export function revokeToken(deps: AdminDeps, req: Request, res: Response): void 
   res.json(publicToken(updated ?? found));
 }
 
+/**
+ * Hard-delete a token row — only for already-revoked rows (409 while
+ * still active). Revoke-then-delete is deliberate: an active key must
+ * never disappear with one click, and a revoked key is already dead,
+ * so deleting its row cannot break a live integration. Records pushed
+ * with the token are NOT deleted; they stay readable by admin, with
+ * their bucket falling back to the token id in the Records page.
+ */
+export function deleteToken(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = req.params.id;
+  const found = deps.driver.listTokens().find((t) => t.id === id);
+  if (!found) {
+    res.status(404).json({ error: "token not found" });
+    return;
+  }
+  if (!found.revoked_at) {
+    res.status(409).json({ error: "only revoked tokens can be deleted (revoke first)" });
+    return;
+  }
+  deps.driver.deleteToken(id);
+  res.json({ ok: true });
+}
+
 // --- Webhooks (the only webhook table) -------------------------------------
 
 function validWebhookUrl(s: string): boolean {

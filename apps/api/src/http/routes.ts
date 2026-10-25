@@ -70,6 +70,7 @@ export function registerRoutes(
         admin_tokens: `GET ${base}/api/v1/admin/tokens`,
         admin_token_create: `POST ${base}/api/v1/admin/tokens`,
         admin_token_revoke: `POST ${base}/api/v1/admin/tokens/:id/revoke`,
+        admin_token_delete: `DELETE ${base}/api/v1/admin/tokens/:id (revoked rows only)`,
         admin_webhooks: `GET ${base}/api/v1/admin/webhooks`,
         admin_webhook_create: `POST ${base}/api/v1/admin/webhooks`,
         admin_webhook_detail: `GET ${base}/api/v1/admin/webhooks/:id`,
@@ -198,6 +199,7 @@ export function registerRoutes(
   router.get("/api/v1/admin/tokens", (req, res) => admin.listTokens(adminDeps, req, res));
   router.post("/api/v1/admin/tokens", (req, res) => admin.createToken(adminDeps, req, res));
   router.post("/api/v1/admin/tokens/:id/revoke", (req, res) => admin.revokeToken(adminDeps, req, res));
+  router.delete("/api/v1/admin/tokens/:id", (req, res) => admin.deleteToken(adminDeps, req, res));
   router.get("/api/v1/admin/webhooks", (req, res) => admin.listWebhooks(adminDeps, req, res));
   router.post("/api/v1/admin/webhooks", (req, res) => admin.createWebhook(adminDeps, req, res));
   router.get("/api/v1/admin/webhooks/:id", (req, res) => admin.getWebhook(adminDeps, req, res));

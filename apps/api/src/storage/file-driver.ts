@@ -180,6 +180,14 @@ export class FileDriver implements StorageDriver {
     return true;
   }
 
+  deleteToken(id: string): boolean {
+    const tokens = this.readTokens();
+    const kept = tokens.filter((t) => t.id !== id);
+    if (kept.length === tokens.length) return false;
+    this.writeTokens(kept);
+    return true;
+  }
+
   private readWebhooks(): StoredWebhook[] {
     return JSON.parse(readFileSync(this.webhooksPath, "utf8")) as StoredWebhook[];
   }

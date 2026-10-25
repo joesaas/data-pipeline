@@ -51,7 +51,8 @@
           </button>
         </div>
         <p class="hint">
-          明文钥匙只在创建那一刻显示一次，库里只存哈希——这里永远查不回已发钥匙的明文，丢了只能吊销重发。
+          明文钥匙只在创建那一刻显示一次，库里只存哈希——这里永远查不回已发钥匙的明文，丢了只能吊销重发。正在使用的
+          token 只能先吊销；已吊销的 token 可以删除，删除后不再显示，它以前推过的记录不受影响。
         </p>
         <p class="hint">
           上次刷新：{{ tokensLastRefreshed || "尚未刷新" }}
@@ -76,6 +77,12 @@
                   :disabled="busy"
                   @click="revoke(t)"
                 >吊销</button>
+                <button
+                  v-else
+                  class="btn danger small"
+                  :disabled="busy"
+                  @click="removeToken(t)"
+                >删除</button>
               </td>
             </tr>
           </tbody>
@@ -708,6 +715,19 @@ async function revoke(t) {
   busy.value = true;
   try {
     await adminApi.revokeToken(key.value, t.id);
+    await refreshTokens();
+  } catch (e) {
+    tokensError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function removeToken(t) {
+  if (!window.confirm(`删除已吊销 token「${t.name}」？删除后该行从列表消失，不可恢复；它以前推过的记录不受影响。`)) return;
+  busy.value = true;
+  try {
+    await adminApi.deleteToken(key.value, t.id);
     await refreshTokens();
   } catch (e) {
     tokensError.value = e.message;
