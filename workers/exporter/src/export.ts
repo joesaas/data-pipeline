@@ -18,6 +18,10 @@ function stylesPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "../../assets/styles.css");
 }
 
+function assetPath(name: string): string {
+  return join(dirname(fileURLToPath(import.meta.url)), "../../assets", name);
+}
+
 /**
  * Render the whole site into a fresh release directory, then flip the
  * `current` symlink to it atomically (single rename). nginx points at
@@ -52,6 +56,9 @@ export function exportSite(options: {
   writeFileSync(join(releaseDir, "index.html"), renderIndex(data, now.toISOString(), cssVersion, siteUrl), "utf8");
   writeFileSync(join(releaseDir, "items.json"), JSON.stringify({ generated_at: now.toISOString(), ...data }, null, 2), "utf8");
   copyFileSync(stylesPath(), join(releaseDir, "styles.css"));
+  // Browser icon: the head() link points at the site root, so the
+  // file must live in every release, not just next to the sources.
+  copyFileSync(assetPath("favicon.svg"), join(releaseDir, "favicon.svg"));
   for (const item of data.items) {
     const dir = join(releaseDir, "item", item.id);
     mkdirSync(dir, { recursive: true });

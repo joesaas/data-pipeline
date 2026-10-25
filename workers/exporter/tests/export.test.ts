@@ -55,6 +55,8 @@ describe("exportSite", () => {
     assert.ok(!index.includes("文档站"), "docs-site link is gone from the topbar");
     assert.ok(index.includes('data-src="https://solana.com"'), "list source pill carries the source URL");
     assert.ok(index.includes('id="refreshBtn"'), "refresh button rendered");
+    assert.ok(index.includes('href="./favicon.svg"'), "favicon link rendered on index");
+    assert.ok(existsSync(join(result.releaseDir, "favicon.svg")), "favicon copied into release");
     assert.ok(index.includes('id="loginBtn"'), "login button rendered in topbar");
     assert.ok(index.includes('id="authModal"'), "login modal rendered on index");
     assert.ok(index.includes('id="walletLoginBtn"'), "wallet login button rendered");
@@ -75,6 +77,7 @@ describe("exportSite", () => {
     assert.ok(detail.includes('id="authModal"'), "login modal rendered on detail page");
     assert.ok(detail.includes('data-fav="item-1"'), "favorite button rendered on detail page");
     assert.ok(detail.includes("AGENT101_INDEX_URL"), "detail page knows the index URL for favorites view");
+    assert.ok(detail.includes('href="../../favicon.svg"'), "favicon link resolves from detail pages");
     assert.ok(detail.includes("| Agent 101 资讯</title>"), "detail title carries the brand suffix");
     assert.ok(detail.includes('rel="canonical" href="https://agent101.uk/news/item/item-1/"'), "detail canonical");
     assert.ok(detail.includes('"@type":"NewsArticle"'), "detail NewsArticle JSON-LD");

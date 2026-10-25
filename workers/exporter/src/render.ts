@@ -107,6 +107,7 @@ function head(
 <meta property="og:type" content="${seo.ogType}" />
 <meta property="og:url" content="${esc(seo.canonical)}" />
 <meta property="og:site_name" content="Agent 101 资讯" />
+<link rel="icon" type="image/svg+xml" href="${base}favicon.svg" />
 <meta name="twitter:card" content="summary" />
 <meta name="twitter:title" content="${esc(title)}" />
 <meta name="twitter:description" content="${esc(seo.description)}" />
