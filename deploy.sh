@@ -127,6 +127,21 @@ pm2 save >/dev/null
 ok "已停止"
 }
 
+# 只在 pm2 表里还有我们管理的进程时才 save：空表 save 会把有效快照
+# 覆盖成空快照，之后 pm2 resurrect 也救不回来（2026-10-25 实测教训：
+# 重启后空表 + deploy 的 save 把空快照落了盘，服务就再也拉不起来）。
+save_if_any() {
+  local alive=0
+  for n in data-pipeline data-cleaner data-cursor-trigger data-job-runner; do
+    pm2 describe "$n" >/dev/null 2>&1 && alive=$((alive + 1))
+  done
+  if [ "$alive" -gt 0 ]; then
+    pm2 save >/dev/null
+  else
+    warn "pm2 表中无托管进程，跳过 pm2 save（避免空快照覆盖有效快照）"
+  fi
+}
+
 cmd_restart() {
 validate_svc "${1:-}"
 local name; name="$(pm2_name "${1:-}")"
@@ -141,16 +156,19 @@ pm2 start ecosystem.config.cjs --only "$name" || die "启动 $name 失败"
 fi
 else
 info "重启全部服务…"
-# 逐个重启 ecosystem 里定义的进程；不存在的跳过并提示
+# 逐个重启 ecosystem 里定义的进程；不存在的改为启动（与单服务行为一致）。
+# 旧逻辑是跳过 + 提示，结果重启后空表时四个全跳过、再被下面的 save 把空
+# 快照落盘——这就是 2026-10-25 重启后服务拉不起来的根因。
 for n in data-pipeline data-cleaner data-cursor-trigger data-job-runner; do
 if pm2 describe "$n" >/dev/null 2>&1; then
 pm2 restart "$n" || die "重启 $n 失败"
 else
-warn "$n 未启动，用./deploy.sh start 单独拉起"
+warn "$n 不在 pm2 中，改为启动"
+pm2 start ecosystem.config.cjs --only "$n" || die "启动 $n 失败"
 fi
 done
 fi
-pm2 save >/dev/null
+save_if_any
 ok "重启完成"
 }
 
