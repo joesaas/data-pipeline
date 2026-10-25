@@ -112,6 +112,27 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.equal(driver.deleteToken("t1"), false);
     });
 
+    it("stores site nonces, sessions and favorites", () => {
+      driver.saveSiteNonce({ address: "0xabc", nonce: "n1", message: "m1", expires_at: "2030-01-01T00:00:00.000Z" });
+      assert.equal(driver.getSiteNonce("0xabc")?.nonce, "n1");
+      driver.saveSiteNonce({ address: "0xabc", nonce: "n2", message: "m2", expires_at: "2030-01-01T00:00:00.000Z" });
+      assert.equal(driver.getSiteNonce("0xabc")?.nonce, "n2");
+      driver.deleteSiteNonce("0xabc");
+      assert.equal(driver.getSiteNonce("0xabc"), null);
+
+      driver.saveSiteSession({ token_hash: "h1", address: "0xabc", created_at: "2026-01-01T00:00:00.000Z", expires_at: "2030-01-01T00:00:00.000Z" });
+      assert.equal(driver.findSiteSessionByHash("h1")?.address, "0xabc");
+      driver.deleteSiteSession("h1");
+      assert.equal(driver.findSiteSessionByHash("h1"), null);
+
+      driver.saveSiteFavorite({ address: "0xabc", item_id: "i1", created_at: "2026-01-01T00:00:00.000Z" });
+      driver.saveSiteFavorite({ address: "0xabc", item_id: "i1", created_at: "2026-01-02T00:00:00.000Z" });
+      assert.deepEqual(driver.listSiteFavorites("0xabc").map((f) => f.item_id), ["i1"]);
+      assert.deepEqual(driver.listSiteFavorites("0xdef"), []);
+      assert.equal(driver.deleteSiteFavorite("0xabc", "i1"), true);
+      assert.equal(driver.deleteSiteFavorite("0xabc", "i1"), false);
+    });
+
     it("lists tokens oldest first", () => {
       driver.createToken({ id: "t-old", name: "old", key_hash: "ho", created_at: "2026-01-01T00:00:00.000Z", revoked_at: null });
       driver.createToken({ id: "t-new", name: "new", key_hash: "hn", created_at: "2026-01-02T00:00:00.000Z", revoked_at: null });

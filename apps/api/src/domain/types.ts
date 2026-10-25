@@ -173,6 +173,32 @@ export interface WebhookPayload {
  */
 export const ADMIN_IDENTITY = "__admin__";
 
+/**
+ * News-site wallet login (separate from API tokens: those are for
+ * agents, these are for human readers). A nonce is single-use and
+ * short-lived; a session is a random token whose SHA-256 only is
+ * stored, like API keys. Favorites are keyed by lowercase address.
+ */
+export interface SiteNonce {
+  address: string;
+  nonce: string;
+  message: string;
+  expires_at: string;
+}
+
+export interface SiteSession {
+  token_hash: string;
+  address: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface SiteFavorite {
+  address: string;
+  item_id: string;
+  created_at: string;
+}
+
 export type PushStatus = "created" | "replaced" | "deduped";
 
 export interface PushResult {

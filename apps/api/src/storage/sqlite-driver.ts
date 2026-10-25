@@ -3,6 +3,9 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
   PendingTaskStatus,
+  SiteFavorite,
+  SiteNonce,
+  SiteSession,
   StoredPendingTask,
   StoredPullTask,
   StoredRecord,
@@ -134,6 +137,24 @@ export class SqliteDriver implements StorageDriver {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(pull_task_id, due_at)
+      );
+      CREATE TABLE IF NOT EXISTS site_nonces (
+        address TEXT PRIMARY KEY,
+        nonce TEXT NOT NULL,
+        message TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS site_sessions (
+        token_hash TEXT PRIMARY KEY,
+        address TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS site_favorites (
+        address TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (address, item_id)
       );
     `);
     // Migration for databases created before the queue redesign:
@@ -322,6 +343,62 @@ export class SqliteDriver implements StorageDriver {
 
   deleteToken(id: string): boolean {
     const res = this.db.prepare("DELETE FROM tokens WHERE id = ?").run(id);
+    return Number(res.changes) > 0;
+  }
+
+  saveSiteNonce(n: SiteNonce): void {
+    this.db
+      .prepare(
+        "INSERT INTO site_nonces (address, nonce, message, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET nonce = excluded.nonce, message = excluded.message, expires_at = excluded.expires_at",
+      )
+      .run(n.address, n.nonce, n.message, n.expires_at);
+  }
+
+  getSiteNonce(address: string): SiteNonce | null {
+    const row = this.db
+      .prepare("SELECT * FROM site_nonces WHERE address = ?")
+      .get(address) as SiteNonce | undefined;
+    return row ?? null;
+  }
+
+  deleteSiteNonce(address: string): void {
+    this.db.prepare("DELETE FROM site_nonces WHERE address = ?").run(address);
+  }
+
+  saveSiteSession(s: SiteSession): void {
+    this.db
+      .prepare("INSERT INTO site_sessions (token_hash, address, created_at, expires_at) VALUES (?, ?, ?, ?)")
+      .run(s.token_hash, s.address, s.created_at, s.expires_at);
+  }
+
+  findSiteSessionByHash(tokenHash: string): SiteSession | null {
+    const row = this.db
+      .prepare("SELECT * FROM site_sessions WHERE token_hash = ?")
+      .get(tokenHash) as SiteSession | undefined;
+    return row ?? null;
+  }
+
+  deleteSiteSession(tokenHash: string): void {
+    this.db.prepare("DELETE FROM site_sessions WHERE token_hash = ?").run(tokenHash);
+  }
+
+  listSiteFavorites(address: string): SiteFavorite[] {
+    const rows = this.db
+      .prepare("SELECT * FROM site_favorites WHERE address = ? ORDER BY created_at ASC")
+      .all(address) as SiteFavorite[];
+    return rows;
+  }
+
+  saveSiteFavorite(f: SiteFavorite): void {
+    this.db
+      .prepare("INSERT OR IGNORE INTO site_favorites (address, item_id, created_at) VALUES (?, ?, ?)")
+      .run(f.address, f.item_id, f.created_at);
+  }
+
+  deleteSiteFavorite(address: string, itemId: string): boolean {
+    const res = this.db
+      .prepare("DELETE FROM site_favorites WHERE address = ? AND item_id = ?")
+      .run(address, itemId);
     return Number(res.changes) > 0;
   }
 

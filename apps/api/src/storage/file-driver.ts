@@ -2,6 +2,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { join } from "node:path";
 import type {
   PendingTaskStatus,
+  SiteFavorite,
+  SiteNonce,
+  SiteSession,
   StoredPendingTask,
   StoredPullTask,
   StoredRecord,
@@ -31,6 +34,9 @@ export class FileDriver implements StorageDriver {
   private webhookPayloadsPath: string;
   private pullTasksPath: string;
   private pendingTasksPath: string;
+  private siteNoncesPath: string;
+  private siteSessionsPath: string;
+  private siteFavoritesPath: string;
 
   constructor(dir: string) {
     this.recordsDir = join(dir, "records");
@@ -39,10 +45,16 @@ export class FileDriver implements StorageDriver {
     this.webhookPayloadsPath = join(dir, "webhook-payloads.json");
     this.pullTasksPath = join(dir, "pull-tasks.json");
     this.pendingTasksPath = join(dir, "pending-tasks.json");
+    this.siteNoncesPath = join(dir, "site-nonces.json");
+    this.siteSessionsPath = join(dir, "site-sessions.json");
+    this.siteFavoritesPath = join(dir, "site-favorites.json");
     mkdirSync(this.recordsDir, { recursive: true });
     if (!existsSync(this.tokensPath)) writeFileSync(this.tokensPath, "[]");
     if (!existsSync(this.pullTasksPath)) writeFileSync(this.pullTasksPath, "[]");
     if (!existsSync(this.pendingTasksPath)) writeFileSync(this.pendingTasksPath, "[]");
+    if (!existsSync(this.siteNoncesPath)) writeFileSync(this.siteNoncesPath, "[]");
+    if (!existsSync(this.siteSessionsPath)) writeFileSync(this.siteSessionsPath, "[]");
+    if (!existsSync(this.siteFavoritesPath)) writeFileSync(this.siteFavoritesPath, "[]");
     // One-time migration from the old webhook-configs.json (name-keyed)
     // to webhooks.json (id-keyed); the old file is removed once migrated.
     const legacyPath = join(dir, "webhook-configs.json");
@@ -185,6 +197,79 @@ export class FileDriver implements StorageDriver {
     const kept = tokens.filter((t) => t.id !== id);
     if (kept.length === tokens.length) return false;
     this.writeTokens(kept);
+    return true;
+  }
+
+  private readSiteNonces(): SiteNonce[] {
+    return JSON.parse(readFileSync(this.siteNoncesPath, "utf8")) as SiteNonce[];
+  }
+
+  private writeSiteNonces(rows: SiteNonce[]): void {
+    writeFileSync(this.siteNoncesPath, JSON.stringify(rows, null, 1));
+  }
+
+  saveSiteNonce(n: SiteNonce): void {
+    const rows = this.readSiteNonces().filter((r) => r.address !== n.address);
+    rows.push(n);
+    this.writeSiteNonces(rows);
+  }
+
+  getSiteNonce(address: string): SiteNonce | null {
+    return this.readSiteNonces().find((r) => r.address === address) ?? null;
+  }
+
+  deleteSiteNonce(address: string): void {
+    this.writeSiteNonces(this.readSiteNonces().filter((r) => r.address !== address));
+  }
+
+  private readSiteSessions(): SiteSession[] {
+    return JSON.parse(readFileSync(this.siteSessionsPath, "utf8")) as SiteSession[];
+  }
+
+  private writeSiteSessions(rows: SiteSession[]): void {
+    writeFileSync(this.siteSessionsPath, JSON.stringify(rows, null, 1));
+  }
+
+  saveSiteSession(s: SiteSession): void {
+    const rows = this.readSiteSessions();
+    rows.push(s);
+    this.writeSiteSessions(rows);
+  }
+
+  findSiteSessionByHash(tokenHash: string): SiteSession | null {
+    return this.readSiteSessions().find((r) => r.token_hash === tokenHash) ?? null;
+  }
+
+  deleteSiteSession(tokenHash: string): void {
+    this.writeSiteSessions(this.readSiteSessions().filter((r) => r.token_hash !== tokenHash));
+  }
+
+  private readSiteFavorites(): SiteFavorite[] {
+    return JSON.parse(readFileSync(this.siteFavoritesPath, "utf8")) as SiteFavorite[];
+  }
+
+  private writeSiteFavorites(rows: SiteFavorite[]): void {
+    writeFileSync(this.siteFavoritesPath, JSON.stringify(rows, null, 1));
+  }
+
+  listSiteFavorites(address: string): SiteFavorite[] {
+    return this.readSiteFavorites()
+      .filter((r) => r.address === address)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }
+
+  saveSiteFavorite(f: SiteFavorite): void {
+    const rows = this.readSiteFavorites();
+    if (rows.some((r) => r.address === f.address && r.item_id === f.item_id)) return;
+    rows.push(f);
+    this.writeSiteFavorites(rows);
+  }
+
+  deleteSiteFavorite(address: string, itemId: string): boolean {
+    const rows = this.readSiteFavorites();
+    const kept = rows.filter((r) => !(r.address === address && r.item_id === itemId));
+    if (kept.length === rows.length) return false;
+    this.writeSiteFavorites(kept);
     return true;
   }
 

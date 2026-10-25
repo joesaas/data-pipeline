@@ -223,3 +223,43 @@ aside nav { position: sticky; top: 76px; }
   .side-item { width: auto; white-space: nowrap; border: 1px solid var(--line); }
   .head-search { display: none; }
 }
+
+/* Wallet login + favorites (2026-10-25). */
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.head-auth { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+.head-link-btn {
+  background: none; border: 1px solid var(--line-strong); color: var(--text-2);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; font-family: inherit;
+}
+.head-link-btn:hover { color: var(--text); border-color: var(--accent); }
+#authAddr { font-size: 13px; color: var(--muted); margin-right: 2px; }
+.fav-btn {
+  background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1;
+  color: var(--faint); padding: 2px 4px; margin-left: 2px;
+}
+.fav-btn:hover { color: var(--accent); }
+.fav-btn.on { color: var(--accent-strong); }
+.fav-btn[data-detail] { font-size: 14px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 6px 10px; color: var(--text-2); }
+.fav-btn[data-detail].on { color: var(--accent-strong); border-color: var(--accent-line); }
+.fav-banner {
+  background: var(--accent-soft); border: 1px solid var(--accent-line); color: var(--text-2);
+  border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 14px;
+  display: flex; align-items: center; gap: 12px;
+}
+.auth-modal {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 50;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.auth-modal[hidden] { display: none; }
+.auth-modal-card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  max-width: 420px; width: 100%; padding: 24px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+.auth-modal-card h3 { margin: 0 0 10px; font-size: 18px; }
+.auth-modal-card .muted { line-height: 1.6; }
+.auth-error { color: #dc2626; font-size: 13px; line-height: 1.6; }
+.btn-primary {
+  background: var(--accent-strong); color: #fff; border: none; border-radius: 10px;
+  padding: 10px 16px; font-size: 14px; cursor: pointer; font-family: inherit; margin-right: 8px;
+}
+.btn-primary:disabled { opacity: 0.6; cursor: default; }

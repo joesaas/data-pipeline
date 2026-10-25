@@ -120,7 +120,24 @@ ${seo.jsonLd ?? ""}
   ${showSearch ? `<div class="head-search"><input id="q" placeholder="搜索标题、摘要或标签…" /></div>` : ""}
   <div class="spacer"></div>
   <a class="head-link" href="${CONTACT_URL}" target="_blank" rel="noreferrer">联系我们</a>
+  <span class="head-auth" id="headAuth">
+    <button type="button" class="head-link-btn" id="loginBtn">登录</button>
+    <span id="authLoggedIn" hidden>
+      <span id="authAddr" class="mono"></span>
+      <button type="button" class="head-link-btn" id="favViewBtn">我的收藏</button>
+      <button type="button" class="head-link-btn" id="logoutBtn">退出</button>
+    </span>
+  </span>
 </header>
+<div class="auth-modal" id="authModal" hidden>
+  <div class="auth-modal-card">
+    <h3>请先登录</h3>
+    <p class="muted">收藏需要登录。连接你的钱包并签名一条登录消息即可完成，不会产生任何链上交易，也不会扣费。</p>
+    <p class="auth-error" id="authError" hidden></p>
+    <button type="button" class="btn-primary" id="walletLoginBtn">连接钱包登录</button>
+    <button type="button" class="head-link-btn" id="authCancelBtn">取消</button>
+  </div>
+</div>
 <main>`;
 }
 
@@ -279,6 +296,182 @@ const PAGE_JS = `
 })();
 </script>`;
 
+/** Wallet login + favorites (shared by index and detail pages). The
+ *  index PAGE_JS above only handles filtering; this script owns auth
+ *  state, the favorite buttons, the login modal and the favorites-only
+ *  view. It talks to the API on the same host under
+ *  /data-pipeline/api/v1 (the API and the news site share the domain,
+ *  so no CORS is involved). A favorite click while logged out opens
+ *  the login modal, and the pending favorite is applied right after a
+ *  successful login, so the user never has to click twice. */
+const SITE_JS = `
+<script>
+(function () {
+  var API = "/data-pipeline/api/v1";
+  var session = null;
+  try { session = window.localStorage.getItem("agent101-session"); } catch (e) { session = null; }
+  var favIds = {};
+  var pendingFav = null;
+  function $(id) { return document.getElementById(id); }
+  function shortAddr(a) { return a.slice(0, 6) + "…" + a.slice(-4); }
+  function headers() { return session ? { "Authorization": "Bearer " + session, "Content-Type": "application/json" } : { "Content-Type": "application/json" }; }
+  function api(path, opts) {
+    var o = opts || {};
+    o.headers = headers();
+    return fetch(API + path, o).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json().catch(function () { return {}; });
+    });
+  }
+  function setLoggedIn(addr) {
+    var loginBtn = $("loginBtn"), loggedIn = $("authLoggedIn"), addrEl = $("authAddr");
+    if (loginBtn) loginBtn.hidden = true;
+    if (loggedIn) loggedIn.hidden = false;
+    if (addrEl) addrEl.textContent = shortAddr(addr);
+  }
+  function setLoggedOut() {
+    var loginBtn = $("loginBtn"), loggedIn = $("authLoggedIn");
+    if (loginBtn) loginBtn.hidden = false;
+    if (loggedIn) loggedIn.hidden = true;
+  }
+  function paint() {
+    var btns = document.querySelectorAll(".fav-btn");
+    btns.forEach(function (b) {
+      var on = !!favIds[b.dataset.fav];
+      b.classList.toggle("on", on);
+      if (b.dataset.detail) { b.textContent = on ? "★ 已收藏" : "☆ 收藏"; }
+      else { b.textContent = on ? "★" : "☆"; }
+    });
+  }
+  function favBanner(show, n) {
+    var old = $("favBanner");
+    if (old) old.remove();
+    if (!show) return;
+    var grid = $("grid");
+    if (!grid) return;
+    var div = document.createElement("div");
+    div.id = "favBanner";
+    div.className = "fav-banner";
+    div.innerHTML = "正在查看我的收藏（" + n + " 条） <button type=\\"button\\" class=\\"head-link-btn\\" id=\\"favBackBtn\\">查看全部</button>";
+    grid.parentNode.insertBefore(div, grid);
+    $("favBackBtn").addEventListener("click", function () { window.location.href = window.location.pathname; });
+  }
+  function applyFavView() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get("favorites") !== "1") { favBanner(false); return; }
+    var cards = document.querySelectorAll(".news-card");
+    var shown = 0;
+    cards.forEach(function (c) {
+      var ok = !!favIds[c.dataset.itemId];
+      c.style.display = ok ? "" : "none";
+      if (ok) shown++;
+    });
+    favBanner(true, shown);
+    var count = $("count");
+    if (count) count.textContent = shown + " 条";
+  }
+  function refreshFavs() {
+    if (!session) { favIds = {}; paint(); applyFavView(); return Promise.resolve(); }
+    return api("/site-favorites/ids").then(function (d) {
+      favIds = {};
+      (d.ids || []).forEach(function (id) { favIds[id] = true; });
+      paint();
+      applyFavView();
+    }).catch(function () { favIds = {}; paint(); });
+  }
+  function openModal(pending) {
+    pendingFav = pending || null;
+    var m = $("authModal"), err = $("authError");
+    if (err) err.hidden = true;
+    if (m) m.hidden = false;
+  }
+  function closeModal() { var m = $("authModal"); if (m) m.hidden = true; pendingFav = null; }
+  function showError(msg) {
+    var err = $("authError");
+    if (err) { err.textContent = msg; err.hidden = false; }
+  }
+  function toggleFav(id, forceAdd) {
+    if (!session) { openModal(id); return Promise.resolve(); }
+    if (favIds[id] && !forceAdd) {
+      return api("/site-favorites/" + encodeURIComponent(id), { method: "DELETE" }).then(function () {
+        delete favIds[id];
+        paint();
+        applyFavView();
+      }).catch(function () { paint(); });
+    }
+    return api("/site-favorites", { method: "POST", body: JSON.stringify({ item_id: id }) }).then(function () {
+      favIds[id] = true;
+      paint();
+    }).catch(function () { paint(); });
+  }
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest ? e.target.closest(".fav-btn") : null;
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    toggleFav(btn.dataset.fav, false);
+  }, true);
+  var loginBtn = $("loginBtn");
+  if (loginBtn) loginBtn.addEventListener("click", function () { openModal(null); });
+  var cancelBtn = $("authCancelBtn");
+  if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
+  var modal = $("authModal");
+  if (modal) modal.addEventListener("click", function (e) { if (e.target === modal) closeModal(); });
+  var logoutBtn = $("logoutBtn");
+  if (logoutBtn) logoutBtn.addEventListener("click", function () {
+    if (session) api("/site-auth/logout", { method: "POST" }).catch(function () {});
+    try { window.localStorage.removeItem("agent101-session"); window.localStorage.removeItem("agent101-address"); } catch (e) {}
+    session = null; favIds = {}; setLoggedOut(); paint(); applyFavView();
+  });
+  var favViewBtn = $("favViewBtn");
+  if (favViewBtn) favViewBtn.addEventListener("click", function () {
+    if (window.AGENT101_INDEX_URL) { window.location.href = window.AGENT101_INDEX_URL + "?favorites=1"; return; }
+    window.location.href = window.location.pathname + "?favorites=1";
+  });
+  var walletBtn = $("walletLoginBtn");
+  if (walletBtn) walletBtn.addEventListener("click", function () {
+    if (!window.ethereum) { showError("未检测到浏览器钱包，请先安装 MetaMask 等钱包扩展后再试。"); return; }
+    walletBtn.disabled = true;
+    window.ethereum.request({ method: "eth_requestAccounts" }).then(function (accounts) {
+      var addr = String(accounts[0]).toLowerCase();
+      return api("/site-auth/nonce", { method: "POST", body: JSON.stringify({ address: addr }) }).then(function (d) {
+        return window.ethereum.request({ method: "personal_sign", params: [d.message, addr] }).then(function (sig) {
+          return api("/site-auth/verify", { method: "POST", body: JSON.stringify({ address: addr, signature: sig }) });
+        });
+      });
+    }).then(function (d) {
+      session = d.session_token;
+      try {
+        window.localStorage.setItem("agent101-session", session);
+        window.localStorage.setItem("agent101-address", d.address);
+      } catch (e) {}
+      setLoggedIn(d.address);
+      closeModal();
+      return refreshFavs().then(function () {
+        if (pendingFav) { var p = pendingFav; pendingFav = null; return toggleFav(p, true); }
+      });
+    }).catch(function (err) {
+      if (err && (err.code === 4001 || /rejected/i.test(String(err.message || "")))) showError("已取消签名，请重新尝试。");
+      else showError("登录失败，请检查钱包连接后重试。");
+    }).then(function () { walletBtn.disabled = false; });
+  });
+  if (session) {
+    api("/site-auth/me").then(function (d) {
+      setLoggedIn(d.address);
+      return refreshFavs();
+    }).catch(function () {
+      try { window.localStorage.removeItem("agent101-session"); window.localStorage.removeItem("agent101-address"); } catch (e) {}
+      session = null; setLoggedOut(); paint(); applyFavView();
+    });
+  } else {
+    setLoggedOut();
+    paint();
+    var params = new URLSearchParams(window.location.search);
+    if (params.get("favorites") === "1") openModal(null);
+  }
+})();
+</script>`;
+
 function sideItem(opts: { value: string; label: string; count?: number; color?: string; on?: boolean }): string {
   return `<button type="button" class="side-item${opts.on ? " on" : ""}" data-value="${esc(opts.value)}">${
     opts.color ? `<span class="dot" style="background:${opts.color}"></span>` : ""
@@ -330,11 +523,12 @@ export function renderIndex(
       const shownTitle = item.title_zh || item.title;
       const origTitle =
         item.title_zh && item.title_zh !== item.title ? `<div class="card-orig">${esc(item.title)}</div>` : "";
-      return `<a class="news-card" href="item/${encodeURIComponent(item.id)}/" data-category="${esc(item.category)}" data-published="${esc(item.cleaned_at)}" data-search="${esc(search)}">
+      return `<a class="news-card" href="item/${encodeURIComponent(item.id)}/" data-item-id="${esc(item.id)}" data-category="${esc(item.category)}" data-published="${esc(item.cleaned_at)}" data-search="${esc(search)}">
   <div class="card-top">
     <span class="pill" style="background:${categoryColor(item.category)}">${esc(item.category)}</span>
     ${item.sources[0] ? (item.sources[0].url ? `<span class="pill-gray pill-src" data-src="${esc(item.sources[0].url)}" title="打开来源">${esc(item.sources[0].name)}</span>` : `<span class="pill-gray">${esc(item.sources[0].name)}</span>`) : ""}
     ${weightBadge(item)}
+    <button type="button" class="fav-btn" data-fav="${esc(item.id)}" aria-label="收藏" title="收藏">☆</button>
   </div>
   <div class="card-title">${esc(shownTitle)}</div>
   ${origTitle}
@@ -380,6 +574,7 @@ ${sidebar}
 </main>
 ${FOOTER}
 ${PAGE_JS}
+${SITE_JS}
 </body>
 </html>
 `;
@@ -430,6 +625,7 @@ export function renderItem(
   <span class="pill" style="background:${categoryColor(item.category)}">${esc(item.category)}</span>
   ${item.sources[0] ? `<span class="pill-gray">${esc(item.sources[0].name)}</span>` : ""}
   ${weightBadge(item)}
+  <button type="button" class="fav-btn" data-fav="${esc(item.id)}" data-detail="1" aria-label="收藏">☆ 收藏</button>
 </div>
 <h1 style="line-height:1.45;font-size:22px;margin-top:12px">${esc(item.title_zh || item.title)}</h1>
 ${item.title_zh && item.title_zh !== item.title ? `<p class="muted" style="margin-top:4px">原文：${esc(item.title)}</p>` : ""}
@@ -443,6 +639,8 @@ ${sources}
 <p class="muted" style="margin-top:24px">由 ${esc(item.provider)} / ${esc(item.model)} 于 ${esc(fmtDateTime(item.cleaned_at))} 清洗${item.source_agent ? ` · 推送 agent ${esc(item.source_agent)}` : ""} · 原始记录 <a href="${esc(publicApiPath)}/api/v1/records/${encodeURIComponent(item.source_record_id)}" target="_blank" rel="noreferrer" style="color:var(--accent-strong)">${esc(item.source_record_id.slice(0, 8))}…</a></p>
 </main>
 ${FOOTER}
+<script>window.AGENT101_INDEX_URL = ${JSON.stringify(siteUrl + "/")};</script>
+${SITE_JS}
 </body>
 </html>
 `;

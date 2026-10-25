@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "ethers": "^6.17.0",
     "express": "^4.19.2"
   },
   "description": "API app: ingest and query service for prompt+content records (Express, storage driver dual implementation).",

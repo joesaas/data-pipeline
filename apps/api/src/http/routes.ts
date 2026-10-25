@@ -9,6 +9,7 @@ import type { IngestService } from "../ingest/ingest-service.js";
 import type { StorageDriver } from "../storage/storage-driver.js";
 import { CleanedReader } from "../cleaned/cleaned-reader.js";
 import * as admin from "./admin.js";
+import * as site from "./site.js";
 
 /**
  * Routing layer only: parse HTTP, delegate, format responses. No business rules.
@@ -91,6 +92,13 @@ export function registerRoutes(
         admin_pending_fail: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/fail`,
         admin_pending_reset: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/reset`,
         pull_tasks_pending_public: `GET ${base}/api/v1/pull-tasks/pending?target=`,
+        site_auth_nonce: `POST ${base}/api/v1/site-auth/nonce`,
+        site_auth_verify: `POST ${base}/api/v1/site-auth/verify`,
+        site_auth_me: `GET ${base}/api/v1/site-auth/me`,
+        site_auth_logout: `POST ${base}/api/v1/site-auth/logout`,
+        site_favorites: `GET/POST ${base}/api/v1/site-favorites`,
+        site_favorite_ids: `GET ${base}/api/v1/site-favorites/ids`,
+        site_favorite_delete: `DELETE ${base}/api/v1/site-favorites/:item_id`,
       },
       console: `${base}/console`,
       docs: "https://github.com/joesaas/data-pipeline",
@@ -247,6 +255,33 @@ export function registerRoutes(
   // Deliberately unauthenticated — the hook runtime holds no secrets.
   router.get("/api/v1/pull-tasks/pending", (req, res) =>
     admin.listPendingTasksPublic(adminDeps, req, res),
+  );
+
+  // News-site reader auth (wallet) + favorites. These use their own
+  // session Bearer tokens, never API keys, and are rate-limited by IP
+  // on the two login steps so nonce/verify cannot be spammed freely.
+  const siteDeps: site.SiteDeps = { driver };
+  router.post("/api/v1/site-auth/nonce", (req, res) => {
+    if (rateLimited(req.ip ?? "unknown")) {
+      res.status(429).json({ error: "rate limit exceeded" });
+      return;
+    }
+    site.requestNonce(siteDeps, req, res);
+  });
+  router.post("/api/v1/site-auth/verify", (req, res) => {
+    if (rateLimited(req.ip ?? "unknown")) {
+      res.status(429).json({ error: "rate limit exceeded" });
+      return;
+    }
+    site.verifyNonce(siteDeps, req, res);
+  });
+  router.get("/api/v1/site-auth/me", (req, res) => site.getMe(siteDeps, req, res));
+  router.post("/api/v1/site-auth/logout", (req, res) => site.logout(siteDeps, req, res));
+  router.get("/api/v1/site-favorites", (req, res) => site.listFavorites(siteDeps, req, res));
+  router.get("/api/v1/site-favorites/ids", (req, res) => site.listFavoriteIds(siteDeps, req, res));
+  router.post("/api/v1/site-favorites", (req, res) => site.addFavorite(siteDeps, req, res));
+  router.delete("/api/v1/site-favorites/:item_id", (req, res) =>
+    site.removeFavorite(siteDeps, req, res),
   );
 
   if (config.basePath) app.use(config.basePath, router);

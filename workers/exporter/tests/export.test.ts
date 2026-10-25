@@ -55,6 +55,12 @@ describe("exportSite", () => {
     assert.ok(!index.includes("文档站"), "docs-site link is gone from the topbar");
     assert.ok(index.includes('data-src="https://solana.com"'), "list source pill carries the source URL");
     assert.ok(index.includes('id="refreshBtn"'), "refresh button rendered");
+    assert.ok(index.includes('id="loginBtn"'), "login button rendered in topbar");
+    assert.ok(index.includes('id="authModal"'), "login modal rendered on index");
+    assert.ok(index.includes('id="walletLoginBtn"'), "wallet login button rendered");
+    assert.ok(index.includes('class="fav-btn"'), "favorite button rendered on cards");
+    assert.ok(index.includes('data-fav="item-1"'), "favorite button carries the item id");
+    assert.ok(index.includes("/data-pipeline/api/v1"), "site script talks to the API on the same host");
     assert.ok(index.includes('href="https://x.com/agentci_101"'), "contact link rendered on index");
     assert.ok(index.includes("联系方式"), "contact footer rendered on index");
     assert.ok(index.includes("<h1 id=\"pageTitle\">Agent 101 资讯</h1>"), "homepage H1 carries the brand");
@@ -66,6 +72,9 @@ describe("exportSite", () => {
     assert.ok(detail.includes("openai/gpt-4o-mini"));
     assert.ok(detail.includes("/data-pipeline/api/v1/records/rec-1"));
     assert.ok(detail.includes('href="https://x.com/agentci_101"'), "contact link rendered on detail page");
+    assert.ok(detail.includes('id="authModal"'), "login modal rendered on detail page");
+    assert.ok(detail.includes('data-fav="item-1"'), "favorite button rendered on detail page");
+    assert.ok(detail.includes("AGENT101_INDEX_URL"), "detail page knows the index URL for favorites view");
     assert.ok(detail.includes("| Agent 101 资讯</title>"), "detail title carries the brand suffix");
     assert.ok(detail.includes('rel="canonical" href="https://agent101.uk/news/item/item-1/"'), "detail canonical");
     assert.ok(detail.includes('"@type":"NewsArticle"'), "detail NewsArticle JSON-LD");

@@ -1,5 +1,8 @@
 import type {
   PendingTaskStatus,
+  SiteFavorite,
+  SiteNonce,
+  SiteSession,
   StoredPendingTask,
   StoredPullTask,
   StoredRecord,
@@ -45,6 +48,17 @@ export interface StorageDriver {
   /** Hard-delete a token row. The API only calls this for revoked
    *  rows; records pushed with the token are NOT deleted with it. */
   deleteToken(id: string): boolean;
+
+  /** News-site wallet login + favorites (see domain/types.ts). */
+  saveSiteNonce(n: SiteNonce): void;
+  getSiteNonce(address: string): SiteNonce | null;
+  deleteSiteNonce(address: string): void;
+  saveSiteSession(s: SiteSession): void;
+  findSiteSessionByHash(tokenHash: string): SiteSession | null;
+  deleteSiteSession(tokenHash: string): void;
+  listSiteFavorites(address: string): SiteFavorite[];
+  saveSiteFavorite(f: SiteFavorite): void;
+  deleteSiteFavorite(address: string, itemId: string): boolean;
 
   /** Webhooks (the only webhook table). Tokens are plaintext by
    *  necessity (Bearer auth) and are never exposed: only getWebhook
