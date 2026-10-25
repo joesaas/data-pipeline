@@ -42,6 +42,23 @@ describe("buildRequest", () => {
       triggered_at: "2026-10-24T02:00:00.000Z",
     });
   });
+  it("carries prompt in the body when set, omits it when blank", () => {
+    const withPrompt = buildRequest(
+      { ...resolveConfig(ENV), prompt: "run the news brief" },
+      new Date("2026-10-24T02:00:00.000Z"),
+    );
+    assert.equal(
+      (JSON.parse(withPrompt.body) as { prompt: string }).prompt,
+      "run the news brief",
+    );
+    const blank = buildRequest(
+      { ...resolveConfig(ENV), prompt: "   " },
+      new Date("2026-10-24T02:00:00.000Z"),
+    );
+    assert.equal("prompt" in JSON.parse(blank.body), false);
+    const unset = buildRequest(resolveConfig(ENV), new Date("2026-10-24T02:00:00.000Z"));
+    assert.equal("prompt" in JSON.parse(unset.body), false);
+  });
 });
 
 describe("triggerOnce", () => {

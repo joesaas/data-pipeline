@@ -13,6 +13,12 @@ import { dirname, join } from "node:path";
  *   - intervalMinutes: console override. null means "use the environment"
  *     (CURSOR_TRIGGER_INTERVAL_MINUTES, default 60). The console writes
  *     only this field; it never touches webhook secrets.
+ *   - prompt: console-set instruction text, or null for "no prompt".
+ *     When set, the webhook body carries it as the `prompt` field, so the
+ *     receiving automation knows what to run; when null, the body stays
+ *     the old ping shape ({source, triggered_at}) and the receiver
+ *     decides on its own. The prompt is not a secret — the console shows
+ *     and edits it — but it is never logged (it can be long).
  *
  * A missing or corrupt file behaves like "never triggered": the next tick
  * fires immediately. That direction is safe — at most one extra trigger —
@@ -21,10 +27,11 @@ import { dirname, join } from "node:path";
 export interface CursorTriggerState {
   lastTriggeredAt: string | null;
   intervalMinutes: number | null;
+  prompt: string | null;
 }
 
 export function defaultState(): CursorTriggerState {
-  return { lastTriggeredAt: null, intervalMinutes: null };
+  return { lastTriggeredAt: null, intervalMinutes: null, prompt: null };
 }
 
 export function loadState(path: string): CursorTriggerState {
@@ -36,6 +43,7 @@ export function loadState(path: string): CursorTriggerState {
         typeof parsed.intervalMinutes === "number" && parsed.intervalMinutes >= 1
           ? Math.floor(parsed.intervalMinutes)
           : null,
+      prompt: typeof parsed.prompt === "string" ? parsed.prompt : null,
     };
   } catch {
     return defaultState();

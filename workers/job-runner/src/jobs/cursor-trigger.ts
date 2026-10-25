@@ -44,11 +44,14 @@ if (!shouldTrigger(state, intervalMinutes, now)) {
 } else {
   try {
     const config = resolveConfig(process.env);
-    const result = await triggerOnce(config, now);
+    const result = await triggerOnce(
+      { ...config, prompt: state.prompt ?? undefined },
+      now,
+    );
     saveState(statePath, { ...state, lastTriggeredAt: now.toISOString() });
     const origin = new URL(config.url).origin;
     console.log(
-      `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… interval=${intervalMinutes}m`,
+      `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… interval=${intervalMinutes}m prompt=${state.prompt ? "set" : "unset"}`,
     );
   } catch (err) {
     console.error(

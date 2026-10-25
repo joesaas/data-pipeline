@@ -62,6 +62,8 @@ export function cursorRunnerScript(config: AppConfig, envFile: string | null): s
 export interface CursorJobState {
   lastTriggeredAt: string | null;
   intervalMinutes: number | null;
+  /** Console-set instruction text for the webhook body; null = ping only. */
+  prompt: string | null;
 }
 
 export function readCursorState(path: string): CursorJobState {
@@ -73,9 +75,10 @@ export function readCursorState(path: string): CursorJobState {
         typeof parsed.intervalMinutes === "number" && parsed.intervalMinutes >= 1
           ? Math.floor(parsed.intervalMinutes)
           : null,
+      prompt: typeof parsed.prompt === "string" ? parsed.prompt : null,
     };
   } catch {
-    return { lastTriggeredAt: null, intervalMinutes: null };
+    return { lastTriggeredAt: null, intervalMinutes: null, prompt: null };
   }
 }
 
@@ -186,6 +189,8 @@ export function cursorStatus(config: AppConfig, envFile: string | null): {
   nextDueAt: string | null;
   webhookConfigured: boolean;
   runnerScriptPresent: boolean;
+  /** The instruction text itself — not a secret, the console shows it. */
+  prompt: string | null;
 } {
   const path = cursorStatePath(config, envFile);
   const present = existsSync(path);
@@ -201,6 +206,7 @@ export function cursorStatus(config: AppConfig, envFile: string | null): {
       : null,
     webhookConfigured: webhookConfigured(config, envFile),
     runnerScriptPresent: existsSync(cursorRunnerScript(config, envFile)),
+    prompt: state.prompt,
   };
 }
 
@@ -274,6 +280,35 @@ export function setCursorInterval(deps: AdminDeps, req: Request, res: Response):
   const path = cursorStatePath(deps.config, deps.envFile);
   const state = readCursorState(path);
   writeCursorState(path, { ...state, intervalMinutes: minutes });
+  res.json(cursorStatus(deps.config, deps.envFile));
+}
+
+/**
+ * Set the webhook body's `prompt` (the instruction the receiving
+ * automation runs). Stored in the trigger state file — not in .env,
+ * because prompts are long, multi-line, and not secret. An empty or
+ * whitespace-only prompt clears it back to ping-only. The state read is
+ * spread into the write, so interval and last-triggered values survive;
+ * the same discipline applies in reverse (interval saves keep prompt).
+ * The prompt itself is not a secret, so the status response returns it
+ * for the console to display and edit.
+ */
+export function setCursorPrompt(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const body = (req.body ?? {}) as { prompt?: unknown };
+  if (typeof body.prompt !== "string") {
+    res.status(400).json({ error: "prompt must be a string (empty clears it)", field: "prompt" });
+    return;
+  }
+  const trimmed = body.prompt.trim();
+  const prompt = trimmed ? trimmed : null;
+  if (prompt !== null && prompt.length > 200_000) {
+    res.status(400).json({ error: "prompt must be at most 200000 chars", field: "prompt" });
+    return;
+  }
+  const path = cursorStatePath(deps.config, deps.envFile);
+  const state = readCursorState(path);
+  writeCursorState(path, { ...state, prompt });
   res.json(cursorStatus(deps.config, deps.envFile));
 }
 

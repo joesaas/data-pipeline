@@ -12,6 +12,13 @@ export interface TriggerConfig {
   url: string;
   token: string;
   intervalMinutes: number;
+  /**
+   * Instruction text for the receiving automation. NOT resolved from the
+   * environment: the job fills it from the trigger state file (console
+   * setting). Undefined/empty means "no prompt" — the body stays the old
+   * ping shape and the receiver decides on its own.
+   */
+  prompt?: string;
 }
 
 /** Defaults mirror the cleaner: hourly, minimum 1 minute. */
@@ -51,8 +58,15 @@ export interface TriggerRequest {
   body: string;
 }
 
-/** The automation's own instructions live in Cursor; the body is context. */
+/**
+ * The body is the trigger context plus, when the console has set one, the
+ * instruction itself: receivers that run a routine off the `prompt` field
+ * (see the console docs) execute it; without a prompt the body is just
+ * the ping the old service sent, and the receiver decides on its own.
+ * The prompt is never logged (it can be long); only its presence is.
+ */
 export function buildRequest(config: TriggerConfig, now: Date): TriggerRequest {
+  const prompt = config.prompt?.trim() ? config.prompt : undefined;
   return {
     url: config.url,
     method: "POST",
@@ -63,6 +77,7 @@ export function buildRequest(config: TriggerConfig, now: Date): TriggerRequest {
     body: JSON.stringify({
       source: "data-pipeline/cursor-trigger",
       triggered_at: now.toISOString(),
+      ...(prompt ? { prompt } : {}),
     }),
   };
 }

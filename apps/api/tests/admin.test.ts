@@ -355,6 +355,62 @@ describe("admin routes", () => {
     }
   });
 
+  it("prompt save round-trips through status, clears on empty, and survives interval saves", async () => {
+    const statePath = join(dir, "workers/job-runner/data/cursor-trigger-state.json");
+    const put = await req(
+      ctx,
+      "PUT",
+      "/data-pipeline/api/v1/admin/jobs/cursor-trigger/prompt",
+      ctx.adminKey,
+      { prompt: "  run the news brief\n" },
+    );
+    assert.equal(put.status, 200);
+    assert.equal(put.body.prompt, "run the news brief");
+    assert.equal(
+      (JSON.parse(readFileSync(statePath, "utf8")) as { prompt: string }).prompt,
+      "run the news brief",
+    );
+    // An interval save must not wipe the prompt (read-modify-write both ways).
+    const interval = await req(
+      ctx,
+      "PUT",
+      "/data-pipeline/api/v1/admin/jobs/cursor-trigger/interval",
+      ctx.adminKey,
+      { intervalMinutes: 45 },
+    );
+    assert.equal(interval.status, 200);
+    assert.equal(interval.body.prompt, "run the news brief");
+    const cleared = await req(
+      ctx,
+      "PUT",
+      "/data-pipeline/api/v1/admin/jobs/cursor-trigger/prompt",
+      ctx.adminKey,
+      { prompt: "   " },
+    );
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.prompt, null);
+    assert.equal(
+      (
+        await req(
+          ctx,
+          "PUT",
+          "/data-pipeline/api/v1/admin/jobs/cursor-trigger/prompt",
+          ctx.adminKey,
+          { prompt: 123 },
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await req(ctx, "PUT", "/data-pipeline/api/v1/admin/jobs/cursor-trigger/prompt", undefined, {
+          prompt: "x",
+        })
+      ).status,
+      401,
+    );
+  });
+
   it("restart runs pm2 restart and reports failure", async () => {
     const okBin = join(dir, "bin-ok");
     const failBin = join(dir, "bin-fail");

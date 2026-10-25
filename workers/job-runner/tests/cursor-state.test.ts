@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -27,15 +27,18 @@ describe("cursor-state", () => {
     const dir = mkdtempSync(join(tmpdir(), "dp-cursor-state-"));
     try {
       const path = join(dir, "state.json");
-      saveState(path, { lastTriggeredAt: "2026-10-25T00:00:00.000Z", intervalMinutes: 30 });
+      saveState(path, { lastTriggeredAt: "2026-10-25T00:00:00.000Z", intervalMinutes: 30, prompt: "run the news brief" });
       assert.deepEqual(loadState(path), {
         lastTriggeredAt: "2026-10-25T00:00:00.000Z",
         intervalMinutes: 30,
+        prompt: "run the news brief",
       });
-      saveState(path, { lastTriggeredAt: null, intervalMinutes: 0 });
+      saveState(path, { lastTriggeredAt: null, intervalMinutes: 0, prompt: null });
       assert.equal(loadState(path).intervalMinutes, null);
       const raw = JSON.parse(readFileSync(path, "utf8")) as { intervalMinutes: number };
       assert.equal(raw.intervalMinutes, 0);
+      writeFileSync(path, JSON.stringify({ lastTriggeredAt: null, intervalMinutes: null, prompt: 123 }));
+      assert.equal(loadState(path).prompt, null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -45,30 +48,30 @@ describe("cursor-state", () => {
     const now = new Date("2026-10-25T10:00:00.000Z");
     assert.equal(shouldTrigger(defaultState(), 60, now), true);
     assert.equal(
-      shouldTrigger({ lastTriggeredAt: "2026-10-25T09:30:00.000Z", intervalMinutes: null }, 60, now),
+      shouldTrigger({ lastTriggeredAt: "2026-10-25T09:30:00.000Z", intervalMinutes: null, prompt: null }, 60, now),
       false,
     );
     assert.equal(
-      shouldTrigger({ lastTriggeredAt: "2026-10-25T09:00:00.000Z", intervalMinutes: null }, 60, now),
+      shouldTrigger({ lastTriggeredAt: "2026-10-25T09:00:00.000Z", intervalMinutes: null, prompt: null }, 60, now),
       true,
     );
     assert.equal(
-      shouldTrigger({ lastTriggeredAt: "not-a-date", intervalMinutes: null }, 60, now),
+      shouldTrigger({ lastTriggeredAt: "not-a-date", intervalMinutes: null, prompt: null }, 60, now),
       true,
     );
   });
 
   it("resolveIntervalMinutes: console override wins, else env, else 60, clamped >= 1", () => {
-    assert.equal(resolveIntervalMinutes({ lastTriggeredAt: null, intervalMinutes: 15 }, {}), 15);
+    assert.equal(resolveIntervalMinutes({ lastTriggeredAt: null, intervalMinutes: 15, prompt: null }, {}), 15);
     assert.equal(
       resolveIntervalMinutes(
-        { lastTriggeredAt: null, intervalMinutes: 15 },
+        { lastTriggeredAt: null, intervalMinutes: 15, prompt: null },
         { CURSOR_TRIGGER_INTERVAL_MINUTES: "30" },
       ),
       15,
     );
     assert.equal(
-      resolveIntervalMinutes({ lastTriggeredAt: null, intervalMinutes: null }, {
+      resolveIntervalMinutes({ lastTriggeredAt: null, intervalMinutes: null, prompt: null }, {
         CURSOR_TRIGGER_INTERVAL_MINUTES: "30",
       }),
       30,

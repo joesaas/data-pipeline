@@ -122,6 +122,13 @@
         <p class="hint">只写不回显：保存后这里不显示已有值；只填要改的项，空着不动。保存后定时任务需重启 job-runner 才用新配置，手动触发则立即用新配置。</p>
         <p v-if="webhookOk" class="ok">{{ webhookOk }}</p>
         <p v-if="webhookError" class="err">{{ webhookError }}</p>
+        <form class="create" @submit.prevent="savePrompt">
+          <textarea v-model="promptInput" rows="8" placeholder="每次触发时 body 里带的 prompt（留空则只发 ping）" class="input"></textarea>
+          <button class="btn primary" :disabled="busy">保存 prompt</button>
+        </form>
+        <p class="hint">prompt 不是密钥：明文存在触发状态文件里，页面上直接显示；每次触发（定时或手动）body 都会带上它。清空保存即恢复只发 ping。</p>
+        <p v-if="promptOk" class="ok">{{ promptOk }}</p>
+        <p v-if="promptError" class="err">{{ promptError }}</p>
         <div class="row">
           <button class="btn" :disabled="busy || restarting" @click="restartRunner">
             {{ restarting ? "重启中…" : "重启 job-runner（使新配置对定时任务生效）" }}
@@ -168,6 +175,10 @@ const webhookUrl = ref("");
 const webhookToken = ref("");
 const webhookError = ref("");
 const webhookOk = ref("");
+const promptInput = ref("");
+const savedPrompt = ref("");
+const promptError = ref("");
+const promptOk = ref("");
 const restarting = ref(false);
 const restartResult = ref("");
 
@@ -253,6 +264,13 @@ async function refreshCursor() {
   try {
     cursor.value = await adminApi.cursorStatus(key.value);
     intervalInput.value = cursor.value.effectiveIntervalMinutes;
+    // Never clobber an unsaved prompt draft: sync the textarea only when
+    // it still holds the last saved value (or is untouched).
+    const serverPrompt = cursor.value.prompt ?? "";
+    if (promptInput.value === savedPrompt.value) {
+      promptInput.value = serverPrompt;
+    }
+    savedPrompt.value = serverPrompt;
   } catch (e) {
     cursorError.value = e.message;
   }
@@ -311,6 +329,23 @@ async function saveWebhook() {
   }
 }
 
+async function savePrompt() {
+  busy.value = true;
+  promptError.value = "";
+  promptOk.value = "";
+  try {
+    cursor.value = await adminApi.cursorPrompt(key.value, promptInput.value);
+    intervalInput.value = cursor.value.effectiveIntervalMinutes;
+    savedPrompt.value = cursor.value.prompt ?? "";
+    promptInput.value = savedPrompt.value;
+    promptOk.value = savedPrompt.value ? "prompt 已保存，下次触发 body 会带上它。" : "prompt 已清空，下次触发恢复只发 ping。";
+  } catch (e) {
+    promptError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function restartRunner() {
   restarting.value = true;
   restartResult.value = "";
@@ -359,6 +394,7 @@ body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", 
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .row.space { justify-content: space-between; }
 .input { border: 1px solid #ccc; border-radius: 8px; padding: 9px 12px; font-size: 14px; }
+.create textarea.input { width: 100%; min-height: 120px; font-family: inherit; line-height: 1.5; }
 .login .input { width: 100%; margin: 12px 0; }
 .btn { border: 1px solid #ccc; background: #fff; border-radius: 8px; padding: 8px 16px; cursor: pointer; }
 .btn:disabled { opacity: 0.5; cursor: default; }
