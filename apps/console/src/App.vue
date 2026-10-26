@@ -173,18 +173,19 @@
           <h3>触发历史</h3>
           <p class="hint">
             每次真实触发（定时或测试一次）记一行，跳过的轮次不记；删 webhook 不删历史（名字是快照）。
-            只保留最新 1000 条。跟上面列表一起刷新。<span v-if="triggerHistoryTotal"> · 共 {{ triggerHistoryTotal }} 条</span>
+            只保留最新 1000 条。跟上面列表一起刷新。点“查看”看本次实际发出的 payload 全文（超 8000 字截断并注明）；
+            上线前已记的行没有 payload 快照。<span v-if="triggerHistoryTotal"> · 共 {{ triggerHistoryTotal }} 条</span>
           </p>
           <div class="row">
             <label>webhook</label>
-            <select v-model="triggerHistoryFilter" class="input" @change="refreshTriggerHistory">
+            <select v-model="triggerHistoryFilter" class="input" @change="onHistoryFilterChange">
               <option value="">全部</option>
               <option v-for="w in webhooks" :key="w.id" :value="w.id">{{ w.name }}</option>
             </select>
           </div>
           <table v-if="triggerHistory.length">
             <thead>
-              <tr><th>时间</th><th>webhook</th><th>类型</th><th>结果</th><th>body</th><th>错误</th></tr>
+              <tr><th>时间</th><th>webhook</th><th>类型</th><th>结果</th><th>body</th><th>payload</th><th>错误</th></tr>
             </thead>
             <tbody>
               <tr v-for="h in triggerHistory" :key="h.id">
@@ -196,10 +197,20 @@
                   <span v-else>失败{{ h.http_status ? " " + h.http_status : "（无响应）" }}</span>
                 </td>
                 <td class="mono short">{{ h.body_kind }}</td>
+                <td>
+                  <button v-if="h.body" class="btn small" @click="toggleHistoryDetail(h)">查看</button>
+                  <span v-else>—</span>
+                </td>
                 <td class="mono short" :title="h.error || ''">{{ h.error || "—" }}</td>
               </tr>
             </tbody>
           </table>
+          <div v-if="selectedHistory" class="history-detail">
+            <h4>payload · {{ selectedHistory.webhook_name }} · {{ fmtTime(selectedHistory.triggered_at) }}（{{ selectedHistory.kind === "test" ? "测试" : "定时" }}）</h4>
+            <p v-if="selectedHistory.body_truncated" class="hint">这条 payload 超过 8000 字，已截断，只显示前 8000 字。</p>
+            <pre class="out">{{ selectedHistory.body }}</pre>
+            <button class="btn small" @click="selectedHistory = null">关闭</button>
+          </div>
           <p v-else-if="triggerHistoryError" class="err">{{ triggerHistoryError }}</p>
           <p v-else class="hint">还没有触发记录（下一次定时或测试触发后出现在这里）。</p>
         </div>
@@ -590,6 +601,7 @@ const triggerHistory = ref([]);
 const triggerHistoryTotal = ref(0);
 const triggerHistoryFilter = ref("");
 const triggerHistoryError = ref("");
+const selectedHistory = ref(null);
 let triggerHistorySeq = 0;
 
 const records = ref([]);
@@ -771,6 +783,15 @@ async function removeToken(t) {
   } finally {
     busy.value = false;
   }
+}
+
+function toggleHistoryDetail(h) {
+  selectedHistory.value = selectedHistory.value?.id === h.id ? null : h;
+}
+
+function onHistoryFilterChange() {
+  selectedHistory.value = null;
+  refreshTriggerHistory();
 }
 
 async function refreshTriggerHistory() {

@@ -35,7 +35,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cronMinuteKey, isCronDue, parseCron } from "@data-pipeline/shared";
 import { loadDefaultEnv } from "../load-env.js";
-import { resolveWebhookConfig, templateKind, triggerOnce } from "../trigger.js";
+import { buildRequest, resolveWebhookConfig, templateKind, triggerOnce } from "../trigger.js";
 import {
   loadState,
   resolveIntervalMinutes,
@@ -50,7 +50,7 @@ import {
   loadWebhookByIdFromDb,
   type DbWebhook,
 } from "../webhook-config.js";
-import { appendTriggerHistory } from "../webhook-history.js";
+import { appendTriggerHistory, snapshotBody } from "../webhook-history.js";
 
 const envFile = loadDefaultEnv();
 const statePath = stateFilePath(envFile, dirname(fileURLToPath(import.meta.url)));
@@ -115,6 +115,11 @@ if (dbConfig) {
   const historyKind = isTest ? "test" : "scheduled";
   let attempted = false;
   let bodyKind = "ping";
+  // The exact body that goes out, for the history snapshot. buildRequest
+  // is pure for a given config + timestamp, so this is byte-identical
+  // to what triggerOnce sends below — and it is available for the
+  // failure row too, where triggerOnce throws without returning.
+  let sentBody: string | null = null;
   try {
     // The read happens on every trigger attempt, so a console save takes
     // effect on the next tick with no runner restart.
@@ -126,11 +131,13 @@ if (dbConfig) {
     };
     const kind = templateKind(full);
     bodyKind = kind ? `payload(${kind})` : state.prompt ? "prompt" : "ping";
+    sentBody = buildRequest(full, now).body;
     attempted = true;
     const result = await triggerOnce(full, now);
     if (!isTest) {
       saveState(statePath, { ...state, lastTriggeredAt: now.toISOString() });
     }
+    const snap = snapshotBody(sentBody);
     if (
       !appendTriggerHistory(dbPath, {
         webhook_id: dbConfig.id,
@@ -140,6 +147,8 @@ if (dbConfig) {
         http_status: result.status,
         ok: true,
         body_kind: bodyKind,
+        body: snap.body,
+        body_truncated: snap.body_truncated,
         error: null,
         duration_ms: Date.now() - startedAt,
       })
@@ -154,6 +163,7 @@ if (dbConfig) {
     const message = err instanceof Error ? err.message : String(err);
     if (attempted) {
       const statusMatch = /HTTP (\d{3})/.exec(message);
+      const snap = sentBody === null ? null : snapshotBody(sentBody);
       if (
         !appendTriggerHistory(dbPath, {
           webhook_id: dbConfig.id,
@@ -163,6 +173,8 @@ if (dbConfig) {
           http_status: statusMatch ? Number(statusMatch[1]) : null,
           ok: false,
           body_kind: bodyKind,
+          body: snap?.body ?? null,
+          body_truncated: snap?.body_truncated ?? false,
           error: message.slice(0, 500),
           duration_ms: Date.now() - startedAt,
         })

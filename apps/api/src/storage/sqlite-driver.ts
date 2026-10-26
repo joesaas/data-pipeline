@@ -121,6 +121,8 @@ export class SqliteDriver implements StorageDriver {
         http_status INTEGER,
         ok INTEGER NOT NULL DEFAULT 0,
         body_kind TEXT NOT NULL,
+        body TEXT,
+        body_truncated INTEGER NOT NULL DEFAULT 0,
         error TEXT,
         duration_ms INTEGER
       );
@@ -221,6 +223,22 @@ export class SqliteDriver implements StorageDriver {
     const webhookCols = this.db.prepare("PRAGMA table_info(webhooks)").all() as { name: string }[];
     if (!webhookCols.some((c) => c.name === "cron")) {
       this.db.exec("ALTER TABLE webhooks ADD COLUMN cron TEXT");
+    }
+    // Same for trigger history rows written before body snapshots:
+    // old tables lack body/body_truncated entirely.
+    const historyExists = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'webhook_trigger_history'")
+      .get();
+    if (historyExists) {
+      const historyCols = this.db.prepare("PRAGMA table_info(webhook_trigger_history)").all() as {
+        name: string;
+      }[];
+      if (!historyCols.some((c) => c.name === "body")) {
+        this.db.exec("ALTER TABLE webhook_trigger_history ADD COLUMN body TEXT");
+      }
+      if (!historyCols.some((c) => c.name === "body_truncated")) {
+        this.db.exec("ALTER TABLE webhook_trigger_history ADD COLUMN body_truncated INTEGER NOT NULL DEFAULT 0");
+      }
     }
   }
 
@@ -467,7 +485,10 @@ export class SqliteDriver implements StorageDriver {
     items: WebhookTriggerHistory[];
     total: number;
   } {
-    type RawRow = Omit<WebhookTriggerHistory, "ok"> & { ok: number };
+    type RawRow = Omit<WebhookTriggerHistory, "ok" | "body_truncated"> & {
+      ok: number;
+      body_truncated: number;
+    };
     const where = filter.webhook_id !== undefined ? "WHERE webhook_id = ?" : "";
     const params = filter.webhook_id !== undefined ? [filter.webhook_id] : [];
     const total = (
@@ -475,16 +496,18 @@ export class SqliteDriver implements StorageDriver {
     ).n;
     const rows = this.db
       .prepare(
-        `SELECT id, webhook_id, webhook_name, kind, triggered_at, http_status, ok, body_kind, error, duration_ms
+        `SELECT id, webhook_id, webhook_name, kind, triggered_at, http_status, ok, body_kind, body, body_truncated, error, duration_ms
          FROM webhook_trigger_history ${where} ORDER BY triggered_at DESC, id DESC LIMIT ?`,
       )
       .all(...params, filter.limit) as RawRow[];
     return {
-      items: rows.map(({ ok, ...rest }) => ({
+      items: rows.map(({ ok, body_truncated, ...rest }) => ({
         ...rest,
         kind: rest.kind as WebhookTriggerHistory["kind"],
         http_status: rest.http_status ?? null,
         ok: ok === 1,
+        body: rest.body ?? null,
+        body_truncated: body_truncated === 1,
         error: rest.error ?? null,
         duration_ms: rest.duration_ms ?? null,
       })),
@@ -496,8 +519,8 @@ export class SqliteDriver implements StorageDriver {
     const res = this.db
       .prepare(
         `INSERT INTO webhook_trigger_history
-         (webhook_id, webhook_name, kind, triggered_at, http_status, ok, body_kind, error, duration_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (webhook_id, webhook_name, kind, triggered_at, http_status, ok, body_kind, body, body_truncated, error, duration_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.webhook_id,
@@ -507,6 +530,8 @@ export class SqliteDriver implements StorageDriver {
         row.http_status,
         row.ok ? 1 : 0,
         row.body_kind,
+        row.body,
+        row.body_truncated ? 1 : 0,
         row.error,
         row.duration_ms,
       );

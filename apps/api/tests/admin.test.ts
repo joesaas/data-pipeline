@@ -397,6 +397,8 @@ describe("admin routes", () => {
       http_status: 200,
       ok: true,
       body_kind: "payload(single)",
+      body: JSON.stringify({ prompt: "do it" }),
+      body_truncated: false,
       error: null,
       duration_ms: 120,
     });
@@ -408,6 +410,8 @@ describe("admin routes", () => {
       http_status: 500,
       ok: false,
       body_kind: "ping",
+      body: JSON.stringify({ source: "data-pipeline/cursor-trigger" }),
+      body_truncated: false,
       error: "cursor webhook returned HTTP 500",
       duration_ms: 300,
     });
@@ -415,6 +419,10 @@ describe("admin routes", () => {
     assert.equal(all.body.total, 2);
     assert.equal((all.body.items as unknown[]).length, 2);
     assert.equal(((all.body.items as Record<string, unknown>[])[0].webhook_name), "other-bot");
+    assert.equal(
+      ((all.body.items as Record<string, unknown>[])[1].body),
+      JSON.stringify({ prompt: "do it" }),
+    );
     const scoped = await req(ctx, "GET", `${H}?webhook_id=1`, ctx.adminKey);
     assert.equal(scoped.body.total, 1);
     const limited = await req(ctx, "GET", `${H}?limit=1`, ctx.adminKey);

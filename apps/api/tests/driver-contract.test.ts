@@ -202,6 +202,8 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
         http_status: 200,
         ok: true,
         body_kind: "payload(single)",
+        body: JSON.stringify({ prompt: "do it" }),
+        body_truncated: false,
         error: null,
         duration_ms: 120,
       });
@@ -214,6 +216,8 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
         http_status: null,
         ok: false,
         body_kind: "ping",
+        body: JSON.stringify({ source: "data-pipeline/cursor-trigger" }),
+        body_truncated: false,
         error: "fetch failed",
         duration_ms: 5000,
       });
@@ -223,7 +227,10 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.equal(all.items[0].id, failed.id);
       assert.equal(all.items[0].ok, false);
       assert.equal(all.items[0].http_status, null);
+      assert.equal(all.items[0].body, JSON.stringify({ source: "data-pipeline/cursor-trigger" }));
+      assert.equal(all.items[0].body_truncated, false);
       assert.equal(all.items[1].id, ok.id);
+      assert.equal(all.items[1].body, JSON.stringify({ prompt: "do it" }));
       const scoped = driver.listTriggerHistory({ webhook_id: 1, limit: 50 });
       assert.equal(scoped.total, 1);
       assert.equal(scoped.items[0].webhook_name, "grok-bot");

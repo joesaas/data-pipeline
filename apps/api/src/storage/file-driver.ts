@@ -344,7 +344,15 @@ export class FileDriver implements StorageDriver {
       (a, b) => b.triggered_at.localeCompare(a.triggered_at) || b.id - a.id,
     );
     const scoped = filter.webhook_id !== undefined ? all.filter((r) => r.webhook_id === filter.webhook_id) : all;
-    return { items: scoped.slice(0, filter.limit), total: scoped.length };
+    return {
+      // Rows written before body snapshots lack the new fields.
+      items: scoped.slice(0, filter.limit).map((r) => ({
+        ...r,
+        body: r.body ?? null,
+        body_truncated: r.body_truncated ?? false,
+      })),
+      total: scoped.length,
+    };
   }
 
   appendTriggerHistory(row: Omit<WebhookTriggerHistory, "id">): WebhookTriggerHistory {

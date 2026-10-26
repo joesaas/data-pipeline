@@ -189,6 +189,15 @@ export interface WebhookTriggerHistory {
   ok: boolean;
   /** Body shape actually sent: payload(override|active|single), prompt, or ping. */
   body_kind: string;
+  /**
+   * The exact request body that was sent (template after placeholder
+   * substitution, or the built-in ping/prompt body). Truncated to the
+   * first 8000 characters when longer (see body_truncated); null only
+   * for rows written before body snapshots existed. Never a secret:
+   * the token travels in the Authorization header, never in the body.
+   */
+  body: string | null;
+  body_truncated: boolean;
   error: string | null;
   duration_ms: number | null;
 }
