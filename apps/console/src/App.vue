@@ -170,6 +170,38 @@
             <textarea v-model="newWebhookPayload" rows="4" placeholder='payload 模板（可选：JSON 对象，或直接写纯文本 prompt，如 {"prompt": "…"} 或一段文字）' class="input"></textarea>
             <button class="btn primary" :disabled="busy">新建</button>
           </form>
+          <h3>触发历史</h3>
+          <p class="hint">
+            每次真实触发（定时或测试一次）记一行，跳过的轮次不记；删 webhook 不删历史（名字是快照）。
+            只保留最新 1000 条。跟上面列表一起刷新。<span v-if="triggerHistoryTotal"> · 共 {{ triggerHistoryTotal }} 条</span>
+          </p>
+          <div class="row">
+            <label>webhook</label>
+            <select v-model="triggerHistoryFilter" class="input" @change="refreshTriggerHistory">
+              <option value="">全部</option>
+              <option v-for="w in webhooks" :key="w.id" :value="w.id">{{ w.name }}</option>
+            </select>
+          </div>
+          <table v-if="triggerHistory.length">
+            <thead>
+              <tr><th>时间</th><th>webhook</th><th>类型</th><th>结果</th><th>body</th><th>错误</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="h in triggerHistory" :key="h.id">
+                <td>{{ fmtTime(h.triggered_at) }}</td>
+                <td>{{ h.webhook_name }}</td>
+                <td>{{ h.kind === "test" ? "测试" : "定时" }}</td>
+                <td>
+                  <span v-if="h.ok" class="badge">成功{{ h.http_status ? " " + h.http_status : "" }}</span>
+                  <span v-else>失败{{ h.http_status ? " " + h.http_status : "（无响应）" }}</span>
+                </td>
+                <td class="mono short">{{ h.body_kind }}</td>
+                <td class="mono short" :title="h.error || ''">{{ h.error || "—" }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else-if="triggerHistoryError" class="err">{{ triggerHistoryError }}</p>
+          <p v-else class="hint">还没有触发记录（下一次定时或测试触发后出现在这里）。</p>
         </div>
         <div v-if="webhookView === 'detail' && selectedWebhook">
           <h4>{{ selectedWebhook.name }} <span v-if="selectedWebhook.is_active" class="badge">定时</span></h4>
@@ -554,6 +586,11 @@ const webhookTestResult = ref("");
 const webhooksRefreshing = ref(false);
 const webhooksLastRefreshed = ref("");
 let webhooksRefreshSeq = 0;
+const triggerHistory = ref([]);
+const triggerHistoryTotal = ref(0);
+const triggerHistoryFilter = ref("");
+const triggerHistoryError = ref("");
+let triggerHistorySeq = 0;
 
 const records = ref([]);
 const recordsTotal = ref(0);
@@ -736,6 +773,22 @@ async function removeToken(t) {
   }
 }
 
+async function refreshTriggerHistory() {
+  const seq = ++triggerHistorySeq;
+  triggerHistoryError.value = "";
+  try {
+    const data = await adminApi.listTriggerHistory(key.value, {
+      webhook_id: triggerHistoryFilter.value || undefined,
+      limit: 50,
+    });
+    if (seq !== triggerHistorySeq) return;
+    triggerHistory.value = data.items;
+    triggerHistoryTotal.value = data.total;
+  } catch (e) {
+    if (seq === triggerHistorySeq) triggerHistoryError.value = e.message;
+  }
+}
+
 async function refreshWebhooks() {
   const seq = ++webhooksRefreshSeq;
   webhooksRefreshing.value = true;
@@ -744,6 +797,7 @@ async function refreshWebhooks() {
     if (seq !== webhooksRefreshSeq) return;
     webhooks.value = rows;
     webhooksLastRefreshed.value = new Date().toLocaleString();
+    refreshTriggerHistory();
     if (selectedWebhook.value) {
       selectedWebhook.value =
         webhooks.value.find((w) => w.id === selectedWebhook.value.id) ?? null;

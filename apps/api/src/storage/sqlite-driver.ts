@@ -13,6 +13,7 @@ import type {
   StoredWebhook,
   WebhookMeta,
   WebhookPayload,
+  WebhookTriggerHistory,
 } from "../domain/types.js";
 import { ADMIN_IDENTITY } from "../domain/types.js";
 import type { StorageDriver } from "./storage-driver.js";
@@ -111,6 +112,20 @@ export class SqliteDriver implements StorageDriver {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS webhook_trigger_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        webhook_id INTEGER NOT NULL,
+        webhook_name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        triggered_at TEXT NOT NULL,
+        http_status INTEGER,
+        ok INTEGER NOT NULL DEFAULT 0,
+        body_kind TEXT NOT NULL,
+        error TEXT,
+        duration_ms INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_trigger_history_webhook_time
+        ON webhook_trigger_history(webhook_id, triggered_at DESC, id DESC);
       CREATE TABLE IF NOT EXISTS pull_tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
@@ -446,6 +461,64 @@ export class SqliteDriver implements StorageDriver {
   deleteWebhook(id: number): boolean {
     const res = this.db.prepare("DELETE FROM webhooks WHERE id = ?").run(id);
     return Number(res.changes) > 0;
+  }
+
+  listTriggerHistory(filter: { webhook_id?: number; limit: number }): {
+    items: WebhookTriggerHistory[];
+    total: number;
+  } {
+    type RawRow = Omit<WebhookTriggerHistory, "ok"> & { ok: number };
+    const where = filter.webhook_id !== undefined ? "WHERE webhook_id = ?" : "";
+    const params = filter.webhook_id !== undefined ? [filter.webhook_id] : [];
+    const total = (
+      this.db.prepare(`SELECT COUNT(*) AS n FROM webhook_trigger_history ${where}`).get(...params) as { n: number }
+    ).n;
+    const rows = this.db
+      .prepare(
+        `SELECT id, webhook_id, webhook_name, kind, triggered_at, http_status, ok, body_kind, error, duration_ms
+         FROM webhook_trigger_history ${where} ORDER BY triggered_at DESC, id DESC LIMIT ?`,
+      )
+      .all(...params, filter.limit) as RawRow[];
+    return {
+      items: rows.map(({ ok, ...rest }) => ({
+        ...rest,
+        kind: rest.kind as WebhookTriggerHistory["kind"],
+        http_status: rest.http_status ?? null,
+        ok: ok === 1,
+        error: rest.error ?? null,
+        duration_ms: rest.duration_ms ?? null,
+      })),
+      total,
+    };
+  }
+
+  appendTriggerHistory(row: Omit<WebhookTriggerHistory, "id">): WebhookTriggerHistory {
+    const res = this.db
+      .prepare(
+        `INSERT INTO webhook_trigger_history
+         (webhook_id, webhook_name, kind, triggered_at, http_status, ok, body_kind, error, duration_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        row.webhook_id,
+        row.webhook_name,
+        row.kind,
+        row.triggered_at,
+        row.http_status,
+        row.ok ? 1 : 0,
+        row.body_kind,
+        row.error,
+        row.duration_ms,
+      );
+    // Bounded history: keep only the latest 1000 rows overall.
+    this.db
+      .prepare(
+        `DELETE FROM webhook_trigger_history WHERE id NOT IN
+         (SELECT id FROM webhook_trigger_history ORDER BY id DESC LIMIT 1000)`,
+      )
+      .run();
+    const id = Number(res.lastInsertRowid);
+    return { ...row, id };
   }
 
   getPullTask(id: number): StoredPullTask | null {

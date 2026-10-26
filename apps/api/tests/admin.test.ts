@@ -27,6 +27,7 @@ async function start(config: AppConfig): Promise<{
   close: () => void;
   adminKey: string;
   userKey: string;
+  driver: ReturnType<typeof createApp>["driver"];
 }> {
   const { app, driver, auth } = createApp(config);
   const adminKey = auth.createToken("console-admin", "admin").plainKey;
@@ -44,6 +45,7 @@ async function start(config: AppConfig): Promise<{
     },
     adminKey,
     userKey,
+    driver,
   };
 }
 
@@ -377,6 +379,47 @@ describe("admin routes", () => {
       400,
     );
     assert.equal((await req(ctx, "DELETE", `${W}/${id}`, ctx.adminKey)).status, 200);
+  });
+
+  it("webhook trigger history: admin-only list, newest first, filter and limit", async () => {
+    const H = "/data-pipeline/api/v1/admin/webhook-trigger-history";
+    assert.equal((await req(ctx, "GET", H)).status, 401);
+    assert.equal((await req(ctx, "GET", H, ctx.userKey)).status, 403);
+    assert.equal((await req(ctx, "GET", `${H}?webhook_id=abc`, ctx.adminKey)).status, 400);
+    const empty = await req(ctx, "GET", H, ctx.adminKey);
+    assert.equal(empty.status, 200);
+    assert.deepEqual(empty.body.items, []);
+    ctx.driver.appendTriggerHistory({
+      webhook_id: 1,
+      webhook_name: "grok-bot",
+      kind: "scheduled",
+      triggered_at: "2026-10-26T01:00:00.000Z",
+      http_status: 200,
+      ok: true,
+      body_kind: "payload(single)",
+      error: null,
+      duration_ms: 120,
+    });
+    ctx.driver.appendTriggerHistory({
+      webhook_id: 2,
+      webhook_name: "other-bot",
+      kind: "test",
+      triggered_at: "2026-10-26T02:00:00.000Z",
+      http_status: 500,
+      ok: false,
+      body_kind: "ping",
+      error: "cursor webhook returned HTTP 500",
+      duration_ms: 300,
+    });
+    const all = await req(ctx, "GET", H, ctx.adminKey);
+    assert.equal(all.body.total, 2);
+    assert.equal((all.body.items as unknown[]).length, 2);
+    assert.equal(((all.body.items as Record<string, unknown>[])[0].webhook_name), "other-bot");
+    const scoped = await req(ctx, "GET", `${H}?webhook_id=1`, ctx.adminKey);
+    assert.equal(scoped.body.total, 1);
+    const limited = await req(ctx, "GET", `${H}?limit=1`, ctx.adminKey);
+    assert.equal(limited.body.total, 2);
+    assert.equal((limited.body.items as unknown[]).length, 1);
   });
 
   it("pull tasks: create/list/get/update/active, many may be active", async () => {

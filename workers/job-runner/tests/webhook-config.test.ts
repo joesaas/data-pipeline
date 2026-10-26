@@ -61,6 +61,8 @@ describe("webhook-config", () => {
         "2026-10-25T01:00:00.000Z",
       );
       assert.deepEqual(loadActiveWebhookFromDb(path), {
+        id: 2,
+        name: "grok",
         url: "https://grok.example/hook",
         token: "grok-token",
         payload: JSON.stringify({ prompt: "grok template" }),
@@ -94,6 +96,8 @@ describe("webhook-config", () => {
       const id = Number(res.lastInsertRowid);
       db.close();
       assert.deepEqual(loadWebhookByIdFromDb(path, id), {
+        id,
+        name: "solo",
         url: "https://solo.example/hook",
         token: "solo-token",
         payload: null,
@@ -172,6 +176,8 @@ describe("webhook-config", () => {
         );
       // Writer stays open (like the running API) while the reader opens.
       assert.deepEqual(loadActiveWebhookFromDb(path), {
+        id: 1,
+        name: "wal",
         url: "https://wal.example/hook",
         token: "wal-token",
         payload: null,

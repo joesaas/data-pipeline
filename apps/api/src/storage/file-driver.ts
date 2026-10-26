@@ -12,6 +12,7 @@ import type {
   StoredWebhook,
   WebhookMeta,
   WebhookPayload,
+  WebhookTriggerHistory,
 } from "../domain/types.js";
 import { ADMIN_IDENTITY } from "../domain/types.js";
 import type { StorageDriver } from "./storage-driver.js";
@@ -31,6 +32,7 @@ export class FileDriver implements StorageDriver {
   private recordsDir: string;
   private tokensPath: string;
   private webhooksPath: string;
+  private triggerHistoryPath: string;
   private webhookPayloadsPath: string;
   private pullTasksPath: string;
   private pendingTasksPath: string;
@@ -42,6 +44,7 @@ export class FileDriver implements StorageDriver {
     this.recordsDir = join(dir, "records");
     this.tokensPath = join(dir, "tokens.json");
     this.webhooksPath = join(dir, "webhooks.json");
+    this.triggerHistoryPath = join(dir, "webhook-trigger-history.json");
     this.webhookPayloadsPath = join(dir, "webhook-payloads.json");
     this.pullTasksPath = join(dir, "pull-tasks.json");
     this.pendingTasksPath = join(dir, "pending-tasks.json");
@@ -86,6 +89,7 @@ export class FileDriver implements StorageDriver {
     }
     if (existsSync(legacyPath)) rmSync(legacyPath);
     if (!existsSync(this.webhookPayloadsPath)) writeFileSync(this.webhookPayloadsPath, "[]");
+    if (!existsSync(this.triggerHistoryPath)) writeFileSync(this.triggerHistoryPath, "[]");
   }
 
   private readAllRecords(): StoredRecord[] {
@@ -322,6 +326,36 @@ export class FileDriver implements StorageDriver {
     if (kept.length === rows.length) return false;
     this.writeWebhooks(kept);
     return true;
+  }
+
+  private readTriggerHistory(): WebhookTriggerHistory[] {
+    return JSON.parse(readFileSync(this.triggerHistoryPath, "utf8")) as WebhookTriggerHistory[];
+  }
+
+  private writeTriggerHistory(rows: WebhookTriggerHistory[]): void {
+    writeFileSync(this.triggerHistoryPath, JSON.stringify(rows, null, 1));
+  }
+
+  listTriggerHistory(filter: { webhook_id?: number; limit: number }): {
+    items: WebhookTriggerHistory[];
+    total: number;
+  } {
+    const all = this.readTriggerHistory().sort(
+      (a, b) => b.triggered_at.localeCompare(a.triggered_at) || b.id - a.id,
+    );
+    const scoped = filter.webhook_id !== undefined ? all.filter((r) => r.webhook_id === filter.webhook_id) : all;
+    return { items: scoped.slice(0, filter.limit), total: scoped.length };
+  }
+
+  appendTriggerHistory(row: Omit<WebhookTriggerHistory, "id">): WebhookTriggerHistory {
+    const rows = this.readTriggerHistory();
+    const next = rows.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+    const saved = { ...row, id: next };
+    rows.push(saved);
+    // Bounded history: keep only the latest 1000 rows overall.
+    rows.sort((a, b) => a.id - b.id);
+    this.writeTriggerHistory(rows.slice(-1000));
+    return saved;
   }
 
   private readPullTasks(): StoredPullTask[] {

@@ -10,6 +10,7 @@ import type {
   StoredWebhook,
   WebhookMeta,
   WebhookPayload,
+  WebhookTriggerHistory,
 } from "../domain/types.js";
 
 /**
@@ -89,6 +90,16 @@ export interface StorageDriver {
   deletePendingTask(id: number): boolean;
   /** Delete waiting rows of one pull task (used when the task itself is deleted). */
   deleteWaitingPendingTasks(pullTaskId: number): number;
+
+  /** Trigger history (written by the trigger job, read by the console).
+   *  Newest first. Appending prunes the table to the latest 1000 rows
+   *  so the history stays bounded no matter how often a webhook fires. */
+  listTriggerHistory(filter: { webhook_id?: number; limit: number }): {
+    items: WebhookTriggerHistory[];
+    total: number;
+  };
+  /** Insert (id <= 0 assigns the next id) and prune to the latest 1000 rows. */
+  appendTriggerHistory(row: Omit<WebhookTriggerHistory, "id">): WebhookTriggerHistory;
 
   /** Saved payload templates the trigger job still reads for its active
    *  row (the console no longer manages this list). */

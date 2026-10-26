@@ -78,6 +78,7 @@ export function registerRoutes(
         admin_webhook_update: `PUT ${base}/api/v1/admin/webhooks/:id`,
         admin_webhook_delete: `DELETE ${base}/api/v1/admin/webhooks/:id`,
         admin_webhook_active: `POST ${base}/api/v1/admin/webhooks/:id/active`,
+        admin_webhook_trigger_history: `GET ${base}/api/v1/admin/webhook-trigger-history?webhook_id=&limit=`,
         admin_webhook_test: `POST ${base}/api/v1/admin/webhooks/:id/test`,
         admin_pull_tasks: `GET ${base}/api/v1/admin/pull-tasks`,
         admin_pull_task_create: `POST ${base}/api/v1/admin/pull-tasks`,
@@ -218,6 +219,9 @@ export function registerRoutes(
   );
   router.post("/api/v1/admin/webhooks/:id/test", (req, res) =>
     admin.testWebhook(adminDeps, req, res),
+  );
+  router.get("/api/v1/admin/webhook-trigger-history", (req, res) =>
+    admin.listTriggerHistory(adminDeps, req, res),
   );
   // Pull tasks (queue model). The /pending routes must be registered
   // before /:id, or "pending" would be parsed as an id and 400.

@@ -65,6 +65,15 @@ export const adminApi = {
   setWebhookActive: (key, id, active) =>
     api("POST", `/api/v1/admin/webhooks/${id}/active`, key, { active }),
   testWebhook: (key, id) => api("POST", `/api/v1/admin/webhooks/${id}/test`, key, {}),
+  // Trigger history: one row per actual fire (scheduled or test),
+  // written by the trigger job; newest first. Filter by webhook id,
+  // limit defaults to 50 on the server (max 200).
+  listTriggerHistory: (key, { webhook_id, limit }) => {
+    const q = new URLSearchParams();
+    if (webhook_id) q.set("webhook_id", String(webhook_id));
+    if (limit) q.set("limit", String(limit));
+    return api("GET", `/api/v1/admin/webhook-trigger-history?${q}`, key);
+  },
   // Records: no admin-only route exists, and none is needed — the
   // ordinary records endpoints already serve an admin key cross-bucket
   // (ADMIN_IDENTITY reads every identity's records, deletes any row).

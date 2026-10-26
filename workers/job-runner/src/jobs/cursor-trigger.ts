@@ -50,6 +50,7 @@ import {
   loadWebhookByIdFromDb,
   type DbWebhook,
 } from "../webhook-config.js";
+import { appendTriggerHistory } from "../webhook-history.js";
 
 const envFile = loadDefaultEnv();
 const statePath = stateFilePath(envFile, dirname(fileURLToPath(import.meta.url)));
@@ -106,6 +107,14 @@ if (isTest) {
 }
 
 if (dbConfig) {
+  // History is one row per actual HTTP attempt (success or failure) —
+  // never for a skipped tick, and never when config resolution fails
+  // before any attempt. A failed history write only warns: it must
+  // never fail the trigger itself (appendTriggerHistory never throws).
+  const startedAt = Date.now();
+  const historyKind = isTest ? "test" : "scheduled";
+  let attempted = false;
+  let bodyKind = "ping";
   try {
     // The read happens on every trigger attempt, so a console save takes
     // effect on the next tick with no runner restart.
@@ -115,20 +124,53 @@ if (dbConfig) {
       prompt: state.prompt ?? undefined,
       activePayload: loadActivePayloadFromDb(dbPath),
     };
+    const kind = templateKind(full);
+    bodyKind = kind ? `payload(${kind})` : state.prompt ? "prompt" : "ping";
+    attempted = true;
     const result = await triggerOnce(full, now);
     if (!isTest) {
       saveState(statePath, { ...state, lastTriggeredAt: now.toISOString() });
     }
+    if (
+      !appendTriggerHistory(dbPath, {
+        webhook_id: dbConfig.id,
+        webhook_name: dbConfig.name,
+        kind: historyKind,
+        triggered_at: now.toISOString(),
+        http_status: result.status,
+        ok: true,
+        body_kind: bodyKind,
+        error: null,
+        duration_ms: Date.now() - startedAt,
+      })
+    ) {
+      console.log("[job-runner] cursor-trigger: trigger history write failed (trigger itself succeeded)");
+    }
     const origin = new URL(config.url).origin;
-    const kind = templateKind(full);
-    const bodyKind = kind ? `payload(${kind})` : state.prompt ? "prompt" : "ping";
     console.log(
       `[job-runner] cursor-trigger: triggered ok (HTTP ${result.status}) target=${origin}/… ${scheduleLabel} body=${bodyKind}${isTest ? " test" : ""}`,
     );
   } catch (err) {
-    console.error(
-      `[job-runner] cursor-trigger: trigger failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    if (attempted) {
+      const statusMatch = /HTTP (\d{3})/.exec(message);
+      if (
+        !appendTriggerHistory(dbPath, {
+          webhook_id: dbConfig.id,
+          webhook_name: dbConfig.name,
+          kind: historyKind,
+          triggered_at: now.toISOString(),
+          http_status: statusMatch ? Number(statusMatch[1]) : null,
+          ok: false,
+          body_kind: bodyKind,
+          error: message.slice(0, 500),
+          duration_ms: Date.now() - startedAt,
+        })
+      ) {
+        console.log("[job-runner] cursor-trigger: trigger history write failed (trigger itself failed)");
+      }
+    }
+    console.error(`[job-runner] cursor-trigger: trigger failed: ${message}`);
     throw err;
   }
 }

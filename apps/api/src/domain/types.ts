@@ -166,6 +166,34 @@ export interface WebhookPayload {
 }
 
 /**
+ * One recorded webhook fire (scheduled tick or console test-fire). The
+ * trigger job writes a row for every actual HTTP attempt — success or
+ * failure — and never for a skipped tick (no active webhook, cron not
+ * due, interval gate). `webhook_name` is a snapshot: deleting or
+ * renaming the webhook row never rewrites history, and history rows are
+ * never deleted with the webhook. No secrets here: the token is never
+ * stored in this table and the full URL is never recorded either — the
+ * name snapshot is enough to identify the target. `http_status` is null
+ * when the attempt never got a response (network error, timeout);
+ * `error` is a short failure snippet, also secret-free by construction
+ * (triggerOnce messages carry a status plus a response snippet only).
+ */
+export interface WebhookTriggerHistory {
+  id: number;
+  webhook_id: number;
+  webhook_name: string;
+  /** "scheduled" for a timer tick, "test" for a console 测试一次. */
+  kind: "scheduled" | "test";
+  triggered_at: string;
+  http_status: number | null;
+  ok: boolean;
+  /** Body shape actually sent: payload(override|active|single), prompt, or ping. */
+  body_kind: string;
+  error: string | null;
+  duration_ms: number | null;
+}
+
+/**
  * Identity an admin token resolves to. Records are siloed per identity;
  * drivers treat this identity as unscoped for reads (find / get / list /
  * delete). An admin identity is a reader, not a bucket: nothing is ever

@@ -452,6 +452,31 @@ export function testWebhook(deps: AdminDeps, req: Request, res: Response): void 
 }
 
 /**
+ * Trigger history for the console's Webhooks tab: newest first, newest
+ * 50 by default (max 200), optionally scoped to one webhook. History
+ * rows are written by the trigger job itself (see job-runner
+ * webhook-history.ts), so scheduled fires show up here without any API
+ * involvement; rows survive webhook deletion (the name is a snapshot).
+ */
+export function listTriggerHistory(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  let webhookId: number | undefined;
+  const rawId = req.query.webhook_id;
+  if (rawId !== undefined) {
+    const id = Number(rawId);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "webhook_id must be a positive integer", field: "webhook_id" });
+      return;
+    }
+    webhookId = id;
+  }
+  const rawLimit = Number(req.query.limit);
+  const limit = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, Math.floor(rawLimit))) : 50;
+  const { items, total } = deps.driver.listTriggerHistory({ webhook_id: webhookId, limit });
+  res.json({ items, total });
+}
+
+/**
  * Shared child-spawn for test fires: runs the cursor-trigger job once,
  * exactly like the scheduler does (same code, same environment).
  * A second concurrent request is rejected by the caller's 409 guard, not

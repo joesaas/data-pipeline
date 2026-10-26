@@ -30,6 +30,9 @@ export function apiDbPath(envFile: string | null): string {
  * locked, unreadable.
  */
 export interface DbWebhook {
+  /** Row id and name: recorded in trigger history (name as a snapshot). */
+  id: number;
+  name: string;
   url: string;
   token: string;
   payload: string | null;
@@ -54,13 +57,20 @@ function readWebhookRow(
     const hasCron = cols.some((c) => c.name === "cron");
     const row = db
       .prepare(
-        `SELECT url, token, payload${hasCron ? ", cron" : ""} FROM webhooks ${where}`,
+        `SELECT id, name, url, token, payload${hasCron ? ", cron" : ""} FROM webhooks ${where}`,
       )
       .get(...params) as
-      | { url: string; token: string; payload: string | null; cron?: string | null }
+      | { id: number; name: string; url: string; token: string; payload: string | null; cron?: string | null }
       | undefined;
     if (!row || !row.url || !row.token) return null;
-    return { url: row.url, token: row.token, payload: row.payload ?? null, cron: row.cron ?? null };
+    return {
+      id: row.id,
+      name: row.name,
+      url: row.url,
+      token: row.token,
+      payload: row.payload ?? null,
+      cron: row.cron ?? null,
+    };
   } catch {
     return null;
   } finally {

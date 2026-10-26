@@ -193,6 +193,45 @@ function contract(name: string, make: (dir: string) => StorageDriver) {
       assert.equal(driver.getWebhook(created.id), null);
     });
 
+    it("trigger history: append assigns ids, list newest first, filter by webhook, limit", () => {
+      const ok = driver.appendTriggerHistory({
+        webhook_id: 1,
+        webhook_name: "grok-bot",
+        kind: "scheduled",
+        triggered_at: "2026-10-25T01:00:00.000Z",
+        http_status: 200,
+        ok: true,
+        body_kind: "payload(single)",
+        error: null,
+        duration_ms: 120,
+      });
+      assert.ok(ok.id > 0);
+      const failed = driver.appendTriggerHistory({
+        webhook_id: 2,
+        webhook_name: "other-bot",
+        kind: "test",
+        triggered_at: "2026-10-25T02:00:00.000Z",
+        http_status: null,
+        ok: false,
+        body_kind: "ping",
+        error: "fetch failed",
+        duration_ms: 5000,
+      });
+      const all = driver.listTriggerHistory({ limit: 50 });
+      assert.equal(all.total, 2);
+      assert.equal(all.items.length, 2);
+      assert.equal(all.items[0].id, failed.id);
+      assert.equal(all.items[0].ok, false);
+      assert.equal(all.items[0].http_status, null);
+      assert.equal(all.items[1].id, ok.id);
+      const scoped = driver.listTriggerHistory({ webhook_id: 1, limit: 50 });
+      assert.equal(scoped.total, 1);
+      assert.equal(scoped.items[0].webhook_name, "grok-bot");
+      const limited = driver.listTriggerHistory({ limit: 1 });
+      assert.equal(limited.total, 2);
+      assert.equal(limited.items.length, 1);
+    });
+
     it("pull tasks: save assigns ids and upserts, list, delete removes", () => {
       const created = driver.savePullTask({
         id: 0,
