@@ -211,8 +211,8 @@
             <pre class="out">{{ selectedHistory.body }}</pre>
             <button class="btn small" @click="selectedHistory = null">关闭</button>
           </div>
-          <p v-else-if="triggerHistoryError" class="err">{{ triggerHistoryError }}</p>
-          <p v-else class="hint">还没有触发记录（下一次定时或测试触发后出现在这里）。</p>
+          <p v-if="triggerHistoryError" class="err">{{ triggerHistoryError }}</p>
+          <p v-if="!triggerHistory.length && !triggerHistoryError" class="hint">还没有触发记录（下一次定时或测试触发后出现在这里）。</p>
         </div>
         <div v-if="webhookView === 'detail' && selectedWebhook">
           <h4>{{ selectedWebhook.name }} <span v-if="selectedWebhook.is_active" class="badge">定时</span></h4>
