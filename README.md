@@ -104,6 +104,18 @@ location /data-ui/ {
 
 api 的 cleaned 只读接口保留给程序化消费方，静态站不依赖它。
 
+## 富详情页（news-detail，2026-10-27 新增）
+
+原 `news/item/<id>/` 导出逻辑**不变**。这条是另起的单页 HTML 流水线，给 Muse 定时任务用：
+
+1. 拉待生成列表：`GET /data-pipeline/api/v1/news-detail/pending?limit=`，一次最多 10 条，按清洗时间从旧到新，只含尚未生成详情页的条目；每条带 `original_url`（即原 `news/item/<id>/` 地址）与新闻原文各字段。
+2. Muse 定时任务按刚才的三标签 UI 模板（新闻原文 / 大白话 / AI解读）生成单页 HTML 文件。
+3. 推回 API：`POST /data-pipeline/api/v1/news-detail/pages`，body 为 `{item_id, html, detail_path?}`；`detail_path` 不填时默认 `<item_id>.html`，只接受普通 `.html` 文件名（禁 `../`、禁绝对路径），HTML 须以 `<!doctype html` 或 `<html` 开头；服务端先写盘（同目录临时文件 + rename，原子发布）再写库。
+4. 状态落库：`detail_pages` 表（API 自己的 `news-detail.sqlite`，不在 cleaner 库也不在 records 库），字段为 `item_id / detail_path / status=done / original_url / created_at / updated_at`；重推同一条会覆盖文件并把状态记为 `replaced`，文件相对地址即 `detail_path`。
+5. 查单条状态：`GET /data-pipeline/api/v1/news-detail/pages/:item_id`，未生成时 404。
+
+环境变量见 `.env.example`：`NEWS_DETAIL_DIR`（默认 `/home/ec2-user/app/docs/news`）、`NEWS_SITE_URL`（默认 `https://agent101.uk/news`）、`NEWS_DETAIL_DB_FILE`（默认 `DATA_DIR/news-detail.sqlite`）。以上接口走与 records 相同的 `X-API-Key` 鉴权与每分钟限流。
+
 ## Skill 变体（skills/）
 
 | 目录 | 运行时 | 说明 |

@@ -50,6 +50,9 @@ describe("cleaned endpoints", () => {
       maxPromptBytes: 65_536,
       rateLimitPerMin: 60,
       cleanedDbFile,
+      newsSiteUrl: "https://agent101.uk/news",
+      newsDetailDir: join(dir, "news-detail"),
+      newsDetailDbFile: join(dir, "news-detail.sqlite"),
     };
     const { app } = createApp(config);
     server = app.listen(0);
@@ -126,6 +129,9 @@ describe("cleaned endpoints without a cleaned database yet", () => {
       maxPromptBytes: 65_536,
       rateLimitPerMin: 60,
       cleanedDbFile: join(dir, "missing.sqlite"),
+      newsSiteUrl: "https://agent101.uk/news",
+      newsDetailDir: join(dir, "news-detail"),
+      newsDetailDbFile: join(dir, "news-detail.sqlite"),
     };
     const { app, driver } = createApp(config);
     const server = app.listen(0);
@@ -172,6 +178,9 @@ describe("cleaned endpoints: category merge + translation", () => {
     const config: AppConfig = {
       port: 0, basePath: "/data-pipeline", dataDir: dir, storage: "sqlite", authRequired: false,
       maxContentBytes: 1_048_576, maxPromptBytes: 65_536, rateLimitPerMin: 60, cleanedDbFile,
+      newsSiteUrl: "https://agent101.uk/news",
+      newsDetailDir: join(dir, "news-detail"),
+      newsDetailDbFile: join(dir, "news-detail.sqlite"),
     };
     const { app } = createApp(config);
     server = app.listen(0);

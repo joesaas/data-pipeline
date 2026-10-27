@@ -138,6 +138,10 @@ export class CleanedReader {
     q?: string;
     limit: number;
     offset: number;
+    /** Default "cleaned_desc" (existing behaviour). "cleaned_asc" is
+     *  used by the news-detail pending queue so the oldest
+     *  ungenerated items are picked up first. */
+    order?: "cleaned_desc" | "cleaned_asc";
   }): { items: CleanedItemView[]; total: number } {
     const db = this.open();
     if (!db) return { items: [], total: 0 };
@@ -159,10 +163,11 @@ export class CleanedReader {
       const totalRow = db
         .prepare(`SELECT COUNT(*) AS n FROM cleaned_items i ${whereSql}`)
         .get(...params) as { n: number };
+      const direction = filter.order === "cleaned_asc" ? "ASC" : "DESC";
       const rows = db
         .prepare(
           `${selectSql(db)} ${whereSql}
-           ORDER BY r.cleaned_at DESC, i.idx ASC
+           ORDER BY r.cleaned_at ${direction}, i.idx ASC
            LIMIT ? OFFSET ?`,
         )
         .all(...params, filter.limit, filter.offset) as ItemRow[];

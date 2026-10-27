@@ -19,6 +19,9 @@ function baseConfig(dir: string): AppConfig {
     maxPromptBytes: 65_536,
     rateLimitPerMin: 60,
     cleanedDbFile: join(dir, "no-cleaned.sqlite"),
+    newsSiteUrl: "https://agent101.uk/news",
+    newsDetailDir: join(dir, "news-detail"),
+    newsDetailDbFile: join(dir, "news-detail.sqlite"),
   };
 }
 

@@ -8,6 +8,8 @@ import type { AuthService } from "../auth/auth.js";
 import type { IngestService } from "../ingest/ingest-service.js";
 import type { StorageDriver } from "../storage/storage-driver.js";
 import { CleanedReader } from "../cleaned/cleaned-reader.js";
+import { NewsDetailStore } from "../news-detail/news-detail-store.js";
+import { NewsDetailService, NotFoundError } from "../news-detail/news-detail-service.js";
 import * as admin from "./admin.js";
 import * as site from "./site.js";
 
@@ -68,6 +70,9 @@ export function registerRoutes(
         cleaned_items: `GET ${base}/api/v1/cleaned/items?category=&q=&limit=&offset=`,
         cleaned_item: `GET ${base}/api/v1/cleaned/items/:id`,
         cleaned_stats: `GET ${base}/api/v1/cleaned/stats`,
+        news_detail_pending: `GET ${base}/api/v1/news-detail/pending?limit= (max 10, oldest first, no done detail page yet)`,
+        news_detail_push: `POST ${base}/api/v1/news-detail/pages {item_id, html, detail_path?}`,
+        news_detail_get: `GET ${base}/api/v1/news-detail/pages/:item_id`,
         admin_tokens: `GET ${base}/api/v1/admin/tokens`,
         admin_token_create: `POST ${base}/api/v1/admin/tokens`,
         admin_token_revoke: `POST ${base}/api/v1/admin/tokens/:id/revoke`,
@@ -190,6 +195,67 @@ export function registerRoutes(
     const identity = identityOf(req, res);
     if (identity === null) return;
     res.json(cleaned.stats());
+  });
+
+  // Rich detail pages (news-detail): a separate single-HTML-file
+  // pipeline on top of the cleaned items. The pre-existing
+  // news/item/<id>/ pages from the exporter are untouched — this
+  // only adds: (1) a pending queue, (2) a push that writes one HTML
+  // file into NEWS_DETAIL_DIR and records its relative path + status.
+  // The status store is its own SQLite file (see news-detail-store),
+  // never the cleaner's database and never the records database.
+  const newsDetail = new NewsDetailService(
+    cleaned,
+    new NewsDetailStore(config.newsDetailDbFile),
+    config,
+  );
+
+  router.get("/api/v1/news-detail/pending", (req, res) => {
+    const identity = identityOf(req, res);
+    if (identity === null) return;
+    const raw = Number(req.query.limit ?? 10);
+    const limit = Math.min(Math.max(Number.isFinite(raw) ? raw : 10, 1), 10);
+    res.json(newsDetail.listPending(limit));
+  });
+
+  router.get("/api/v1/news-detail/pages/:item_id", (req, res) => {
+    const identity = identityOf(req, res);
+    if (identity === null) return;
+    const page = newsDetail.getPage(req.params.item_id);
+    if (!page) {
+      res.status(404).json({ error: "detail page not found" });
+      return;
+    }
+    res.json(page);
+  });
+
+  router.post("/api/v1/news-detail/pages", (req, res) => {
+    const identity = identityOf(req, res);
+    if (identity === null) return;
+    if (rateLimited(config.authRequired ? identity : (req.ip ?? "unknown"))) {
+      res.status(429).json({ error: "rate limit exceeded" });
+      return;
+    }
+    try {
+      const result = newsDetail.savePage({
+        item_id: typeof req.body?.item_id === "string" ? req.body.item_id : "",
+        html: typeof req.body?.html === "string" ? req.body.html : "",
+        detail_path: typeof req.body?.detail_path === "string" ? req.body.detail_path : undefined,
+      });
+      res.status(result.status === "created" ? 201 : 200).json(result);
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      if (err instanceof ValidationError) {
+        res
+          .status(err.tooLarge ? 413 : 400)
+          .json({ error: err.message, ...(err.field ? { field: err.field } : {}) });
+        return;
+      }
+      throw err;
+    }
   });
 
   router.delete("/api/v1/records/:id", (req, res) => {
