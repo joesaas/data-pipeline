@@ -21,7 +21,7 @@ describe("validateCleanedItems", () => {
       items: [{ title: "Aave 发布 V3.8", summary: "升级重入防护", sources: [{ name: "Aave", url: "https://aave.com" }] }],
     });
     assert.equal(dropped, 0);
-    assert.equal(items[0].category, "未分类");
+    assert.equal(items[0].category, "Other");
     assert.equal(items[0].event_date, null);
   });
   it("drops items without a title and bad sources", () => {

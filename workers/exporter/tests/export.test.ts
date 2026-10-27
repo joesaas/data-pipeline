@@ -204,8 +204,40 @@ describe("exportSite: pagination", () => {
     assert.ok(index.includes('<nav class="pager" id="pager"'), "pager container exists below the grid");
     assert.ok(index.includes("var PAGE_SIZE = 10"), "default page size is 10");
     assert.ok(index.includes("function renderPager"), "pager is rendered from the filtered total");
+    assert.ok(index.includes('id="clearSearch"'), "search box ships a clear button");
+    const css = readFileSync(join(result.releaseDir, "styles.css"), "utf8");
+    assert.ok(css.includes(".head-search { display: block; order: 3"), "mobile breakpoint keeps search visible on a second row");
+    assert.ok(!css.includes(".head-search { display: none"), "search is never display:none on mobile");
     assert.ok(index.includes("Click-time rich-detail check"), "card clicks re-check the done list at click time");
     assert.ok(index.includes("window.location.href = rich"), "click-time check jumps to the rich page when one exists");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("exportSite: Other category", () => {
+  it("renders legacy 未分类 items and sidebar as Other, with no 未分类 bucket left", () => {
+    const dir = mkdtempSync(join(tmpdir(), "exporter-other-"));
+    const dbFile = join(dir, "cleaned.sqlite");
+    const db = new DatabaseSync(dbFile);
+    db.exec(`
+      CREATE TABLE cleaned_records (
+        source_record_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, cleaned_at TEXT NOT NULL,
+        provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, item_count INTEGER NOT NULL,
+        source_agent TEXT NOT NULL DEFAULT '');
+      CREATE TABLE cleaned_items (
+        id TEXT PRIMARY KEY, source_record_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL,
+        summary TEXT NOT NULL, detail TEXT, category TEXT NOT NULL, tags TEXT NOT NULL,
+        event_date TEXT, sources TEXT NOT NULL);
+    `);
+    db.prepare("INSERT INTO cleaned_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("rec-1", "h1", "2026-10-22T12:00:00.000Z", "openai-compatible", "openai/gpt-4o-mini", "clean-v2", 1, "muse");
+    db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("item-u", "rec-1", 0, "U title", "U summary", null, "未分类", "[]", "2026-10-21", "[]");
+    db.close();
+    const result = exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
+    const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
+    assert.ok(index.includes('data-category="Other"'), "legacy item is filed under Other");
+    assert.ok(!index.includes("未分类"), "no 未分类 label or bucket remains in the list page");
     rmSync(dir, { recursive: true, force: true });
   });
 });

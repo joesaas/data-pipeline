@@ -62,12 +62,19 @@ a { color: inherit; text-decoration: none; }
   background: var(--accent-strong); color: #fff; flex: none;
 }
 .logo > span:last-child { color: var(--accent); font-weight: 600; }
-.head-search { flex: 1; max-width: 480px; margin: 0 auto; }
+.head-search { flex: 1; max-width: 480px; margin: 0 auto; position: relative; }
 .head-search input {
   background: var(--panel); border: 1px solid var(--line-strong);
-  color: var(--text); border-radius: 10px; padding: 9px 12px; font-size: 14px;
+  color: var(--text); border-radius: 10px; padding: 9px 32px 9px 12px; font-size: 14px;
   width: 100%; outline: none; font-family: inherit;
 }
+.search-clear {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  width: 22px; height: 22px; padding: 0; border: none; border-radius: 999px;
+  background: var(--bg); color: var(--muted); font-size: 16px; line-height: 1;
+  cursor: pointer; font-family: inherit;
+}
+.search-clear:hover { color: var(--text); }
 .head-search input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.15);
@@ -234,7 +241,9 @@ aside nav { position: sticky; top: 76px; }
   aside nav > div { display: flex; gap: 6px; }
   .side-title { display: none; }
   .side-item { width: auto; white-space: nowrap; border: 1px solid var(--line); }
-  .head-search { display: none; }
+  /* Mobile: search moves to a full-width second row instead of disappearing. */
+  .topbar { flex-wrap: wrap; padding: 10px 16px; gap: 10px; }
+  .head-search { display: block; order: 3; flex: 1 1 100%; max-width: none; margin: 0; }
 }
 
 /* Wallet login + favorites (2026-10-25). */

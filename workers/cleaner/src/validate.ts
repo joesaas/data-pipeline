@@ -7,7 +7,7 @@ export { canonicalCategory };
  * Some sources are single-topic by construction: every item in a record
  * from them belongs to one canonical category, whatever the LLM says.
  * (A trending-repos brief's items never mention the category per item,
- * so the model leaves it empty and everything lands in 未分类.)
+ * so the model leaves it empty and everything lands in Other.)
  */
 export const SOURCE_CATEGORY: Record<string, string> = {
   "github-trending": "GitHub 热点项目",

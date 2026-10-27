@@ -52,7 +52,7 @@ export interface CleanedItem {
   summary: string;
   /** optional longer detail (mechanism / what changed) */
   detail?: string;
-  /** topic bucket, e.g. "Web3 DeFi" / "AI Agent"; "未分类" when unclear */
+  /** topic bucket, e.g. "Web3 DeFi" / "AI Agent"; "Other" when unclear */
   category: string;
   tags: string[];
   /** ISO date (yyyy-mm-dd) of the event itself, null when not stated */
@@ -134,11 +134,12 @@ const CATEGORY_ALIASES: Record<string, string> = {
   "安全资讯": "安全",
   "安全事件": "安全",
   "智能合约安全": "安全",
+  "未分类": "Other",
 };
 
 export function canonicalCategory(raw: string): string {
   const c = raw.trim();
-  if (!c) return "未分类";
+  if (!c) return "Other";
   return CATEGORY_ALIASES[c.toLowerCase()] ?? c;
 }
 

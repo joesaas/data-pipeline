@@ -30,6 +30,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   "区块链技术": "#f59e0b",
   "GitHub 热点项目": "#8250df",
   "安全": "#dc2626",
+  "Other": "#22c55e",
 };
 const FALLBACK_PALETTE = ["#8b5cf6", "#06b6d4", "#f97316", "#22c55e", "#ec4899", "#6366f1"];
 
@@ -118,7 +119,7 @@ ${seo.jsonLd ?? ""}
 <body>
 <header class="topbar">
   <a class="logo" href="${base}"><span class="mark">${BOOK_ICON}</span>Agent 101<span>&nbsp;资讯</span></a>
-  ${showSearch ? `<div class="head-search"><input id="q" placeholder="搜索标题、摘要或标签…" /></div>` : ""}
+  ${showSearch ? `<div class="head-search"><input id="q" placeholder="搜索标题、摘要或标签…" /><button type="button" class="search-clear" id="clearSearch" aria-label="清除搜索" title="清除搜索" hidden>×</button></div>` : ""}
   <div class="spacer"></div>
   <a class="head-link" href="${CONTACT_URL}" target="_blank" rel="noreferrer">联系我们</a>
   <span class="head-auth" id="headAuth">
@@ -333,7 +334,17 @@ const PAGE_JS = `
     });
   }
   var input = document.getElementById("q");
-  if (input) input.addEventListener("input", function () { state.q = input.value.trim().toLowerCase(); state.page = 1; render(); });
+  var clearBtn = document.getElementById("clearSearch");
+  function syncClearBtn() { if (clearBtn) clearBtn.hidden = !input || !input.value; }
+  if (input) {
+    input.addEventListener("input", function () { state.q = input.value.trim().toLowerCase(); state.page = 1; syncClearBtn(); render(); });
+    syncClearBtn();
+  }
+  if (clearBtn && input) {
+    clearBtn.addEventListener("click", function () {
+      input.value = ""; state.q = ""; state.page = 1; syncClearBtn(); render(); input.focus();
+    });
+  }
   if (grid) {
     grid.addEventListener("click", function (e) {
       var src = e.target.closest("[data-src]");

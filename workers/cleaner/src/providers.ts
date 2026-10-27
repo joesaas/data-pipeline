@@ -119,7 +119,7 @@ export class MockProvider implements LlmProvider {
   async clean(record: RawRecord): Promise<CleanedItem[]> {
     const lines = record.content.split("\n");
     const items: CleanedItem[] = [];
-    let category = "未分类";
+    let category = "Other";
     let current: { title: string; body: string[]; category: string } | null = null;
     const flush = () => {
       if (!current) return;
