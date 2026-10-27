@@ -193,3 +193,85 @@ describe("news-detail endpoints without a cleaned database yet", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// Regression test for the 2026-10-27 pending bug: listPending used to
+// stop scanning after 500 items, so once the oldest 500 items were all
+// done, pending reported empty forever even though newer items were
+// still waiting. 505 items with the oldest 500 marked done must still
+// surface the remaining 5.
+describe("news-detail pending beyond 500 done items", () => {
+  let dir: string;
+  let server: Server;
+  let base: string;
+
+  before(async () => {
+    dir = mkdtempSync(join(tmpdir(), "news-detail-pending-500-"));
+    const cleanedDbFile = join(dir, "cleaned.sqlite");
+    const db = new DatabaseSync(cleanedDbFile);
+    db.exec(`
+    CREATE TABLE cleaned_records (
+      source_record_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, cleaned_at TEXT NOT NULL,
+      provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, item_count INTEGER NOT NULL,
+      source_agent TEXT NOT NULL DEFAULT '');
+    CREATE TABLE cleaned_items (
+      id TEXT PRIMARY KEY, source_record_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL,
+      summary TEXT NOT NULL, detail TEXT, category TEXT NOT NULL, tags TEXT NOT NULL,
+      event_date TEXT, sources TEXT NOT NULL);
+  `);
+    const rec = db.prepare("INSERT INTO cleaned_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    const ins = db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    const baseMs = Date.parse("2026-10-22T00:00:00.000Z");
+    for (let i = 0; i < 505; i++) {
+      const at = new Date(baseMs + i * 60000).toISOString();
+      rec.run(`rec-${i}`, `hash-${i}`, at, "openai-compatible", "openai/gpt-4o-mini", "clean-v2", 1, "muse");
+      ins.run(`item-${i}`, `rec-${i}`, 0, `新闻 ${i}`, `摘要 ${i}`, null, "AI Agent",
+        JSON.stringify([]), null, JSON.stringify([]));
+    }
+    db.close();
+    const detailDb = new DatabaseSync(join(dir, "news-detail.sqlite"));
+    detailDb.exec(`
+    CREATE TABLE IF NOT EXISTS detail_pages (
+      item_id TEXT PRIMARY KEY, detail_path TEXT NOT NULL, status TEXT NOT NULL,
+      original_url TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+  `);
+    const mark = detailDb.prepare("INSERT INTO detail_pages VALUES (?, ?, ?, ?, ?, ?)");
+    for (let i = 0; i < 500; i++) {
+      mark.run(`item-${i}`, `item-${i}.html`, "done",
+        `https://agent101.uk/news/item/item-${i}/`,
+        "2026-10-27T00:00:00.000Z", "2026-10-27T00:00:00.000Z");
+    }
+    detailDb.close();
+    const config: AppConfig = {
+      port: 0,
+      basePath: "/data-pipeline",
+      dataDir: dir,
+      storage: "sqlite",
+      authRequired: false,
+      maxContentBytes: 1_048_576,
+      maxPromptBytes: 65_536,
+      rateLimitPerMin: 60,
+      cleanedDbFile,
+      newsSiteUrl: "https://agent101.uk/news",
+      newsDetailDir: join(dir, "news-detail"),
+      newsDetailDbFile: join(dir, "news-detail.sqlite"),
+    };
+    const { app } = createApp(config);
+    server = app.listen(0);
+    await new Promise<void>((r) => server.once("listening", r));
+    const addr = server.address();
+    base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}/data-pipeline`;
+  });
+
+  after(() => {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns the pending items past the first 500, oldest first", async () => {
+    const res = (await (await fetch(`${base}/api/v1/news-detail/pending`)).json()) as {
+      items: { id: string }[];
+    };
+    assert.deepEqual(res.items.map((i) => i.id),
+      ["item-500", "item-501", "item-502", "item-503", "item-504"]);
+  });
+});

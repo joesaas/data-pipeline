@@ -67,8 +67,14 @@ export class NewsDetailService {
     return `${this.config.newsSiteUrl}/item/${encodeURIComponent(itemId)}/`;
   }
 
-  private toPending(item: CleanedItemView, existing?: ReturnType<NewsDetailStore["get"]>): PendingNewsDetailItem {
-    const row = existing ?? this.store.get(item.id);
+  /**
+   * listPending only ever returns items with no "done" row, and the
+   * current push flow never writes "pending" rows, so every returned
+   * item is pending with no detail file yet by construction. This
+   * keeps the scan free of per-item store lookups: the caller loads
+   * the done set once and filters in memory.
+   */
+  private toPending(item: CleanedItemView): PendingNewsDetailItem {
     return {
       id: item.id,
       title: item.title,
@@ -82,38 +88,40 @@ export class NewsDetailService {
       sources: item.sources,
       cleaned_at: item.cleaned_at,
       original_url: this.originalUrl(item.id),
-      detail_status: row?.status ?? "pending",
-      detail_path: row?.detail_path ?? null,
+      detail_status: "pending",
+      detail_path: null,
     };
   }
 
   /**
    * Items with no "done" detail page yet, oldest cleaned first, at
    * most `limit` (clamped to 1..10 by the caller and again here).
-   * Scans cleaned items in pages of 50 and skips done ones; the scan
-   * is bounded (at most 500 items per call) so a mostly-done backlog
-   * cannot turn one pull into a full table walk on every cron tick.
-   * When the store already reports at least as many done rows as there
-   * are cleaned items, the scan is skipped entirely.
+   * The done id set is loaded once per call and the cleaned list is
+   * scanned in pages of 50 until the limit is filled or the table is
+   * exhausted. There is deliberately no scan cap: an earlier version
+   * stopped after 500 scanned items, which made pending report empty
+   * forever once the oldest 500 items were all done, because newer
+   * pending items sit past that horizon and were never reached.
+   * There is also no countDone() >= total shortcut: the cleaner
+   * deletes items when it re-cleans a record, so done rows can
+   * outlive cleaned rows and that check could falsely report empty.
    */
   listPending(limitInput: number): { items: PendingNewsDetailItem[]; limit: number } {
     const limit = Math.min(Math.max(Math.floor(limitInput) || 10, 1), 10);
     const { total } = this.cleaned.listItems({ limit: 1, offset: 0 });
     if (total === 0) return { items: [], limit };
-    if (this.store.countDone() >= total) return { items: [], limit };
+    const doneIds = new Set(this.store.listDone().map((row) => row.item_id));
     const items: PendingNewsDetailItem[] = [];
     const pageSize = 50;
-    const maxScanned = 500;
-    for (let offset = 0; offset < total && offset < maxScanned && items.length < limit; offset += pageSize) {
+    for (let offset = 0; offset < total && items.length < limit; offset += pageSize) {
       const page = this.cleaned.listItems({
         limit: pageSize,
         offset,
         order: "cleaned_asc",
       });
       for (const item of page.items) {
-        const existing = this.store.get(item.id);
-        if (existing?.status === "done") continue;
-        items.push(this.toPending(item, existing));
+        if (doneIds.has(item.id)) continue;
+        items.push(this.toPending(item));
         if (items.length >= limit) break;
       }
       if (page.items.length < pageSize) break;
