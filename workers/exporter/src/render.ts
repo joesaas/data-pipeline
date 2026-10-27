@@ -148,7 +148,8 @@ const FOOTER = `<footer class="site-footer">联系方式：${CONTACT_LINK}</foot
 const PAGE_JS = `
 <script>
 (function () {
-  var state = { category: "", scope: "", q: "", gran: "day" };
+  var state = { category: "", scope: "", q: "", gran: "day", page: 1 };
+  var PAGE_SIZE = 10;
   var cards = Array.prototype.slice.call(document.querySelectorAll(".news-card"));
   var grid = document.getElementById("grid");
   var count = document.getElementById("count");
@@ -225,18 +226,57 @@ const PAGE_JS = `
     if (state.gran === "week") return Number(p[1]) + "月" + Number(p[2]) + "日当周";
     return p[0] + "年" + Number(p[1]) + "月" + Number(p[2]) + "日";
   }
+  function renderPager(total, totalPages) {
+    var pager = document.getElementById("pager");
+    if (!pager) return;
+    if (totalPages <= 1) { pager.innerHTML = ""; pager.style.display = "none"; return; }
+    pager.style.display = "";
+    var html = '<button type="button" class="pager-btn" data-page="' + (state.page - 1) + '"' + (state.page <= 1 ? " disabled" : "") + ">上一页</button>";
+    var start = Math.max(1, Math.min(state.page - 2, totalPages - 4));
+    var end = Math.min(totalPages, start + 4);
+    if (start > 1) {
+      html += '<button type="button" class="pager-btn" data-page="1">1</button>';
+      if (start > 2) html += '<span class="pager-ellipsis">…</span>';
+    }
+    for (var p = start; p <= end; p++) {
+      html += '<button type="button" class="pager-btn' + (p === state.page ? " on" : "") + '" data-page="' + p + '">' + p + "</button>";
+    }
+    if (end < totalPages) {
+      if (end < totalPages - 1) html += '<span class="pager-ellipsis">…</span>';
+      html += '<button type="button" class="pager-btn" data-page="' + totalPages + '">' + totalPages + "</button>";
+    }
+    html += '<button type="button" class="pager-btn" data-page="' + (state.page + 1) + '"' + (state.page >= totalPages ? " disabled" : "") + ">下一页</button>";
+    html += '<span class="pager-info">第 ' + state.page + " / " + totalPages + " 页 · 共 " + total + " 条</span>";
+    pager.innerHTML = html;
+  }
   function render() {
     var shown = 0;
     grid.querySelectorAll(".group-head").forEach(function (h) { h.remove(); });
     var lastKey = null;
+    var totalPages = 1;
     cards.forEach(function (el) {
       var ok =
         (!state.category || el.dataset.category === state.category) &&
         inScope(el.dataset.published) &&
         (!state.q || el.dataset.search.indexOf(state.q) !== -1);
-      el.style.display = ok ? "" : "none";
-      if (!ok) return;
+      if (!ok) { el.style.display = "none"; return; }
       shown++;
+    });
+    totalPages = Math.max(1, Math.ceil(shown / PAGE_SIZE));
+    if (state.page > totalPages) state.page = totalPages;
+    if (state.page < 1) state.page = 1;
+    var first = (state.page - 1) * PAGE_SIZE;
+    var idx = -1;
+    cards.forEach(function (el) {
+      var ok =
+        (!state.category || el.dataset.category === state.category) &&
+        inScope(el.dataset.published) &&
+        (!state.q || el.dataset.search.indexOf(state.q) !== -1);
+      if (!ok) return;
+      idx++;
+      var visible = idx >= first && idx < first + PAGE_SIZE;
+      el.style.display = visible ? "" : "none";
+      if (!visible) return;
       var key = groupKey(el.dataset.published);
       if (key !== lastKey) {
         lastKey = key;
@@ -249,6 +289,17 @@ const PAGE_JS = `
     if (count) count.textContent = shown + " 条";
     var empty = document.getElementById("emptyFilter");
     if (empty) empty.style.display = shown === 0 && cards.length > 0 ? "" : "none";
+    renderPager(shown, totalPages);
+  }
+  var pager = document.getElementById("pager");
+  if (pager) {
+    pager.addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-page]");
+      if (!btn || btn.disabled) return;
+      state.page = Number(btn.dataset.page);
+      render();
+      if (grid) window.scrollTo({ top: grid.getBoundingClientRect().top + window.scrollY - 80, behavior: "smooth" });
+    });
   }
   function wireGroup(name, key, after) {
     var box = document.querySelector('[data-group="' + name + '"]');
@@ -259,6 +310,7 @@ const PAGE_JS = `
       state[key] = btn.dataset.value;
       box.querySelectorAll(".side-item").forEach(function (c) { c.classList.toggle("on", c === btn); });
       if (after) after(btn);
+      state.page = 1;
       render();
     });
   }
@@ -276,11 +328,12 @@ const PAGE_JS = `
       if (!btn) return;
       state.gran = btn.dataset.gran;
       seg.querySelectorAll(".seg-btn").forEach(function (c) { c.classList.toggle("on", c === btn); });
+      state.page = 1;
       render();
     });
   }
   var input = document.getElementById("q");
-  if (input) input.addEventListener("input", function () { state.q = input.value.trim().toLowerCase(); render(); });
+  if (input) input.addEventListener("input", function () { state.q = input.value.trim().toLowerCase(); state.page = 1; render(); });
   if (grid) {
     grid.addEventListener("click", function (e) {
       var src = e.target.closest("[data-src]");
@@ -311,6 +364,7 @@ const PAGE_JS = `
             c.classList.toggle("on", c.dataset.value === state.category);
           });
           refreshWeights();
+          state.page = 1;
           render();
           fetchDetailLinks();
         })
@@ -688,6 +742,7 @@ ${sidebar}
     data.items.length === 0
       ? `<div class="card empty"><p>这里还没有资讯</p><p class="muted">新的简报清洗完成后会自动出现在这里</p></div>`
       : `<div class="grid" id="grid">\n${cards}\n</div>
+  <nav class="pager" id="pager" aria-label="分页"></nav>
   <div class="card empty" id="emptyFilter" style="display:none"><p>这个筛选下没有资讯</p><p class="muted">换个分类、时间范围或清除搜索试试</p></div>`
   }
 </section>

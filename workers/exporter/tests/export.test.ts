@@ -179,6 +179,35 @@ describe("exportSite: dynamic detail links", () => {
   });
 });
 
+describe("exportSite: pagination", () => {
+  it("list page ships a pager container and paginates at 10 per page", () => {
+    const dir = mkdtempSync(join(tmpdir(), "exporter-pager-"));
+    const dbFile = join(dir, "cleaned.sqlite");
+    const db = new DatabaseSync(dbFile);
+    db.exec(`
+      CREATE TABLE cleaned_records (
+        source_record_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, cleaned_at TEXT NOT NULL,
+        provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, item_count INTEGER NOT NULL,
+        source_agent TEXT NOT NULL DEFAULT '');
+      CREATE TABLE cleaned_items (
+        id TEXT PRIMARY KEY, source_record_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL,
+        summary TEXT NOT NULL, detail TEXT, category TEXT NOT NULL, tags TEXT NOT NULL,
+        event_date TEXT, sources TEXT NOT NULL);
+    `);
+    db.prepare("INSERT INTO cleaned_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("rec-1", "h1", "2026-10-22T12:00:00.000Z", "openai-compatible", "openai/gpt-4o-mini", "clean-v2", 1, "muse");
+    db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("item-x", "rec-1", 0, "X title", "X summary", null, "Web3 DeFi", "[]", "2026-10-21", "[]");
+    db.close();
+    const result = exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
+    const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
+    assert.ok(index.includes('<nav class="pager" id="pager"'), "pager container exists below the grid");
+    assert.ok(index.includes("var PAGE_SIZE = 10"), "default page size is 10");
+    assert.ok(index.includes("function renderPager"), "pager is rendered from the filtered total");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("exportSite: rich detail links (new-old compatible)", () => {
   it("links items with a detail file to /docs/news/<id>.html and keeps the rest on item/<id>/, without copying into the release", () => {
     const dir = mkdtempSync(join(tmpdir(), "exporter-detail-"));

@@ -184,6 +184,19 @@ aside nav { position: sticky; top: 76px; }
 }
 .group-head:first-child { margin-top: 0; }
 
+.pager {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: 6px; margin: 18px 0 8px;
+}
+.pager-btn {
+  border: 1px solid var(--line-strong); background: var(--panel); color: var(--text-2);
+  font-size: 13px; padding: 6px 12px; border-radius: 10px; cursor: pointer; font-family: inherit;
+}
+.pager-btn.on { background: var(--accent-soft); color: var(--accent-strong); border-color: var(--accent-line); font-weight: 600; }
+.pager-btn:disabled { opacity: 0.45; cursor: default; }
+.pager-ellipsis { color: var(--muted); font-size: 13px; padding: 0 2px; }
+.pager-info { color: var(--muted); font-size: 13px; margin-left: 6px; }
+
 .card {
   border: 1px solid var(--line); border-radius: 16px; background: var(--panel);
   padding: 20px; margin-bottom: 14px; box-shadow: var(--shadow);
