@@ -86,6 +86,21 @@ export class NewsDetailStore {
     }
   }
 
+  /** All done rows (item_id + detail_path only): the public list
+   *  the news-site list page uses to rewrite card links at load time,
+   *  without needing an API key or a re-export. */
+  listDone(): { item_id: string; detail_path: string }[] {
+    if (!existsSync(this.dbFile) && this.dbFile !== ":memory:") return [];
+    const db = this.open();
+    try {
+      return db
+        .prepare("SELECT item_id, detail_path FROM detail_pages WHERE status = 'done' ORDER BY updated_at ASC")
+        .all() as { item_id: string; detail_path: string }[];
+    } finally {
+      db.close();
+    }
+  }
+
   countDone(): number {
     if (!existsSync(this.dbFile) && this.dbFile !== ":memory:") return 0;
     const db = this.open();

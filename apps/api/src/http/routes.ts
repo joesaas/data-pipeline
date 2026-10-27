@@ -73,6 +73,7 @@ export function registerRoutes(
         news_detail_pending: `GET ${base}/api/v1/news-detail/pending?limit= (max 10, oldest first, no done detail page yet)`,
         news_detail_push: `POST ${base}/api/v1/news-detail/pages {item_id, html, detail_path?}`,
         news_detail_get: `GET ${base}/api/v1/news-detail/pages/:item_id`,
+        news_detail_done_public: `GET ${base}/api/v1/news-detail/done (public, no key: item_ids with a done detail page, for list-page link rewriting)`,
         admin_tokens: `GET ${base}/api/v1/admin/tokens`,
         admin_token_create: `POST ${base}/api/v1/admin/tokens`,
         admin_token_revoke: `POST ${base}/api/v1/admin/tokens/:id/revoke`,
@@ -216,6 +217,18 @@ export function registerRoutes(
     const raw = Number(req.query.limit ?? 10);
     const limit = Math.min(Math.max(Number.isFinite(raw) ? raw : 10, 1), 10);
     res.json(newsDetail.listPending(limit));
+  });
+
+  // Public done list for the news-site list page: deliberately
+  // unauthenticated, like the public pull-tasks pending endpoint —
+  // the list page holds no API key, and item ids + file names are
+  // already public (they appear in the list page and items.json).
+  // It returns ids only, never HTML content, so a browser can rewrite
+  // card links at load time the moment a detail page exists, with no
+  // re-export and no deploy in between.
+  router.get("/api/v1/news-detail/done", (_req, res) => {
+    const items = newsDetail.listDone();
+    res.json({ item_ids: items.map((i) => i.item_id), items, count: items.length });
   });
 
   router.get("/api/v1/news-detail/pages/:item_id", (req, res) => {

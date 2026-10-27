@@ -115,7 +115,7 @@ api 的 cleaned 只读接口保留给程序化消费方，静态站不依赖它�
 5. 查单条状态：`GET /data-pipeline/api/v1/news-detail/pages/:item_id`，未生成时 404。
 
 环境变量见 `.env.example`：`NEWS_DETAIL_DIR`（默认 `/home/ec2-user/app/docs/news`）、`NEWS_SITE_URL`（默认 `https://agent101.uk/news`）、`NEWS_DETAIL_DB_FILE`（默认 `DATA_DIR/news-detail.sqlite`）。以上接口走与 records 相同的 `X-API-Key` 鉴权与每分钟限流。
-6. 列表跳转（新老兼容）：静态站导出时，exporter 读 `NEWS_DETAIL_DIR`——某条的 `<id>.html` 已存在时，列表卡片直接跳 `/docs/news/<id>.html`（该目录本身已由 nginx 直供，2026-10-27 实测 200，不用把文件拷进发布包），不存在时仍跳原 `item/<id>/`；sitemap 同规则。注意列表是静态页，详情文件本身落地即刻可打开，但列表卡片要等下一次导出（清洗触发或手动导出）才变新。
+6. 列表跳转（新老兼容，动态优先）：静态站导出时，exporter 读 `NEWS_DETAIL_DIR`——某条的 `<id>.html` 已存在时，列表卡片直接跳 `/docs/news/<id>.html`（该目录本身已由 nginx 直供，2026-10-27 实测 200，不用把文件拷进发布包），不存在时仍跳原 `item/<id>/`；sitemap 同规则。导出后新生成的详情页不用等下一次导出：列表页加载时向公开接口 `GET /data-pipeline/api/v1/news-detail/done`（不鉴权，只返回已生成详情页的条目 id，不含 HTML 内容；id 本身已公开）拉一份 done 清单，用 `cache: "no-store"`，把命中卡片的 href 当场改写为 `/docs/news/<id>.html`；点“刷新”后会重新拉清单再改写。接口失败时保持导出时的 href 不变，绝不因为动态层失败而断链。也就是说：详情页一推送，下一位打开列表的人点它就是富详情页，不需要重新导出，更不需要重新部署。
 
 ## Skill 变体（skills/）
 

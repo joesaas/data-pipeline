@@ -149,6 +149,14 @@ describe("news-detail endpoints", () => {
     assert.equal(existsSync(join(dir, "evil.html")), false);
   });
 
+  it("lists done ids publicly for list-page link rewriting", async () => {
+    const res = await fetch(`${base}/api/v1/news-detail/done`);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { item_ids: string[]; count: number };
+    assert.deepEqual(body.item_ids, ["item-old"], "only the pushed item is done");
+    assert.equal(body.count, 1);
+  });
+
   it("404s on a detail page that was never pushed", async () => {
     const res = await fetch(`${base}/api/v1/news-detail/pages/item-new`);
     assert.equal(res.status, 404);

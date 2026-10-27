@@ -125,6 +125,10 @@ export class NewsDetailService {
     return this.store.get(itemId);
   }
 
+  listDone(): { item_id: string; detail_path: string }[] {
+    return this.store.listDone();
+  }
+
   /**
    * Save a generated single-page HTML detail file and record it.
    * File first, then database: a failed write never marks an item

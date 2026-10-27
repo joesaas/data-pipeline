@@ -170,6 +170,30 @@ const PAGE_JS = `
       badge.className = "wt wt-" + tierOf(w);
     });
   }
+  // Dynamic rich-detail links: the list itself is static, so the
+  // exported href is always the old item/<id>/ page. At load time
+  // this fetches the public done list (ids only, no key) and rewrites
+  // any card that already has a rich detail page to /docs/news/<id>.html.
+  // A detail page pushed after the last export therefore works on the
+  // next page load, with no re-export and no deploy in between. On any
+  // fetch failure the exported hrefs are left untouched.
+  var detailIds = null;
+  function applyDetailLinks() {
+    if (!detailIds) return;
+    cards.forEach(function (el) {
+      if (detailIds.has(el.dataset.itemId)) {
+        el.href = "/docs/news/" + encodeURIComponent(el.dataset.itemId) + ".html";
+      }
+    });
+  }
+  function fetchDetailLinks() {
+    fetch("/data-pipeline/api/v1/news-detail/done", { cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
+      .then(function (d) {
+        if (d && Array.isArray(d.item_ids)) { detailIds = new Set(d.item_ids); applyDetailLinks(); }
+      })
+      .catch(function () { /* keep the exported hrefs */ });
+  }
   function pad(n) { return (n < 10 ? "0" : "") + n; }
   function ymd(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
   function mondayOf(d) {
@@ -288,6 +312,7 @@ const PAGE_JS = `
           });
           refreshWeights();
           render();
+          fetchDetailLinks();
         })
         .catch(function () { /* keep the current list when the refresh fails */ })
         .then(function () { refreshBtn.classList.remove("spinning"); });
@@ -295,6 +320,7 @@ const PAGE_JS = `
   }
   refreshWeights();
   render();
+  fetchDetailLinks();
 })();
 </script>`;
 
