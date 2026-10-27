@@ -53,8 +53,11 @@ function maybeExport(stats: BatchStats): void {
       outDir,
       publicApiPath: process.env.PUBLIC_API_PATH,
       publicSiteUrl: process.env.PUBLIC_SITE_URL,
+      // Same detailDir as the manual exporter: without it, a cleaner-
+      // triggered export would silently revert list links to old pages.
+      detailDir: process.env.NEWS_DETAIL_DIR?.trim() || undefined,
     });
-    console.log(`[cleaner] exported static site: ${result.items} items -> ${result.currentLink}`);
+    console.log(`[cleaner] exported static site: ${result.items} items (${result.detailPages} rich detail) -> ${result.currentLink}`);
   } catch (err) {
     console.error(`[cleaner] export failed (ignored): ${err instanceof Error ? err.message : String(err)}`);
   }

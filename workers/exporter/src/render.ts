@@ -576,11 +576,20 @@ export const INDEX_TITLE = "Agent 101 资讯 | AI Agent、Web3、DeFi 协议与�
 export const INDEX_DESCRIPTION =
   "Agent101（Agent 101）资讯站：每日更新 AI Agent、Web3、DeFi 协议（DeFi protocol）与网络安全资讯，覆盖最新协议动态、Agent 工具与安全事件。";
 
+/** List-page link rule, new-old compatible: an item with a rich detail
+ *  page (its HTML file landed in NEWS_DETAIL_DIR, served directly at
+ *  /docs/news/<id>.html) links to that page; every other item keeps
+ *  its original `item/<id>/` link. Callers pass the set of item ids
+ *  that have a detail file; an empty set means "no rich pages yet",
+ *  so the list is byte-identical to before. No copy into the release
+ *  is needed: the detail file is already publicly reachable at its
+ *  /docs/news/ address. */
 export function renderIndex(
   data: ExportData,
   generatedAt: string,
   cssVersion = "",
   siteUrl: string = DEFAULT_SITE_URL,
+  detailIds: ReadonlySet<string> = new Set(),
 ): string {
   const sidebar = `<aside>
   <nav>
@@ -606,7 +615,10 @@ export function renderIndex(
       const shownTitle = item.title_zh || item.title;
       const origTitle =
         item.title_zh && item.title_zh !== item.title ? `<div class="card-orig">${esc(item.title)}</div>` : "";
-      return `<a class="news-card" href="item/${encodeURIComponent(item.id)}/" data-item-id="${esc(item.id)}" data-category="${esc(item.category)}" data-published="${esc(item.cleaned_at)}" data-search="${esc(search)}">
+      const href = detailIds.has(item.id)
+        ? `/docs/news/${encodeURIComponent(item.id)}.html`
+        : `item/${encodeURIComponent(item.id)}/`;
+      return `<a class="news-card" href="${href}" data-item-id="${esc(item.id)}" data-category="${esc(item.category)}" data-published="${esc(item.cleaned_at)}" data-search="${esc(search)}">
   <div class="card-top">
     <span class="pill" style="background:${categoryColor(item.category)}">${esc(item.category)}</span>
     ${item.sources[0] ? (item.sources[0].url ? `<span class="pill-gray pill-src" data-src="${esc(item.sources[0].url)}" title="打开来源">${esc(item.sources[0].name)}</span>` : `<span class="pill-gray">${esc(item.sources[0].name)}</span>`) : ""}

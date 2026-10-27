@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readExportData } from "./reader.js";
@@ -7,6 +7,8 @@ import { DEFAULT_SITE_URL, esc, renderIndex, renderItem } from "./render.js";
 
 export interface ExportResult {
   items: number;
+  /** How many list cards link to a rich detail page (the rest link old-style). */
+  detailPages: number;
   releaseDir: string;
   currentLink: string;
 }
@@ -35,6 +37,15 @@ export function exportSite(options: {
   publicApiPath?: string;
   /** Public base URL of the news site, e.g. https://agent101.uk/news (no trailing slash). */
   publicSiteUrl?: string;
+  /** Directory the news-detail push API writes rich detail HTML into
+   *  (NEWS_DETAIL_DIR, e.g. /home/ec2-user/app/docs/news). When set,
+   *  an item whose `<id>.html` exists there gets its list card linked
+   *  to the rich page at /docs/news/<id>.html; items without a file
+   *  keep the old `item/<id>/` link. When unset, the export is exactly
+   *  as before. No copy is made: /docs/news/ is already served
+   *  directly, so the detail file is reachable without entering the
+   *  release. */
+  detailDir?: string;
   now?: Date;
 }): ExportResult {
   const { dbFile, outDir } = options;
@@ -42,6 +53,19 @@ export function exportSite(options: {
   const siteUrl = (options.publicSiteUrl ?? DEFAULT_SITE_URL).replace(/\/$/, "");
   const now = options.now ?? new Date();
   const data = readExportData(dbFile);
+
+  // Rich detail pages present at export time. File existence is the
+  // check, not the detail_pages DB: the exporter and the API share
+  // the machine but not a database. A detail file pushed after this
+  // export starts linking only on the next export (the file itself
+  // is reachable at /docs/news/ immediately; only the list card
+  // waits for the next export).
+  const detailIds = new Set<string>();
+  if (options.detailDir) {
+    for (const item of data.items) {
+      if (existsSync(join(options.detailDir, `${item.id}.html`))) detailIds.add(item.id);
+    }
+  }
 
   const stamp = now.toISOString().replace(/[^0-9]/g, "").slice(0, 14);
   const releaseName = `${stamp}-${process.pid}`;
@@ -53,7 +77,7 @@ export function exportSite(options: {
   // serve a stale styles.css for hours (Cloudflare defaults CSS to 4h),
   // which once shipped new markup with old styles. A new hash = a new URL.
   const cssVersion = createHash("md5").update(readFileSync(stylesPath())).digest("hex").slice(0, 8);
-  writeFileSync(join(releaseDir, "index.html"), renderIndex(data, now.toISOString(), cssVersion, siteUrl), "utf8");
+  writeFileSync(join(releaseDir, "index.html"), renderIndex(data, now.toISOString(), cssVersion, siteUrl, detailIds), "utf8");
   writeFileSync(join(releaseDir, "items.json"), JSON.stringify({ generated_at: now.toISOString(), ...data }, null, 2), "utf8");
   copyFileSync(stylesPath(), join(releaseDir, "styles.css"));
   // Browser icon: the head() link points at the site root, so the
@@ -70,6 +94,11 @@ export function exportSite(options: {
   // domain-root robots.txt (outside this repo) should point at it, and
   // it should be submitted in Search Console — a sitemap file under
   // /news/ alone does not make crawlers discover the site.
+  // Rich detail pages live under /docs/news/, a sibling of the /news/
+  // site on the same host (verified 2026-10-27: /docs/news/<id>.html
+  // returns 200). Derive its base from the site URL by swapping the
+  // trailing /news for /docs/news.
+  const docsSiteUrl = siteUrl.endsWith("/news") ? `${siteUrl.slice(0, -5)}/docs/news` : `${siteUrl}/docs/news`;
   const today = now.toISOString().slice(0, 10);
   const urlEntry = (loc: string, lastmod: string, changefreq: string, priority: string): string =>
     `  <url><loc>${esc(loc)}</loc><lastmod>${lastmod}</lastmod><changefreq>${changefreq}</changefreq><priority>${priority}</priority></url>`;
@@ -79,7 +108,9 @@ export function exportSite(options: {
     urlEntry(`${siteUrl}/`, today, "daily", "1.0"),
     ...data.items.map((item) =>
       urlEntry(
-        `${siteUrl}/item/${encodeURIComponent(item.id)}/`,
+        detailIds.has(item.id)
+          ? `${docsSiteUrl}/${encodeURIComponent(item.id)}.html`
+          : `${siteUrl}/item/${encodeURIComponent(item.id)}/`,
         item.cleaned_at.slice(0, 10),
         "weekly",
         "0.8",
@@ -103,5 +134,5 @@ export function exportSite(options: {
     rmSync(join(releasesDir, old), { recursive: true, force: true });
   }
 
-  return { items: data.items.length, releaseDir, currentLink };
+  return { items: data.items.length, detailPages: detailIds.size, releaseDir, currentLink };
 }

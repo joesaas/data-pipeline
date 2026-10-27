@@ -18,5 +18,6 @@ const result = exportSite({
   outDir,
   publicApiPath: process.env.PUBLIC_API_PATH,
   publicSiteUrl: process.env.PUBLIC_SITE_URL,
+  detailDir: process.env.NEWS_DETAIL_DIR?.trim() || undefined,
 });
-console.log(`[exporter] exported ${result.items} items -> ${result.currentLink}`);
+console.log(`[exporter] exported ${result.items} items (${result.detailPages} rich detail) -> ${result.currentLink}`);

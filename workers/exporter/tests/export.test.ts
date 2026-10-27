@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -146,6 +146,45 @@ describe("exportSite: category merge + zh display", () => {
     assert.ok(index.includes("Aave 提出 V3.8 升级"), "zh title is the primary title");
     assert.ok(index.includes("Aave proposes V3.8 upgrade"), "original title kept as secondary line");
     assert.ok(!index.includes("DeFi Protocol"), "merged category name is gone");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("exportSite: rich detail links (new-old compatible)", () => {
+  it("links items with a detail file to /docs/news/<id>.html and keeps the rest on item/<id>/, without copying into the release", () => {
+    const dir = mkdtempSync(join(tmpdir(), "exporter-detail-"));
+    const dbFile = join(dir, "cleaned.sqlite");
+    const detailDir = join(dir, "news-detail");
+    const db = new DatabaseSync(dbFile);
+    db.exec(`
+      CREATE TABLE cleaned_records (
+        source_record_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, cleaned_at TEXT NOT NULL,
+        provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, item_count INTEGER NOT NULL,
+        source_agent TEXT NOT NULL DEFAULT '');
+      CREATE TABLE cleaned_items (
+        id TEXT PRIMARY KEY, source_record_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL,
+        summary TEXT NOT NULL, detail TEXT, category TEXT NOT NULL, tags TEXT NOT NULL,
+        event_date TEXT, sources TEXT NOT NULL);
+    `);
+    db.prepare("INSERT INTO cleaned_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("rec-1", "h1", "2026-10-22T12:00:00.000Z", "openai-compatible", "openai/gpt-4o-mini", "clean-v2", 2, "muse");
+    const insert = db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    insert.run("item-rich", "rec-1", 0, "Rich title", "Rich summary", null, "Web3 DeFi", "[]", "2026-10-21", "[]");
+    insert.run("item-old", "rec-1", 1, "Old title", "Old summary", null, "Web3 DeFi", "[]", "2026-10-21", "[]");
+    db.close();
+    // Only item-rich has a rich detail file on disk.
+    mkdirSync(detailDir, { recursive: true });
+    writeFileSync(join(detailDir, "item-rich.html"), "<!doctype html><title>rich</title>", "utf8");
+    const result = exportSite({ dbFile, outDir: join(dir, "web-dist"), detailDir, now: new Date("2026-10-22T15:00:00Z") });
+    assert.equal(result.detailPages, 1);
+    const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
+    assert.ok(index.includes('href="/docs/news/item-rich.html"'), "rich item links directly to its /docs/news/ page");
+    assert.ok(index.includes('href="item/item-old/"'), "item without a detail file keeps the old link");
+    assert.ok(!index.includes('href="item/item-rich/"'), "rich item must not also link old");
+    assert.ok(!existsSync(join(result.releaseDir, "detail/item-rich.html")), "no copy into the release: /docs/news/ is already served directly");
+    const sitemap = readFileSync(join(result.releaseDir, "sitemap.xml"), "utf8");
+    assert.ok(sitemap.includes("<loc>https://agent101.uk/docs/news/item-rich.html</loc>"), "sitemap follows the rich link");
+    assert.ok(sitemap.includes("<loc>https://agent101.uk/news/item/item-old/</loc>"), "sitemap keeps the old link for the rest");
     rmSync(dir, { recursive: true, force: true });
   });
 });
