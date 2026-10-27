@@ -117,7 +117,19 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
     }
     try {
       const cleaned = await deps.provider.clean(record, deps.systemPrompt);
-      if (cleaned.length === 0) throw new Error("provider returned no items");
+      if (cleaned.length === 0) {
+        // A 0-item result is a correct "nothing to publish" outcome for an
+        // empty brief, not a failure: advancing past it stops one empty
+        // record from blocking every record behind it for five rounds
+        // (grok-bot 20:30 round, record 26a6fe48). A malformed provider
+        // reply never reaches here — validate.ts already rejects output
+        // without an items array — so [] is a valid, parsed result.
+        stats.skipped += 1;
+        log(`[cleaner] skipped ${record.id}: provider returned 0 items (empty brief, nothing to publish)`);
+        deps.store.setAttempts(record.id, 0);
+        advance(record);
+        continue;
+      }
       const { kept: items, dropped } = dedupeItems(
         cleaned,
         deps.store.recentItemKeys(deps.dedupeWindowDays ?? 7, record.id),

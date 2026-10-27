@@ -68,6 +68,37 @@ describe("runBatch", () => {
     store.close();
   });
 
+  it("skips a 0-item provider result instead of failing and blocking the next record", async () => {
+    const store = new CleanerStore(":memory:");
+    const emptyProvider = {
+      name: "mock",
+      model: "fake",
+      clean: async (rec: RawRecord): Promise<CleanedItem[]> =>
+        rec.id === "e1" ? [] : new MockProvider().clean(rec),
+      translate: async () => new Map(),
+    };
+    const empty = { ...record("e1", "he1", BRIEF), updated_at: "2026-10-22T00:00:01Z" };
+    const news = { ...record("n2", "hn2", BRIEF), updated_at: "2026-10-22T00:00:02Z" };
+    const deps = {
+      client: stubClient([empty, news]),
+      provider: emptyProvider,
+      store,
+      systemPrompt: "x",
+      translatePrompt: "t",
+      limit: 100,
+      maxPerRun: 20,
+      log: () => {},
+    };
+    const stats = await runBatch(deps);
+    assert.equal(stats.skipped, 1); // the empty brief, terminal — not a failure
+    assert.equal(stats.failed, 0);
+    assert.equal(stats.cleaned, 1); // the record behind it is reached in the same round
+    assert.equal(store.getAttempts("e1"), 0);
+    const second = await runBatch(deps);
+    assert.equal(second.fetched, 0); // cursor advanced past both records
+    store.close();
+  });
+
   it("skips mailbox records (muse-inbox / muse-inbox-result) without cleaning them", async () => {
     const store = new CleanerStore(":memory:");
     const inbox = { ...record("t1", "ht1", BRIEF), source_agent: "muse-inbox", updated_at: "2026-10-22T00:00:01Z" };
