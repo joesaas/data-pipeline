@@ -337,10 +337,37 @@ const PAGE_JS = `
   if (grid) {
     grid.addEventListener("click", function (e) {
       var src = e.target.closest("[data-src]");
-      if (!src) return;
+      if (src) {
+        e.preventDefault();
+        e.stopPropagation();
+        window.open(src.dataset.src, "_blank", "noreferrer");
+        return;
+      }
+      // Click-time rich-detail check: the list page may have been open
+      // for a while, so a detail page pushed after load (or after the
+      // load-time rewrite) would otherwise need a manual refresh to
+      // take effect. On a plain left click, ask the public done list
+      // once (no-store, ids only) and jump to /docs/news/<id>.html
+      // when one exists; otherwise follow the card's own href.
+      // Modifier/middle clicks, source pills and favorite buttons are
+      // left alone: the browser (or their own handler) handles those.
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      var card = e.target.closest ? e.target.closest(".news-card") : null;
+      if (!card || !card.dataset.itemId) return;
+      if (e.target.closest && e.target.closest(".fav-btn")) return;
       e.preventDefault();
-      e.stopPropagation();
-      window.open(src.dataset.src, "_blank", "noreferrer");
+      var id = card.dataset.itemId;
+      var rich = "/docs/news/" + encodeURIComponent(id) + ".html";
+      fetch("/data-pipeline/api/v1/news-detail/done", { cache: "no-store" })
+        .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
+        .then(function (d) {
+          if (d && Array.isArray(d.item_ids)) {
+            detailIds = new Set(d.item_ids);
+            if (detailIds.has(id)) { card.href = rich; window.location.href = rich; return; }
+          }
+          window.location.href = card.href;
+        })
+        .catch(function () { window.location.href = card.href; });
     });
   }
   var refreshBtn = document.getElementById("refreshBtn");

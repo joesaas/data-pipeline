@@ -204,6 +204,8 @@ describe("exportSite: pagination", () => {
     assert.ok(index.includes('<nav class="pager" id="pager"'), "pager container exists below the grid");
     assert.ok(index.includes("var PAGE_SIZE = 10"), "default page size is 10");
     assert.ok(index.includes("function renderPager"), "pager is rendered from the filtered total");
+    assert.ok(index.includes("Click-time rich-detail check"), "card clicks re-check the done list at click time");
+    assert.ok(index.includes("window.location.href = rich"), "click-time check jumps to the rich page when one exists");
     rmSync(dir, { recursive: true, force: true });
   });
 });
