@@ -149,7 +149,13 @@ const FOOTER = `<footer class="site-footer">联系方式：${CONTACT_LINK}</foot
 const PAGE_JS = `
 <script>
 (function () {
-  var state = { category: "", scope: "", q: "", gran: "day", page: 1 };
+  var state = { category: "", scope: "", q: "", gran: "day", page: 1, lastItemId: "" };
+  var LIST_STATE_KEY = "agent101-list-state";
+  // One-shot anchor: set only by restoreListState() before the first
+  // render, consumed there, so later pager/filter/search renders never
+  // snap back to the card the user came from.
+  var pendingAnchorId = "";
+  var pendingHighlightId = "";
   var PAGE_SIZE = 10;
   var cards = Array.prototype.slice.call(document.querySelectorAll(".news-card"));
   var grid = document.getElementById("grid");
@@ -163,6 +169,71 @@ const PAGE_JS = `
     return Math.round(100 * Math.pow(0.5, ageH / HALF_LIFE_H));
   }
   function tierOf(w) { return w >= 50 ? 1 : w >= 20 ? 2 : 3; }
+  // List-state restore (scheme A): the list page is a static export,
+  // so its filter/pager/search state lives only in memory and is lost
+  // on any fresh load — including the plain "back to list" link on
+  // every detail page, old and new. Save the state to sessionStorage
+  // (same origin, same tab, so /news/ and /docs/news/ share it) on
+  // every render and before leaving for a detail page; on load, read
+  // it back. sessionStorage is deliberately per-tab: closing the tab
+  // resets to page 1, and a shared /news/ link never carries one
+  // visitor's page/filter state to another.
+  function saveListState() {
+    try {
+      window.sessionStorage.setItem(LIST_STATE_KEY, JSON.stringify({
+        category: state.category, scope: state.scope, q: state.q,
+        gran: state.gran, page: state.page, lastItemId: state.lastItemId
+      }));
+    } catch (e) { /* private mode etc.: the list just starts at page 1 */ }
+  }
+  function restoreListState() {
+    var raw = null;
+    try { raw = window.sessionStorage.getItem(LIST_STATE_KEY); } catch (e) { return false; }
+    if (!raw) return false;
+    var d = null;
+    try { d = JSON.parse(raw); } catch (e) { return false; }
+    if (!d || typeof d !== "object") return false;
+    if (typeof d.category === "string") {
+      var found = d.category === "";
+      document.querySelectorAll('[data-group="category"] .side-item').forEach(function (b) {
+        if (b.dataset.value === d.category) found = true;
+      });
+      state.category = found ? d.category : "";
+    }
+    if (d.scope === "" || d.scope === "day" || d.scope === "week" || d.scope === "month" || d.scope === "year") state.scope = d.scope;
+    if (typeof d.q === "string") state.q = d.q;
+    if (d.gran === "day" || d.gran === "week" || d.gran === "month" || d.gran === "year") state.gran = d.gran;
+    if (typeof d.page === "number" && d.page >= 1) state.page = Math.floor(d.page);
+    if (typeof d.lastItemId === "string" && d.lastItemId) {
+      state.lastItemId = d.lastItemId;
+      pendingAnchorId = d.lastItemId;
+      pendingHighlightId = d.lastItemId;
+    }
+    return true;
+  }
+  function syncListControls() {
+    var input = document.getElementById("q");
+    if (input) input.value = state.q;
+    var clearBtn = document.getElementById("clearSearch");
+    if (clearBtn) clearBtn.hidden = !state.q;
+    document.querySelectorAll('[data-group="category"] .side-item').forEach(function (c) {
+      c.classList.toggle("on", c.dataset.value === state.category);
+    });
+    document.querySelectorAll('[data-group="scope"] .side-item').forEach(function (c) {
+      c.classList.toggle("on", c.dataset.value === state.scope);
+    });
+    document.querySelectorAll("[data-gran-group] .seg-btn").forEach(function (c) {
+      c.classList.toggle("on", c.dataset.gran === state.gran);
+    });
+    if (state.category && pageTitle) {
+      document.querySelectorAll('[data-group="category"] .side-item').forEach(function (c) {
+        if (c.dataset.value === state.category) {
+          var label = c.querySelector(".flex");
+          pageTitle.textContent = label ? label.textContent : "全部资讯";
+        }
+      });
+    }
+  }
   function refreshWeights() {
     cards.forEach(function (el) {
       var badge = el.querySelector("[data-wt]");
@@ -252,6 +323,7 @@ const PAGE_JS = `
   }
   function render() {
     var shown = 0;
+    var anchorIdx = -1;
     grid.querySelectorAll(".group-head").forEach(function (h) { h.remove(); });
     var lastKey = null;
     var totalPages = 1;
@@ -262,8 +334,18 @@ const PAGE_JS = `
         (!state.q || el.dataset.search.indexOf(state.q) !== -1);
       if (!ok) { el.style.display = "none"; return; }
       shown++;
+      if (pendingAnchorId && el.dataset.itemId === pendingAnchorId) anchorIdx = shown - 1;
     });
     totalPages = Math.max(1, Math.ceil(shown / PAGE_SIZE));
+    if (pendingAnchorId) {
+      // Item-anchored restore: the list is newest-first, so new items
+      // push older ones down a page between visits; jumping to the
+      // page that actually holds the card beats restoring a stale
+      // page number. If the card is filtered out or gone, fall
+      // through to the clamped restored page below.
+      if (anchorIdx >= 0) state.page = Math.floor(anchorIdx / PAGE_SIZE) + 1;
+      pendingAnchorId = "";
+    }
     if (state.page > totalPages) state.page = totalPages;
     if (state.page < 1) state.page = 1;
     var first = (state.page - 1) * PAGE_SIZE;
@@ -291,6 +373,17 @@ const PAGE_JS = `
     var empty = document.getElementById("emptyFilter");
     if (empty) empty.style.display = shown === 0 && cards.length > 0 ? "" : "none";
     renderPager(shown, totalPages);
+    saveListState();
+    if (pendingHighlightId) {
+      var target = null;
+      cards.forEach(function (el) { if (el.dataset.itemId === pendingHighlightId) target = el; });
+      pendingHighlightId = "";
+      if (target && target.style.display !== "none") {
+        target.classList.add("return-hl");
+        window.scrollTo(0, target.getBoundingClientRect().top + window.scrollY - 80);
+        setTimeout(function () { target.classList.remove("return-hl"); }, 3000);
+      }
+    }
   }
   var pager = document.getElementById("pager");
   if (pager) {
@@ -298,6 +391,7 @@ const PAGE_JS = `
       var btn = e.target.closest("[data-page]");
       if (!btn || btn.disabled) return;
       state.page = Number(btn.dataset.page);
+      state.lastItemId = "";
       render();
       if (grid) window.scrollTo({ top: grid.getBoundingClientRect().top + window.scrollY - 80, behavior: "smooth" });
     });
@@ -312,6 +406,7 @@ const PAGE_JS = `
       box.querySelectorAll(".side-item").forEach(function (c) { c.classList.toggle("on", c === btn); });
       if (after) after(btn);
       state.page = 1;
+      state.lastItemId = "";
       render();
     });
   }
@@ -330,6 +425,7 @@ const PAGE_JS = `
       state.gran = btn.dataset.gran;
       seg.querySelectorAll(".seg-btn").forEach(function (c) { c.classList.toggle("on", c === btn); });
       state.page = 1;
+      state.lastItemId = "";
       render();
     });
   }
@@ -337,12 +433,12 @@ const PAGE_JS = `
   var clearBtn = document.getElementById("clearSearch");
   function syncClearBtn() { if (clearBtn) clearBtn.hidden = !input || !input.value; }
   if (input) {
-    input.addEventListener("input", function () { state.q = input.value.trim().toLowerCase(); state.page = 1; syncClearBtn(); render(); });
+    input.addEventListener("input", function () { state.q = input.value.trim().toLowerCase(); state.page = 1; state.lastItemId = ""; syncClearBtn(); render(); });
     syncClearBtn();
   }
   if (clearBtn && input) {
     clearBtn.addEventListener("click", function () {
-      input.value = ""; state.q = ""; state.page = 1; syncClearBtn(); render(); input.focus();
+      input.value = ""; state.q = ""; state.page = 1; state.lastItemId = ""; syncClearBtn(); render(); input.focus();
     });
   }
   if (grid) {
@@ -368,6 +464,10 @@ const PAGE_JS = `
       if (e.target.closest && e.target.closest(".fav-btn")) return;
       e.preventDefault();
       var id = card.dataset.itemId;
+      // Save before leaving, so the detail page's plain back link
+      // lands on a list that restores this exact state.
+      state.lastItemId = id;
+      saveListState();
       var rich = "/docs/news/" + encodeURIComponent(id) + ".html";
       fetch("/data-pipeline/api/v1/news-detail/done", { cache: "no-store" })
         .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
@@ -411,6 +511,8 @@ const PAGE_JS = `
     });
   }
   refreshWeights();
+  restoreListState();
+  syncListControls();
   render();
   fetchDetailLinks();
 })();

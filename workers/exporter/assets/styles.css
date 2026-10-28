@@ -123,6 +123,7 @@ aside nav { position: sticky; top: 76px; }
   column-gap: 28px;
 }
 .news-card:hover { border-color: var(--accent-line); }
+.news-card.return-hl { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.15); }
 .card-top { grid-area: top; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .pill {
   color: #fff; font-size: 12px; font-weight: 500;

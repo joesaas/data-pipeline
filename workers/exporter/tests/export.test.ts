@@ -280,3 +280,40 @@ describe("exportSite: rich detail links (new-old compatible)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("exportSite: list-state restore", () => {
+  it("list page JS saves state to sessionStorage, restores it on load, and anchors to the last clicked card", () => {
+    const dir = mkdtempSync(join(tmpdir(), "exporter-list-state-"));
+    const dbFile = join(dir, "cleaned.sqlite");
+    const db = new DatabaseSync(dbFile);
+    db.exec(`
+      CREATE TABLE cleaned_records (
+        source_record_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, cleaned_at TEXT NOT NULL,
+        provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, item_count INTEGER NOT NULL,
+        source_agent TEXT NOT NULL DEFAULT '');
+      CREATE TABLE cleaned_items (
+        id TEXT PRIMARY KEY, source_record_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL,
+        summary TEXT NOT NULL, detail TEXT, category TEXT NOT NULL, tags TEXT NOT NULL,
+        event_date TEXT, sources TEXT NOT NULL);
+    `);
+    db.prepare("INSERT INTO cleaned_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("rec-1", "h1", "2026-10-22T12:00:00.000Z", "openai-compatible", "openai/gpt-4o-mini", "clean-v2", 1, "muse");
+    db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("item-x", "rec-1", 0, "X title", "X summary", null, "Web3 DeFi", "[]", "2026-10-21", "[]");
+    db.close();
+    const result = exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
+    const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
+    assert.ok(index.includes('var LIST_STATE_KEY = "agent101-list-state"'), "state key is sessionStorage-scoped");
+    assert.ok(index.includes("window.sessionStorage.setItem(LIST_STATE_KEY"), "state is saved on render");
+    assert.ok(index.includes("window.sessionStorage.getItem(LIST_STATE_KEY"), "state is read back on load");
+    assert.ok(index.includes("restoreListState();"), "restore runs before the first render");
+    assert.ok(index.includes("syncListControls();"), "restored filters re-sync the sidebar/search controls");
+    assert.ok(index.includes("pendingAnchorId"), "restored card id is a one-shot page anchor, not a sticky page");
+    assert.ok(index.includes("Math.floor(anchorIdx / PAGE_SIZE) + 1"), "anchor resolves to the page holding the card");
+    assert.ok(index.includes("state.lastItemId = id;"), "card clicks record the clicked card before leaving");
+    assert.ok(index.includes("return-hl"), "returned card is highlighted on restore");
+    const css = readFileSync(join(result.releaseDir, "styles.css"), "utf8");
+    assert.ok(css.includes(".news-card.return-hl"), "highlight style ships with the release");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
