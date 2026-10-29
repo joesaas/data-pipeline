@@ -19,6 +19,19 @@ export class AuthService {
     private authRequired: boolean,
   ) {}
 
+  /**
+   * Strict variant for endpoints that must never be anonymous, even
+   * when the global AUTH_REQUIRED flag is off (e.g. writing files
+   * that nginx then serves publicly). Returns null unless the key
+   * matches a live token, regardless of authRequired.
+   */
+  resolveValidKey(apiKey: string | undefined): string | null {
+    if (!apiKey) return null;
+    const tok = this.driver.findTokenByHash(hashKey(apiKey));
+    if (!tok || tok.revoked_at !== null) return null;
+    return tok.role === "admin" ? ADMIN_IDENTITY : tok.id;
+  }
+
   /** Returns the identity for a request, or null when auth fails.
    *  Admin tokens resolve to ADMIN_IDENTITY (cross-identity reader). */
   resolveIdentity(apiKey: string | undefined): string | null {

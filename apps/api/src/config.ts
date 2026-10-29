@@ -24,6 +24,18 @@ export interface AppConfig {
    *  feature does not touch the StorageDriver contract (sqlite/file
    *  dual implementation) or the cleaner. */
   newsDetailDbFile: string;
+  /** Fixed base directory the resource upload endpoint writes into.
+   *  The client only supplies a relative sub-path + file name; it can
+   *  never change this base. Configurable so local runs and tests
+   *  point it at a temp directory. */
+  resourceDir?: string;
+  /** Public base URL used to build the returned `url` for an uploaded
+   *  file, e.g. https://agent101.uk/resource. It never changes where
+   *  the file is written. */
+  resourceSiteUrl?: string;
+  /** Max decoded bytes for one resource upload, independent of
+   *  maxContentBytes (records/news-detail stay on their own limit). */
+  resourceMaxBytes?: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -46,5 +58,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     newsDetailDir: env.NEWS_DETAIL_DIR ?? "/home/ec2-user/app/docs/news",
     newsDetailDbFile:
       env.NEWS_DETAIL_DB_FILE ?? `${dataDir.replace(/\/+$/, "")}/news-detail.sqlite`,
+    resourceDir: env.RESOURCE_DIR ?? "/home/ec2-user/app/resource",
+    resourceSiteUrl: (env.RESOURCE_SITE_URL ?? "https://agent101.uk/resource").replace(
+      /\/+$/,
+      "",
+    ),
+    resourceMaxBytes: Number(env.RESOURCE_MAX_BYTES ?? 10_485_760),
   };
 }

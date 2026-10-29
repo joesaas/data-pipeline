@@ -10,6 +10,7 @@ import type { StorageDriver } from "../storage/storage-driver.js";
 import { CleanedReader } from "../cleaned/cleaned-reader.js";
 import { NewsDetailStore } from "../news-detail/news-detail-store.js";
 import { NewsDetailService, NotFoundError } from "../news-detail/news-detail-service.js";
+import { ResourceService } from "../resource/resource-service.js";
 import * as admin from "./admin.js";
 import * as site from "./site.js";
 
@@ -49,7 +50,18 @@ export function registerRoutes(
     return identity;
   }
 
-  router.use(express.json({ limit: Math.ceil(config.maxContentBytes * 1.6) }));
+  // Base64 resource uploads are ~33% larger than the decoded file, so
+  // the JSON parser limit must cover the resource limit too. Records
+  // and news-detail still enforce their own (smaller) maxContentBytes
+  // in their services, so a larger parser limit does not widen them.
+  router.use(
+    express.json({
+      limit: Math.max(
+        Math.ceil(config.maxContentBytes * 1.6),
+        Math.ceil((config.resourceMaxBytes ?? 10_485_760) * 1.4),
+      ),
+    }),
+  );
 
   // Service info root (also the project base path root). No auth, no data.
   router.get("/", (_req, res) => {
@@ -74,6 +86,7 @@ export function registerRoutes(
         news_detail_push: `POST ${base}/api/v1/news-detail/pages {item_id, html, detail_path?}`,
         news_detail_get: `GET ${base}/api/v1/news-detail/pages/:item_id`,
         news_detail_done_public: `GET ${base}/api/v1/news-detail/done (public, no key: item_ids with a done detail page, for list-page link rewriting)`,
+        resource_upload: `POST ${base}/api/v1/resource/files {path?, filename, content, encoding?} (X-API-Key required, writes under RESOURCE_DIR, served at /resource/)`,
         admin_tokens: `GET ${base}/api/v1/admin/tokens`,
         admin_token_create: `POST ${base}/api/v1/admin/tokens`,
         admin_token_revoke: `POST ${base}/api/v1/admin/tokens/:id/revoke`,
@@ -261,6 +274,43 @@ export function registerRoutes(
         res.status(404).json({ error: err.message });
         return;
       }
+      if (err instanceof ValidationError) {
+        res
+          .status(err.tooLarge ? 413 : 400)
+          .json({ error: err.message, ...(err.field ? { field: err.field } : {}) });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // Resource uploads: a file + relative path, written under the
+  // fixed RESOURCE_DIR (default /home/ec2-user/app/resource) and
+  // served by nginx /resource/. Auth is stricter than records /
+  // news-detail on purpose: a valid X-API-Key is required even when
+  // the global AUTH_REQUIRED flag is off, because these files are
+  // then served publicly by nginx. No DB row is created.
+  const resource = new ResourceService(config);
+
+  router.post("/api/v1/resource/files", (req, res) => {
+    const identity = auth.resolveValidKey(req.header("x-api-key") ?? undefined);
+    if (identity === null) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    if (rateLimited(identity)) {
+      res.status(429).json({ error: "rate limit exceeded" });
+      return;
+    }
+    try {
+      const result = resource.saveFile({
+        path: typeof req.body?.path === "string" ? req.body.path : undefined,
+        filename: typeof req.body?.filename === "string" ? req.body.filename : "",
+        content: typeof req.body?.content === "string" ? req.body.content : "",
+        encoding: typeof req.body?.encoding === "string" ? req.body.encoding : undefined,
+      });
+      res.status(result.status === "created" ? 201 : 200).json(result);
+    } catch (err) {
       if (err instanceof ValidationError) {
         res
           .status(err.tooLarge ? 413 : 400)
