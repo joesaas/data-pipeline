@@ -40,6 +40,9 @@ location /resource/ {
     autoindex_exact_size off;
     autoindex_localtime on;
     index __no_such_index__;
+    # .md/.txt 没 charset 时浏览器会猜错编码变乱码，必须显式 utf-8
+    charset utf-8;
+    charset_types text/plain text/markdown text/css application/javascript application/json text/xml text/html;
 }
 EOF
   echo "--- $NGINX_CONF 改动 ---"
@@ -76,6 +79,9 @@ location /resource/ {
     autoindex_exact_size off;
     autoindex_localtime on;
     index __no_such_index__;
+    # .md/.txt 没 charset 时浏览器会猜错编码变乱码，必须显式 utf-8
+    charset utf-8;
+    charset_types text/plain text/markdown text/css application/javascript application/json text/xml text/html;
 }
 EOF
 echo "已写 $SNIPPET"
