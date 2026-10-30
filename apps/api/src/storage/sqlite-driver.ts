@@ -2,10 +2,13 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  ChatMessageSource,
+  ChatMessageStatus,
   PendingTaskStatus,
   SiteFavorite,
   SiteNonce,
   SiteSession,
+  StoredChatMessage,
   StoredPendingTask,
   StoredPullTask,
   StoredRecord,
@@ -155,6 +158,18 @@ export class SqliteDriver implements StorageDriver {
         updated_at TEXT NOT NULL,
         UNIQUE(pull_task_id, due_at)
       );
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        in_reply_to INTEGER,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_status_id
+        ON chat_messages(status, id);
       CREATE TABLE IF NOT EXISTS site_nonces (
         address TEXT PRIMARY KEY,
         nonce TEXT NOT NULL,
@@ -655,6 +670,108 @@ export class SqliteDriver implements StorageDriver {
   deletePendingTask(id: number): boolean {
     const res = this.db.prepare("DELETE FROM pending_tasks WHERE id = ?").run(id);
     return Number(res.changes) > 0;
+  }
+
+  createChatMessage(m: {
+    source: ChatMessageSource;
+    content: string;
+    in_reply_to?: number | null;
+  }): StoredChatMessage {
+    const now = new Date().toISOString();
+    const res = this.db
+      .prepare(
+        "INSERT INTO chat_messages (source, content, status, in_reply_to, error, created_at, updated_at) VALUES (?, ?, 'pending', ?, NULL, ?, ?)",
+      )
+      .run(m.source, m.content, m.in_reply_to ?? null, now, now);
+    return this.getChatMessage(Number(res.lastInsertRowid)) as StoredChatMessage;
+  }
+
+  getChatMessage(id: number): StoredChatMessage | null {
+    const row = this.db
+      .prepare(
+        "SELECT id, source, content, status, in_reply_to, error, created_at, updated_at FROM chat_messages WHERE id = ?",
+      )
+      .get(id) as StoredChatMessage | undefined;
+    if (!row) return null;
+    return {
+      ...row,
+      source: row.source as ChatMessageSource,
+      status: row.status as ChatMessageStatus,
+      in_reply_to: row.in_reply_to ?? null,
+      error: row.error ?? null,
+    };
+  }
+
+  listChatMessages(filter: {
+    source?: ChatMessageSource;
+    status?: ChatMessageStatus;
+  }): StoredChatMessage[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (filter.source) {
+      where.push("source = ?");
+      params.push(filter.source);
+    }
+    if (filter.status) {
+      where.push("status = ?");
+      params.push(filter.status);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT id, source, content, status, in_reply_to, error, created_at, updated_at FROM chat_messages ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id ASC`,
+      )
+      .all(...params) as StoredChatMessage[];
+    return rows.map((r) => ({
+      ...r,
+      source: r.source as ChatMessageSource,
+      status: r.status as ChatMessageStatus,
+      in_reply_to: r.in_reply_to ?? null,
+      error: r.error ?? null,
+    }));
+  }
+
+  saveChatMessage(m: StoredChatMessage): StoredChatMessage {
+    this.db
+      .prepare(
+        `INSERT INTO chat_messages (id, source, content, status, in_reply_to, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status, error = excluded.error, updated_at = excluded.updated_at`,
+      )
+      .run(m.id, m.source, m.content, m.status, m.in_reply_to, m.error, m.created_at, m.updated_at);
+    return this.getChatMessage(m.id) as StoredChatMessage;
+  }
+
+  completeChatMessage(
+    id: number,
+    reply: string,
+  ): { human: StoredChatMessage; muse: StoredChatMessage } | null {
+    const now = new Date().toISOString();
+    // node:sqlite has no transaction() helper on this version: BEGIN/COMMIT by hand.
+    this.db.exec("BEGIN IMMEDIATE;");
+    let museId: number | null = null;
+    try {
+      const res = this.db
+        .prepare(
+          "UPDATE chat_messages SET status = 'done', error = NULL, updated_at = ? WHERE id = ? AND status = 'processing'",
+        )
+        .run(now, id);
+      if (Number(res.changes) > 0) {
+        const ins = this.db
+          .prepare(
+            "INSERT INTO chat_messages (source, content, status, in_reply_to, error, created_at, updated_at) VALUES ('muse', ?, 'done', ?, NULL, ?, ?)",
+          )
+          .run(reply, id, now, now);
+        museId = Number(ins.lastInsertRowid);
+      }
+      this.db.exec("COMMIT;");
+    } catch (e) {
+      this.db.exec("ROLLBACK;");
+      throw e;
+    }
+    if (museId === null) return null;
+    return {
+      human: this.getChatMessage(id) as StoredChatMessage,
+      muse: this.getChatMessage(museId) as StoredChatMessage,
+    };
   }
 
   deleteWaitingPendingTasks(pullTaskId: number): number {

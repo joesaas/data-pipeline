@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import type { Request, Response } from "express";
 import type { AppConfig } from "../config.js";
 import type { AuthService } from "../auth/auth.js";
-import { ADMIN_IDENTITY, type PendingTaskPublic, type PendingTaskStatus, type StoredPendingTask, type StoredPullTask, type StoredToken, type StoredWebhook, type TokenRole, type WebhookMeta } from "../domain/types.js";
+import { ADMIN_IDENTITY, type ChatMessageStatus, type PendingTaskPublic, type PendingTaskStatus, type StoredPendingTask, type StoredPullTask, type StoredToken, type StoredWebhook, type TokenRole, type WebhookMeta } from "../domain/types.js";
 import { parseCron } from "@data-pipeline/shared";
 import type { StorageDriver } from "../storage/storage-driver.js";
 
@@ -854,6 +854,184 @@ export function resetPendingTask(deps: AdminDeps, req: Request, res: Response): 
   const reset = deps.driver.savePendingTask({
     ...row,
     status: "waiting",
+    error: null,
+    updated_at: new Date().toISOString(),
+  });
+  res.json(reset);
+}
+
+function parseChatMessageId(req: Request, res: Response): number | null {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "chat message id must be a positive integer", field: "id" });
+    return null;
+  }
+  return id;
+}
+
+function parseChatStatus(raw: unknown): { status: ChatMessageStatus } | { error: string } {
+  if (raw !== "pending" && raw !== "processing" && raw !== "done" && raw !== "failed") {
+    return { error: 'status must be one of "pending", "processing", "done", "failed"' };
+  }
+  return { status: raw };
+}
+
+/**
+ * Console chat list: newest `limit` rows in chronological order, so a
+ * long stream never pushes new messages out of view. Default 200, max 1000.
+ */
+export function listChatMessages(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const sourceRaw = req.query.source;
+  let source: "human" | "muse" | undefined;
+  if (typeof sourceRaw === "string" && sourceRaw) {
+    if (sourceRaw !== "human" && sourceRaw !== "muse") {
+      res.status(400).json({ error: 'source must be "human" or "muse"', field: "source" });
+      return;
+    }
+    source = sourceRaw;
+  }
+  let statusFilter: ChatMessageStatus | undefined;
+  if (typeof req.query.status === "string" && req.query.status) {
+    const parsed = parseChatStatus(req.query.status);
+    if ("error" in parsed) {
+      res.status(400).json({ error: parsed.error, field: "status" });
+      return;
+    }
+    statusFilter = parsed.status;
+  }
+  const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : 200;
+  const items = deps.driver.listChatMessages({ source, status: statusFilter });
+  res.json({ items: items.slice(-limit), total: items.length });
+}
+
+/** Worker queue: oldest pending human rows first, so prompts are answered in order. */
+export function listPendingChatMessages(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 10;
+  const items = deps.driver
+    .listChatMessages({ source: "human", status: "pending" })
+    .slice(0, limit);
+  res.json({ items, total: items.length });
+}
+
+export function createChatMessage(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const body = (req.body ?? {}) as { content?: unknown };
+  if (typeof body.content !== "string") {
+    res.status(400).json({ error: "content is required", field: "content" });
+    return;
+  }
+  const content = body.content.trim();
+  if (!content || content.length > 200_000) {
+    res.status(400).json({ error: "content is required (max 200000 chars)", field: "content" });
+    return;
+  }
+  const saved = deps.driver.createChatMessage({ source: "human", content });
+  res.status(201).json(saved);
+}
+
+/** Claim an oldest-pending human row: pending -> processing. Anything else is a 409. */
+export function claimChatMessage(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parseChatMessageId(req, res);
+  if (id === null) return;
+  const row = deps.driver.getChatMessage(id);
+  if (!row) {
+    res.status(404).json({ error: "chat message not found" });
+    return;
+  }
+  if (row.source !== "human" || row.status !== "pending") {
+    res.status(409).json({ error: `chat message is ${row.source}/${row.status}, not human/pending`, status: row.status });
+    return;
+  }
+  const claimed = deps.driver.saveChatMessage({
+    ...row,
+    status: "processing",
+    updated_at: new Date().toISOString(),
+  });
+  res.json(claimed);
+}
+
+/** Complete a processing human row: human -> done, plus its muse reply row. Requires reply content. */
+export function completeChatMessage(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parseChatMessageId(req, res);
+  if (id === null) return;
+  const row = deps.driver.getChatMessage(id);
+  if (!row) {
+    res.status(404).json({ error: "chat message not found" });
+    return;
+  }
+  if (row.status !== "processing") {
+    res.status(409).json({ error: `chat message is ${row.status}, not processing`, status: row.status });
+    return;
+  }
+  const body = (req.body ?? {}) as { content?: unknown };
+  if (typeof body.content !== "string") {
+    res.status(400).json({ error: "content is required", field: "content" });
+    return;
+  }
+  const reply = body.content.trim();
+  if (!reply || reply.length > 200_000) {
+    res.status(400).json({ error: "content is required (max 200000 chars)", field: "content" });
+    return;
+  }
+  const done = deps.driver.completeChatMessage(id, reply);
+  if (!done) {
+    res.status(409).json({ error: "chat message is no longer processing", status: row.status });
+    return;
+  }
+  res.json(done);
+}
+
+/** Mark a processing row failed, with a short error for the console display. */
+export function failChatMessage(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parseChatMessageId(req, res);
+  if (id === null) return;
+  const row = deps.driver.getChatMessage(id);
+  if (!row) {
+    res.status(404).json({ error: "chat message not found" });
+    return;
+  }
+  if (row.status !== "processing") {
+    res.status(409).json({ error: `chat message is ${row.status}, not processing`, status: row.status });
+    return;
+  }
+  const body = (req.body ?? {}) as { error?: unknown };
+  const error =
+    typeof body.error === "string" && body.error.trim() ? body.error.trim().slice(0, 1000) : "failed";
+  const failed = deps.driver.saveChatMessage({
+    ...row,
+    status: "failed",
+    error,
+    updated_at: new Date().toISOString(),
+  });
+  res.json(failed);
+}
+
+/** Stale-processing recovery: a worker that died mid-run leaves its row
+ *  "processing" forever; anyone may reset it to pending so the next
+ *  round retries it. Only processing rows reset, never done ones. */
+export function resetChatMessage(deps: AdminDeps, req: Request, res: Response): void {
+  if (adminOf(deps, req, res) === null) return;
+  const id = parseChatMessageId(req, res);
+  if (id === null) return;
+  const row = deps.driver.getChatMessage(id);
+  if (!row) {
+    res.status(404).json({ error: "chat message not found" });
+    return;
+  }
+  if (row.status !== "processing") {
+    res.status(409).json({ error: `chat message is ${row.status}, not processing`, status: row.status });
+    return;
+  }
+  const reset = deps.driver.saveChatMessage({
+    ...row,
+    status: "pending",
     error: null,
     updated_at: new Date().toISOString(),
   });

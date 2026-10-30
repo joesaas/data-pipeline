@@ -39,6 +39,7 @@
         <button :class="{ active: tab === 'records' }" @click="openRecordsTab">Records</button>
         <button :class="{ active: tab === 'news' }" @click="openNewsTab">News</button>
         <button :class="{ active: tab === 'pulltasks' }" @click="openPullTasksTab">拉取任务</button>
+        <button :class="{ active: tab === 'chat' }" @click="openChatTab">对话</button>
       </nav>
 
       <!-- Tokens -->
@@ -552,6 +553,45 @@
         <p v-if="pullTaskOk" class="ok">{{ pullTaskOk }}</p>
         <p v-if="pullTaskError" class="err">{{ pullTaskError }}</p>
       </section>
+      <section v-if="tab === 'chat'" class="card">
+        <div class="row space">
+          <h2>对话</h2>
+          <button class="btn" :disabled="chatRefreshing" @click="refreshChat">
+            <span v-if="chatRefreshing" class="spin">⟳</span>
+            {{ chatRefreshing ? "刷新中…" : "刷新" }}
+          </button>
+        </div>
+        <p class="hint">
+          在这里输入一段提示词，存入对话记录；Muse 的定时任务每分钟查一次，按顺序
+          取待处理的人话执行，执行完把结果以 Muse 的名义写回同一条对话流。
+          状态：待处理 = 等执行，处理中 = 正在执行，已完成 = 已有回复，失败 = 执行失败
+          （失败不自动重试，失败行留在流里，可到下一轮手动处理）。
+        </p>
+        <div v-if="chatMessages.length">
+          <div v-for="m in chatMessages" :key="m.id" :class="['chat-msg', m.source]">
+            <div class="row space">
+              <strong>{{ m.source === "human" ? "你" : "Muse" }}</strong>
+              <span class="hint">{{ fmtTime(m.created_at) }}<span v-if="m.source === 'human'"> · {{ m.status === "pending" ? "待处理" : m.status === "processing" ? "处理中" : m.status === "done" ? "已完成" : "失败" }}</span></span>
+            </div>
+            <pre class="chat-text">{{ m.content }}</pre>
+            <p v-if="m.error" class="err">{{ m.error }}</p>
+          </div>
+        </div>
+        <p v-else class="hint">还没有对话，从下面发第一条。</p>
+        <form class="create" @submit.prevent="sendChatMessage">
+          <textarea v-model="newChatContent" rows="4" placeholder="输入一段提示词，Muse 会按顺序执行并把结果写回这里" class="input"></textarea>
+          <div class="row">
+            <button class="btn primary" :disabled="busy || !newChatContent.trim()">发送</button>
+          </div>
+        </form>
+        <p v-if="chatOk" class="ok">{{ chatOk }}</p>
+        <p v-if="chatError" class="err">{{ chatError }}</p>
+        <p class="hint">
+          上次刷新：{{ chatLastRefreshed || "尚未刷新" }}
+          <span v-if="chatRefreshing"> · 正在从服务器拉取最新数据…</span>
+          <span v-else-if="chatTotal"> · 当前共 {{ chatTotal }} 条</span>
+        </p>
+      </section>
     </template>
   </div>
 </template>
@@ -650,6 +690,15 @@ const pullTaskError = ref("");
 const pullTasksRefreshing = ref(false);
 const pullTasksLastRefreshed = ref("");
 let pullTasksRefreshSeq = 0;
+
+const chatMessages = ref([]);
+const chatTotal = ref(0);
+const newChatContent = ref("");
+const chatOk = ref("");
+const chatError = ref("");
+const chatRefreshing = ref(false);
+const chatLastRefreshed = ref("");
+let chatRefreshSeq = 0;
 
 function fmtTime(iso) {
   if (!iso) return "";
@@ -1096,6 +1145,45 @@ async function runPullTaskNow(t) {
   }
 }
 
+function openChatTab() {
+  tab.value = "chat";
+  refreshChat();
+}
+
+async function refreshChat() {
+  const seq = ++chatRefreshSeq;
+  chatRefreshing.value = true;
+  chatError.value = "";
+  try {
+    const data = await adminApi.listChatMessages(key.value);
+    if (seq === chatRefreshSeq) {
+      chatMessages.value = data.items;
+      chatTotal.value = data.total;
+      chatLastRefreshed.value = new Date().toLocaleString();
+    }
+  } catch (e) {
+    if (seq === chatRefreshSeq) chatError.value = e.message;
+  } finally {
+    if (seq === chatRefreshSeq) chatRefreshing.value = false;
+  }
+}
+
+async function sendChatMessage() {
+  chatOk.value = "";
+  chatError.value = "";
+  busy.value = true;
+  try {
+    await adminApi.createChatMessage(key.value, newChatContent.value);
+    newChatContent.value = "";
+    chatOk.value = "已存入对话记录，Muse 的定时任务下一轮会按顺序执行它。";
+    await refreshChat();
+  } catch (e) {
+    chatError.value = e.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
 function startEditPullTask(t) {
   editPullTaskId.value = t.id;
   editPullTaskName.value = t.name;
@@ -1294,4 +1382,7 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #eee; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin: 12px 0; }
 .grid label { color: #888; font-size: 12px; }
 .out { background: #111; color: #ddd; border-radius: 8px; padding: 12px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.chat-msg { border-left: 3px solid #ccc; padding: 4px 0 4px 12px; margin: 12px 0; }
+.chat-msg.muse { border-color: #222; }
+.chat-text { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.7; margin: 6px 0; font-family: inherit; }
 </style>

@@ -1,10 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  ChatMessageSource,
+  ChatMessageStatus,
   PendingTaskStatus,
   SiteFavorite,
   SiteNonce,
   SiteSession,
+  StoredChatMessage,
   StoredPendingTask,
   StoredPullTask,
   StoredRecord,
@@ -36,6 +39,7 @@ export class FileDriver implements StorageDriver {
   private webhookPayloadsPath: string;
   private pullTasksPath: string;
   private pendingTasksPath: string;
+  private chatMessagesPath: string;
   private siteNoncesPath: string;
   private siteSessionsPath: string;
   private siteFavoritesPath: string;
@@ -48,6 +52,7 @@ export class FileDriver implements StorageDriver {
     this.webhookPayloadsPath = join(dir, "webhook-payloads.json");
     this.pullTasksPath = join(dir, "pull-tasks.json");
     this.pendingTasksPath = join(dir, "pending-tasks.json");
+    this.chatMessagesPath = join(dir, "chat-messages.json");
     this.siteNoncesPath = join(dir, "site-nonces.json");
     this.siteSessionsPath = join(dir, "site-sessions.json");
     this.siteFavoritesPath = join(dir, "site-favorites.json");
@@ -55,6 +60,7 @@ export class FileDriver implements StorageDriver {
     if (!existsSync(this.tokensPath)) writeFileSync(this.tokensPath, "[]");
     if (!existsSync(this.pullTasksPath)) writeFileSync(this.pullTasksPath, "[]");
     if (!existsSync(this.pendingTasksPath)) writeFileSync(this.pendingTasksPath, "[]");
+    if (!existsSync(this.chatMessagesPath)) writeFileSync(this.chatMessagesPath, "[]");
     if (!existsSync(this.siteNoncesPath)) writeFileSync(this.siteNoncesPath, "[]");
     if (!existsSync(this.siteSessionsPath)) writeFileSync(this.siteSessionsPath, "[]");
     if (!existsSync(this.siteFavoritesPath)) writeFileSync(this.siteFavoritesPath, "[]");
@@ -438,6 +444,85 @@ export class FileDriver implements StorageDriver {
     const removed = rows.length - kept.length;
     if (removed > 0) this.writePendingTasks(kept);
     return removed;
+  }
+
+  private readChatMessages(): StoredChatMessage[] {
+    return JSON.parse(readFileSync(this.chatMessagesPath, "utf8")) as StoredChatMessage[];
+  }
+
+  private writeChatMessages(rows: StoredChatMessage[]): void {
+    writeFileSync(this.chatMessagesPath, JSON.stringify(rows, null, 1));
+  }
+
+  createChatMessage(m: {
+    source: ChatMessageSource;
+    content: string;
+    in_reply_to?: number | null;
+  }): StoredChatMessage {
+    const rows = this.readChatMessages();
+    const now = new Date().toISOString();
+    const saved: StoredChatMessage = {
+      id: rows.reduce((max, x) => Math.max(max, x.id), 0) + 1,
+      source: m.source,
+      content: m.content,
+      status: "pending",
+      in_reply_to: m.in_reply_to ?? null,
+      error: null,
+      created_at: now,
+      updated_at: now,
+    };
+    rows.push(saved);
+    this.writeChatMessages(rows);
+    return saved;
+  }
+
+  getChatMessage(id: number): StoredChatMessage | null {
+    return this.readChatMessages().find((m) => m.id === id) ?? null;
+  }
+
+  listChatMessages(filter: {
+    source?: ChatMessageSource;
+    status?: ChatMessageStatus;
+  }): StoredChatMessage[] {
+    return this.readChatMessages()
+      .filter((m) => (filter.source ? m.source === filter.source : true))
+      .filter((m) => (filter.status ? m.status === filter.status : true))
+      .sort((a, b) => a.id - b.id);
+  }
+
+  saveChatMessage(m: StoredChatMessage): StoredChatMessage {
+    const rows = this.readChatMessages();
+    const i = rows.findIndex((x) => x.id === m.id);
+    if (i >= 0) rows[i] = m;
+    else rows.push(m);
+    this.writeChatMessages(rows);
+    return m;
+  }
+
+  completeChatMessage(
+    id: number,
+    reply: string,
+  ): { human: StoredChatMessage; muse: StoredChatMessage } | null {
+    const rows = this.readChatMessages();
+    const human = rows.find((m) => m.id === id);
+    if (!human || human.status !== "processing") return null;
+    const now = new Date().toISOString();
+    human.status = "done";
+    human.error = null;
+    human.updated_at = now;
+    const muse: StoredChatMessage = {
+      id: rows.reduce((max, x) => Math.max(max, x.id), 0) + 1,
+      source: "muse",
+      content: reply,
+      status: "done",
+      in_reply_to: id,
+      error: null,
+      created_at: now,
+      updated_at: now,
+    };
+    rows.push(muse);
+    this.writeChatMessages(rows);
+    return { human, muse };
   }
 
   savePullTask(t: StoredPullTask): StoredPullTask {

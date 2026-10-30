@@ -1,8 +1,11 @@
 import type {
+  ChatMessageSource,
+  ChatMessageStatus,
   PendingTaskStatus,
   SiteFavorite,
   SiteNonce,
   SiteSession,
+  StoredChatMessage,
   StoredPendingTask,
   StoredPullTask,
   StoredRecord,
@@ -90,6 +93,28 @@ export interface StorageDriver {
   deletePendingTask(id: number): boolean;
   /** Delete waiting rows of one pull task (used when the task itself is deleted). */
   deleteWaitingPendingTasks(pullTaskId: number): number;
+
+  /** Console chat (single stream, see StoredChatMessage). Insert (id <= 0
+   *  assigns the next id) or replace status/error by id. */
+  createChatMessage(m: {
+    source: ChatMessageSource;
+    content: string;
+    in_reply_to?: number | null;
+  }): StoredChatMessage;
+  getChatMessage(id: number): StoredChatMessage | null;
+  /** All matching rows, oldest first; the caller slices head or tail. */
+  listChatMessages(filter: {
+    source?: ChatMessageSource;
+    status?: ChatMessageStatus;
+  }): StoredChatMessage[];
+  saveChatMessage(m: StoredChatMessage): StoredChatMessage;
+  /** Atomically mark a processing human row done and insert its muse
+   *  reply. Returns null when the row is not processing (already
+   *  claimed, done, or failed elsewhere). */
+  completeChatMessage(
+    id: number,
+    reply: string,
+  ): { human: StoredChatMessage; muse: StoredChatMessage } | null;
 
   /** Trigger history (written by the trigger job, read by the console).
    *  Newest first. Appending prunes the table to the latest 1000 rows

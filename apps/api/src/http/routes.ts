@@ -384,6 +384,29 @@ export function registerRoutes(
   router.post("/api/v1/admin/pull-tasks/:id/run-now", (req, res) =>
     admin.runPullTaskNow(adminDeps, req, res),
   );
+  // Console chat (single stream). The /pending route must be registered
+  // before /:id, or "pending" would be parsed as an id and 400.
+  router.get("/api/v1/admin/chat/messages", (req, res) =>
+    admin.listChatMessages(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/chat/messages", (req, res) =>
+    admin.createChatMessage(adminDeps, req, res),
+  );
+  router.get("/api/v1/admin/chat/messages/pending", (req, res) =>
+    admin.listPendingChatMessages(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/chat/messages/:id/claim", (req, res) =>
+    admin.claimChatMessage(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/chat/messages/:id/complete", (req, res) =>
+    admin.completeChatMessage(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/chat/messages/:id/fail", (req, res) =>
+    admin.failChatMessage(adminDeps, req, res),
+  );
+  router.post("/api/v1/admin/chat/messages/:id/reset", (req, res) =>
+    admin.resetChatMessage(adminDeps, req, res),
+  );
   // Public detector for the 5-second hook: waiting ids only, no prompts.
   // Deliberately unauthenticated — the hook runtime holds no secrets.
   router.get("/api/v1/pull-tasks/pending", (req, res) =>

@@ -150,6 +150,27 @@ export interface PendingTaskPublic {
 }
 
 /**
+ * Console chat: a single message stream, not a records push.
+ * Human rows are created by the console (status pending); the Muse
+ * worker claims the oldest pending human row, executes its content,
+ * then completes it with a muse row. Muse rows are always done;
+ * only human rows move through pending -> processing -> done/failed.
+ */
+export type ChatMessageSource = "human" | "muse";
+export type ChatMessageStatus = "pending" | "processing" | "done" | "failed";
+export interface StoredChatMessage {
+  id: number;
+  source: ChatMessageSource;
+  content: string;
+  status: ChatMessageStatus;
+  /** The human row this muse row answers; null on human rows. */
+  in_reply_to: number | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
  * One saved webhook payload template. The content is a user-authored JSON
  * object (it usually contains the `prompt`); at most one row is active,
  * and the scheduled trigger sends the active one. Content is not a secret.
