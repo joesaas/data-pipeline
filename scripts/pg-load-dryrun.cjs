@@ -5,8 +5,11 @@
  * 用途：把 EC2 上三份 SQLite 快照导进演练库 data_pipeline_practice，并自校验。
  * 只用于演练，绝不用于生产库。跑在 EC2 上（node:sqlite 读源 + pg 写目标）。
  *
- * 安全规则（写死在代码里，没有任何放行开关）：
- *  1. PG_DATABASE 绝不允许为 data_pipeline：命中直接退出。
+ * 安全规则（写死在代码里）：
+ *  1. PG_DATABASE 绝不允许为 data_pipeline，除非显式打上生产开关：
+ *     必须同时满足 PG_DATABASE=data_pipeline 与 PG_ALLOW_PRODUCTION=1（精确值，
+ *     空、yes、true 一律视为未放行），缺一不可；开关只认当条命令的环境变量，
+ *     不读任何配置文件。其余护栏对生产库同样生效。
  *  2. 启动先查目标库 16 张表：缺表直接退出；任一表行数非 0 直接退出
  *     （不静默截断、不覆盖；要重跑先 DROP + 重建演练库 + 重跑 DDL）。
  *  3. 源文件三份缺一直接退出。
@@ -228,9 +231,13 @@ function resolveConfig() {
     user: pick('PG_USER', 'data_pipeline_app'),
     region: pick('PG_REGION', 'ap-southeast-1'),
   };
-  // 护栏 1：绝不允许生产库。没有任何放行开关。
-  if (config.database === 'data_pipeline') {
-    throw new Error('refusing to run: PG_DATABASE must not be data_pipeline (production database)');
+  // 护栏 1：生产库默认拒绝；只有显式打上生产开关才放行。
+  // 必须同时满足 PG_DATABASE=data_pipeline 与 PG_ALLOW_PRODUCTION=1（精确值，
+  // 空、yes、true 一律视为未放行），缺一不可；开关只认当条命令的环境变量，
+  // 不读任何配置文件。其余护栏（表非空拒绝、整批事务、校验不一致回滚、
+  // 不打印行内容）对生产库同样生效。
+  if (config.database === 'data_pipeline' && process.env.PG_ALLOW_PRODUCTION !== '1') {
+    throw new Error('refusing to run: PG_DATABASE=data_pipeline requires PG_ALLOW_PRODUCTION=1 (explicit opt-in)');
   }
   if (!Number.isInteger(config.port) || config.port <= 0 || config.port > 65535) {
     throw new Error('invalid PG_PORT: expected an integer between 1 and 65535');

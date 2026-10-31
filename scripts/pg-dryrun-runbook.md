@@ -68,6 +68,8 @@ PG_CONTRACT_TEST=1 PG_DATABASE=data_pipeline_practice npm run test -w @data-pipe
 
 预期：API 测试全绿，且输出里含 PG contract 用例。若 contract 失败，先停下来，把失败用例贴给我，不要继续。环境变量只加在当条命令前，不写入 shell 配置、不进 pm2。
 
+注意：contract 不是幂等的——它假设表是空的，跑完还会留行（records、tokens、trigger history、webhook payloads 的 p1 等测试都不删行）。所以每次重跑 3a 之前都必须先做 3b（DROP + 重建 + 重跑 DDL），否则残留行会让 creates 变 deduped、主键冲突、计数翻倍。
+
 ### 3b：DROP + 重建演练库并重跑 DDL（Mac）
 
 先跑 postgres 会话（DROP + 建库 + schema + 授权，与 Step 1 相同，只多一行 DROP）：
@@ -160,3 +162,26 @@ LOAD OK: 16 tables, 4753 rows, all counts and id sets match
 - 不停线上服务：演练期间 API、清洗器、job-runner 照常跑；快照是拷出来的副本，loader 不碰线上文件。
 - 不改任何环境变量：所有 `PG_*`、`SQLITE_DIR` 只加在当条命令前，不写入 `~/.zshrc`、不进 pm2、不改 EC2 配置。
 - 不打印行内容：loader 输出只有行数与哈希；演练库里虽然有真实数据（含 webhooks 明文 token），但不要把任何查询结果贴进对话。
+
+## 生产导数（切换窗口内，演练通过后才做）
+
+前置（缺一不可）：
+
+- 演练已通过（3a 全绿 + loader LOAD OK）。
+- EC2 服务已停（`pm2 stop data-pipeline data-cleaner data-job-runner`，`pm2 list` 确认三者都停）。
+- 停服务后重拷的最终快照在 `/tmp/step0`（停服务后 WAL 已落盘，仍按 3c 的命令连 `-wal` 一起拷）。
+- 生产库 16 张表全空（loader 的 precheck 会再验一遍，非空直接拒绝）。
+
+命令（EC2；开关只加在当条命令前，不写进任何配置文件）：
+
+```bash
+cd /home/ec2-user/app/data-pipeline
+cp /home/ec2-user/app/data-pipeline/scripts/pg-load-dryrun.cjs /tmp/pg-load-dryrun.cjs
+PG_DATABASE=data_pipeline PG_ALLOW_PRODUCTION=1 NODE_PATH=/home/ec2-user/app/data-pipeline/node_modules node /tmp/pg-load-dryrun.cjs
+```
+
+预期：与演练相同（precheck 全空、setval 全 OK、16 行 MATCH、LOAD OK、退出码 0），行数以最终快照为准。
+
+失败处理：与 3e 相同；MISMATCH 或非 0 时事务已回滚、表仍为空，不要重跑覆盖，先把输出贴给 Muse。生产导数失败不影响线上 SQLite（服务停着、开关未切），修好原因后可直接重跑。
+
+注意：不打 `PG_ALLOW_PRODUCTION=1` 时生产库永远拒绝；开关值必须是精确的 `1`，空、`yes`、`true` 一律视为未放行。
