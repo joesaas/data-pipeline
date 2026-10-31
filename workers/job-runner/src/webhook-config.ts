@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { PgPoolLike } from "./pg-pool.js";
+import { getJobRunnerPgPool, resolveJobRunnerStorageDriver } from "./storage.js";
 
 /**
  * Where the API's SQLite file lives, from the job's point of view.
@@ -40,7 +42,8 @@ export interface DbWebhook {
   cron: string | null;
 }
 
-function readWebhookRow(
+/** SQLite implementation of readWebhookRow (original body). */
+function readWebhookRowSqlite(
   dbPath: string,
   where: string,
   params: (string | number)[],
@@ -82,14 +85,91 @@ function readWebhookRow(
   }
 }
 
+/**
+ * Which backend the public functions below use. Unknown switch values
+ * yield null (no database) rather than a guessed backend — the job
+ * files and main.ts fail fast on unknown values at startup, so this
+ * is only a backstop for direct library callers.
+ */
+function currentDriver(): "sqlite" | "pg" | null {
+  try {
+    return resolveJobRunnerStorageDriver();
+  } catch {
+    return null;
+  }
+}
+
+/** Map one PG webhooks row. The url/token are returned to the caller
+ * (as before) but never logged here — same secrets rule as the
+ * SQLite path. PG always has the cron column, so no hasCron check. */
+function mapWebhookRow(row: Record<string, unknown> | undefined): DbWebhook | null {
+  if (!row) return null;
+  const url = row.url;
+  const token = row.token;
+  if (typeof url !== "string" || !url || typeof token !== "string" || !token) return null;
+  return {
+    id: Number(row.id),
+    name: String(row.name),
+    url,
+    token,
+    payload: row.payload == null ? null : String(row.payload),
+    cron: row.cron == null ? null : String(row.cron),
+  };
+}
+
+/** PG implementation of a single webhooks-row read over schema app.*. */
+async function readWebhookRowPg(
+  pool: PgPoolLike,
+  where: string,
+  params: (string | number)[],
+): Promise<DbWebhook | null> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, url, token, payload, cron FROM app.webhooks ${where}`,
+      params,
+    );
+    return mapWebhookRow(rows[0]);
+  } catch {
+    return null;
+  }
+}
+
 /** The row marked scheduled (is_active), newest-updated first, or null. */
-export function loadActiveWebhookFromDb(dbPath: string): DbWebhook | null {
-  return readWebhookRow(dbPath, "WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1", []);
+export async function loadActiveWebhookFromDb(dbPath: string): Promise<DbWebhook | null> {
+  const mode = currentDriver();
+  if (mode === "pg") {
+    try {
+      return await readWebhookRowPg(getJobRunnerPgPool(), "WHERE is_active ORDER BY updated_at DESC LIMIT 1", []);
+    } catch {
+      return null;
+    }
+  }
+  if (mode === "sqlite") return readWebhookRowSqlite(dbPath, "WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1", []);
+  return null;
 }
 
 /** One row by id (used for test-firing a specific webhook), or null. */
-export function loadWebhookByIdFromDb(dbPath: string, id: number): DbWebhook | null {
-  return readWebhookRow(dbPath, "WHERE id = ?", [id]);
+export async function loadWebhookByIdFromDb(dbPath: string, id: number): Promise<DbWebhook | null> {
+  const mode = currentDriver();
+  if (mode === "pg") {
+    try {
+      return await readWebhookRowPg(getJobRunnerPgPool(), "WHERE id = $1", [id]);
+    } catch {
+      return null;
+    }
+  }
+  if (mode === "sqlite") return readWebhookRowSqlite(dbPath, "WHERE id = ?", [id]);
+  return null;
+}
+
+/** PG implementations of the two public readers above, exported for
+ * stub-pool tests (same mapping, no live database). */
+export async function loadActiveWebhookFromDbPg(pool: PgPoolLike): Promise<DbWebhook | null> {
+  return readWebhookRowPg(pool, "WHERE is_active ORDER BY updated_at DESC LIMIT 1", []);
+}
+
+export async function loadWebhookByIdFromDbPg(pool: PgPoolLike, id: number): Promise<DbWebhook | null> {
+  return readWebhookRowPg(pool, "WHERE id = $1", [id]);
 }
 
 /**
@@ -99,7 +179,36 @@ export function loadWebhookByIdFromDb(dbPath: string, id: number): DbWebhook | n
  * still read here even though the console no longer manages it: a row
  * left active keeps shaping the body until it is cleared in the database.
  */
-export function loadActivePayloadFromDb(dbPath: string): string | null {
+export async function loadActivePayloadFromDb(dbPath: string): Promise<string | null> {
+  const mode = currentDriver();
+  if (mode === "pg") {
+    try {
+      return await loadActivePayloadFromDbPg(getJobRunnerPgPool());
+    } catch {
+      return null;
+    }
+  }
+  if (mode === "sqlite") return loadActivePayloadFromDbSqlite(dbPath);
+  return null;
+}
+
+/** PG implementation of loadActivePayloadFromDb over schema app.*,
+ * exported for stub-pool tests. Same blank-content rule as SQLite:
+ * whitespace-only content counts as no active payload. */
+export async function loadActivePayloadFromDbPg(pool: PgPoolLike): Promise<string | null> {
+  try {
+    const { rows } = await pool.query(
+      "SELECT content FROM app.webhook_payloads WHERE is_active ORDER BY updated_at DESC, id ASC LIMIT 1",
+    );
+    const content = rows[0]?.content;
+    return typeof content === "string" && content.trim() ? content : null;
+  } catch {
+    return null;
+  }
+}
+
+/** SQLite implementation of loadActivePayloadFromDb (original body). */
+function loadActivePayloadFromDbSqlite(dbPath: string): string | null {
   if (!existsSync(dbPath)) return null;
   let db: DatabaseSync | null = null;
   try {

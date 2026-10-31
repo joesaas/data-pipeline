@@ -25,17 +25,17 @@ describe("webhook-config", () => {
     }
   });
 
-  it("loadActiveWebhookFromDb: active row only, null on missing file/table/row/values", () => {
+  it("loadActiveWebhookFromDb: active row only, null on missing file/table/row/values", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dp-webhook-db-"));
     try {
-      assert.equal(loadActiveWebhookFromDb(join(dir, "nope.db")), null);
+      assert.equal(await loadActiveWebhookFromDb(join(dir, "nope.db")), null);
       const noTable = join(dir, "empty.db");
       new DatabaseSync(noTable).close();
-      assert.equal(loadActiveWebhookFromDb(noTable), null);
+      assert.equal(await loadActiveWebhookFromDb(noTable), null);
       const path = join(dir, "data.db");
       const db = new DatabaseSync(path);
       db.exec(WEBHOOKS_DDL);
-      assert.equal(loadActiveWebhookFromDb(path), null);
+      assert.equal(await loadActiveWebhookFromDb(path), null);
       db.prepare(
         "INSERT INTO webhooks (name, url, token, payload, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       ).run(
@@ -48,7 +48,7 @@ describe("webhook-config", () => {
         "2026-10-25T00:00:00.000Z",
       );
       // Inactive rows never count as scheduled.
-      assert.equal(loadActiveWebhookFromDb(path), null);
+      assert.equal(await loadActiveWebhookFromDb(path), null);
       db.prepare(
         "INSERT INTO webhooks (name, url, token, payload, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       ).run(
@@ -60,7 +60,7 @@ describe("webhook-config", () => {
         "2026-10-25T01:00:00.000Z",
         "2026-10-25T01:00:00.000Z",
       );
-      assert.deepEqual(loadActiveWebhookFromDb(path), {
+      assert.deepEqual(await loadActiveWebhookFromDb(path), {
         id: 2,
         name: "grok",
         url: "https://grok.example/hook",
@@ -74,7 +74,7 @@ describe("webhook-config", () => {
     }
   });
 
-  it("loadWebhookByIdFromDb: one row by id, null otherwise", () => {
+  it("loadWebhookByIdFromDb: one row by id, null otherwise", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dp-webhook-byid-"));
     try {
       const path = join(dir, "data.db");
@@ -95,7 +95,7 @@ describe("webhook-config", () => {
         );
       const id = Number(res.lastInsertRowid);
       db.close();
-      assert.deepEqual(loadWebhookByIdFromDb(path, id), {
+      assert.deepEqual(await loadWebhookByIdFromDb(path, id), {
         id,
         name: "solo",
         url: "https://solo.example/hook",
@@ -103,14 +103,14 @@ describe("webhook-config", () => {
         payload: null,
         cron: null,
       });
-      assert.equal(loadWebhookByIdFromDb(path, id + 100), null);
-      assert.equal(loadWebhookByIdFromDb(join(dir, "missing.db"), id), null);
+      assert.equal(await loadWebhookByIdFromDb(path, id + 100), null);
+      assert.equal(await loadWebhookByIdFromDb(join(dir, "missing.db"), id), null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("loadActivePayloadFromDb: newest-updated active row, null otherwise", () => {
+  it("loadActivePayloadFromDb: newest-updated active row, null otherwise", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dp-active-payload-"));
     try {
       const path = join(dir, "data.db");
@@ -118,7 +118,7 @@ describe("webhook-config", () => {
       db.exec(
         "CREATE TABLE webhook_payloads (id TEXT PRIMARY KEY, name TEXT NOT NULL, content TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);",
       );
-      assert.equal(loadActivePayloadFromDb(path), null);
+      assert.equal(await loadActivePayloadFromDb(path), null);
       db.prepare("INSERT INTO webhook_payloads VALUES (?, ?, ?, ?, ?, ?)").run(
         "old",
         "old",
@@ -145,16 +145,16 @@ describe("webhook-config", () => {
       );
       db.close();
       assert.equal(
-        loadActivePayloadFromDb(path),
+        await loadActivePayloadFromDb(path),
         JSON.stringify({ prompt: "new active" }),
       );
-      assert.equal(loadActivePayloadFromDb(join(dir, "missing.db")), null);
+      assert.equal(await loadActivePayloadFromDb(join(dir, "missing.db")), null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("loadActiveWebhookFromDb: a read-only open sees rows written by another connection", () => {
+  it("loadActiveWebhookFromDb: a read-only open sees rows written by another connection", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dp-webhook-wal-"));
     try {
       const path = join(dir, "data.db");
@@ -175,7 +175,7 @@ describe("webhook-config", () => {
           "2026-10-25T00:00:00.000Z",
         );
       // Writer stays open (like the running API) while the reader opens.
-      assert.deepEqual(loadActiveWebhookFromDb(path), {
+      assert.deepEqual(await loadActiveWebhookFromDb(path), {
         id: 1,
         name: "wal",
         url: "https://wal.example/hook",

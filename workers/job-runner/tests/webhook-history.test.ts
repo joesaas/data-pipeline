@@ -37,12 +37,12 @@ function readRows(path: string): Record<string, unknown>[] {
 }
 
 describe("webhook-history", () => {
-  it("append creates the table, stores the row, and returns true", () => {
+  it("append creates the table, stores the row, and returns true", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dp-trigger-history-"));
     try {
       const path = join(dir, "data.db");
       new DatabaseSync(path).close();
-      assert.equal(appendTriggerHistory(path, BASE), true);
+      assert.equal(await appendTriggerHistory(path, BASE), true);
       const rows = readRows(path);
       assert.equal(rows.length, 1);
       assert.equal(rows[0].webhook_id, 1);
@@ -59,14 +59,14 @@ describe("webhook-history", () => {
     }
   });
 
-  it("append prunes to the latest 1000 rows", () => {
+  it("append prunes to the latest 1000 rows", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dp-trigger-history-prune-"));
     try {
       const path = join(dir, "data.db");
       new DatabaseSync(path).close();
       for (let i = 0; i < TRIGGER_HISTORY_LIMIT + 5; i++) {
         assert.equal(
-          appendTriggerHistory(path, { ...BASE, triggered_at: `2026-10-26T${String(i % 24).padStart(2, "0")}:00:00.000Z` }),
+          await appendTriggerHistory(path, { ...BASE, triggered_at: `2026-10-26T${String(i % 24).padStart(2, "0")}:00:00.000Z` }),
           true,
         );
       }
@@ -80,7 +80,7 @@ describe("webhook-history", () => {
     }
   });
 
-  it("append migrates an old table without body columns", () => {
+  it("append migrates an old table without body columns", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dp-trigger-history-migrate-"));
     try {
       const path = join(dir, "data.db");
@@ -93,7 +93,7 @@ describe("webhook-history", () => {
           error TEXT, duration_ms INTEGER)`,
       );
       db.close();
-      assert.equal(appendTriggerHistory(path, BASE), true);
+      assert.equal(await appendTriggerHistory(path, BASE), true);
       const rows = readRows(path);
       assert.equal(rows.length, 1);
       assert.equal(rows[0].body, JSON.stringify({ prompt: "do it" }));
@@ -110,10 +110,10 @@ describe("webhook-history", () => {
     assert.equal(snap.body_truncated, true);
   });
 
-  it("append never throws: missing file returns false", () => {
+  it("append never throws: missing file returns false", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dp-trigger-history-missing-"));
     try {
-      assert.equal(appendTriggerHistory(join(dir, "nope.db"), BASE), false);
+      assert.equal(await appendTriggerHistory(join(dir, "nope.db"), BASE), false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

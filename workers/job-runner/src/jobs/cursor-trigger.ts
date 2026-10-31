@@ -51,6 +51,11 @@ import {
   type DbWebhook,
 } from "../webhook-config.js";
 import { appendTriggerHistory, snapshotBody } from "../webhook-history.js";
+import {
+  assertJobRunnerPgConfig,
+  endJobRunnerPgPool,
+  resolveJobRunnerStorageDriver,
+} from "../storage.js";
 
 const envFile = loadDefaultEnv();
 const statePath = stateFilePath(envFile, dirname(fileURLToPath(import.meta.url)));
@@ -68,16 +73,23 @@ const webhookOverride = process.env.CURSOR_TRIGGER_WEBHOOK_OVERRIDE?.trim() || n
 const isTest = webhookOverride !== null;
 
 const dbPath = apiDbPath(envFile);
+// Storage switch (JOB_RUNNER_STORAGE_DRIVER=pg reads/writes PG,
+// otherwise SQLite): fail fast on a mistyped switch or incomplete PG
+// env — the DB functions themselves never throw, so without this a
+// bad switch would silently skip ticks. The tick's PG pool is ended
+// at the end of this file (and before rethrowing below); a thread
+// killed by Bree takes its pool with it.
+if (resolveJobRunnerStorageDriver() === "pg") assertJobRunnerPgConfig();
 let dbConfig: DbWebhook | null = null;
 let scheduleLabel = `interval=${intervalMinutes}m`;
 if (isTest) {
   const id = Number(webhookOverride);
-  dbConfig = Number.isInteger(id) && id > 0 ? loadWebhookByIdFromDb(dbPath, id) : null;
+  dbConfig = Number.isInteger(id) && id > 0 ? await loadWebhookByIdFromDb(dbPath, id) : null;
   if (!dbConfig) {
     throw new Error(`test webhook "${webhookOverride}" not found in the database`);
   }
 } else {
-  const active = loadActiveWebhookFromDb(dbPath);
+  const active = await loadActiveWebhookFromDb(dbPath);
   if (!active) {
     console.log("[job-runner] cursor-trigger: skip (no active webhook in the webhooks table)");
   } else if (active.cron?.trim()) {
@@ -127,7 +139,7 @@ if (dbConfig) {
     const full = {
       ...config,
       prompt: state.prompt ?? undefined,
-      activePayload: loadActivePayloadFromDb(dbPath),
+      activePayload: await loadActivePayloadFromDb(dbPath),
     };
     const kind = templateKind(full);
     bodyKind = kind ? `payload(${kind})` : state.prompt ? "prompt" : "ping";
@@ -139,7 +151,7 @@ if (dbConfig) {
     }
     const snap = snapshotBody(sentBody);
     if (
-      !appendTriggerHistory(dbPath, {
+      !(await appendTriggerHistory(dbPath, {
         webhook_id: dbConfig.id,
         webhook_name: dbConfig.name,
         kind: historyKind,
@@ -151,7 +163,7 @@ if (dbConfig) {
         body_truncated: snap.body_truncated,
         error: null,
         duration_ms: Date.now() - startedAt,
-      })
+      }))
     ) {
       console.log("[job-runner] cursor-trigger: trigger history write failed (trigger itself succeeded)");
     }
@@ -165,7 +177,7 @@ if (dbConfig) {
       const statusMatch = /HTTP (\d{3})/.exec(message);
       const snap = sentBody === null ? null : snapshotBody(sentBody);
       if (
-        !appendTriggerHistory(dbPath, {
+        !(await appendTriggerHistory(dbPath, {
           webhook_id: dbConfig.id,
           webhook_name: dbConfig.name,
           kind: historyKind,
@@ -177,12 +189,17 @@ if (dbConfig) {
           body_truncated: snap?.body_truncated ?? false,
           error: message.slice(0, 500),
           duration_ms: Date.now() - startedAt,
-        })
+        }))
       ) {
         console.log("[job-runner] cursor-trigger: trigger history write failed (trigger itself failed)");
       }
     }
     console.error(`[job-runner] cursor-trigger: trigger failed: ${message}`);
+    await endJobRunnerPgPool();
     throw err;
   }
 }
+
+// End of tick: close the tick's PG pool, if one was created (no-op in
+// SQLite mode). A thread killed by Bree takes its pool with it.
+await endJobRunnerPgPool();

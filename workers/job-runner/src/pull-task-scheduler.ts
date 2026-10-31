@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { parseCron, previousCronOccurrence } from "@data-pipeline/shared";
 import { apiDbPath } from "./webhook-config.js";
+import type { PgPoolLike } from "./pg-pool.js";
+import { getJobRunnerPgPool, resolveJobRunnerStorageDriver } from "./storage.js";
 
 /**
  * Pull-task scheduler (2026-10-25, queue redesign). The runner ticks
@@ -78,8 +80,123 @@ function openDb(dbPath: string): DatabaseSync | null {
   }
 }
 
+/**
+ * Which backend the public functions below use. Unknown switch values
+ * yield null (no database) rather than a guessed backend — the job
+ * files and main.ts fail fast on unknown values at startup, so this
+ * is only a backstop for direct library callers.
+ */
+function currentDriver(): "sqlite" | "pg" | null {
+  try {
+    return resolveJobRunnerStorageDriver();
+  } catch {
+    return null;
+  }
+}
+
 /** Active pull tasks from the API database, or null on any failure. */
-export function loadActivePullTasks(dbPath: string): DbPullTask[] | null {
+export async function loadActivePullTasks(dbPath: string): Promise<DbPullTask[] | null> {
+  const mode = currentDriver();
+  if (mode === "pg") {
+    try {
+      return await loadActivePullTasksPg(getJobRunnerPgPool());
+    } catch {
+      return null;
+    }
+  }
+  if (mode === "sqlite") return loadActivePullTasksSqlite(dbPath);
+  return null;
+}
+
+/** Existing (pull_task_id, due_at) keys, or null on any failure. */
+export async function loadExistingDueKeys(dbPath: string): Promise<Set<string> | null> {
+  const mode = currentDriver();
+  if (mode === "pg") {
+    try {
+      return await loadExistingDueKeysPg(getJobRunnerPgPool());
+    } catch {
+      return null;
+    }
+  }
+  if (mode === "sqlite") return loadExistingDueKeysSqlite(dbPath);
+  return null;
+}
+
+/** Insert one pending row. Returns false when the row already exists (UNIQUE) or on any failure. */
+export async function insertPendingTask(dbPath: string, insert: PendingInsert): Promise<boolean> {
+  const mode = currentDriver();
+  if (mode === "pg") {
+    try {
+      return await insertPendingTaskPg(getJobRunnerPgPool(), insert);
+    } catch {
+      return false;
+    }
+  }
+  if (mode === "sqlite") return insertPendingTaskSqlite(dbPath, insert);
+  return false;
+}
+
+/** PG implementation of loadActivePullTasks over schema app.*. PG
+ * booleans arrive as real booleans; BIGINT ids are Number()ed at the
+ * boundary (the pool's int8 parser already yields numbers, this is
+ * belt-and-braces for stub pools). */
+export async function loadActivePullTasksPg(pool: PgPoolLike): Promise<DbPullTask[] | null> {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id, name, prompt, cron, target, is_active FROM app.pull_tasks WHERE is_active ORDER BY id ASC",
+    );
+    return rows.map((r) => ({
+      id: Number(r.id),
+      name: String(r.name),
+      prompt: String(r.prompt),
+      cron: String(r.cron),
+      target: r.target == null ? "muse" : String(r.target),
+      is_active: r.is_active === true,
+    }));
+  } catch {
+    return null;
+  }
+}
+
+/** PG due key: TIMESTAMPTZ arrives as a Date and MUST be rendered
+ * back to an ISO string before joining — comparing a Date object
+ * against the scheduler's ISO strings would miss every existing row
+ * and duplicate-schedule everything. */
+function dueKey(pullTaskId: unknown, dueAt: unknown): string {
+  const at = dueAt instanceof Date ? dueAt.toISOString() : String(dueAt);
+  return `${Number(pullTaskId)}|${at}`;
+}
+
+/** PG implementation of loadExistingDueKeys over schema app.*. */
+export async function loadExistingDueKeysPg(pool: PgPoolLike): Promise<Set<string> | null> {
+  try {
+    const { rows } = await pool.query("SELECT pull_task_id, due_at FROM app.pending_tasks");
+    return new Set(rows.map((r) => dueKey(r.pull_task_id, r.due_at)));
+  } catch {
+    return null;
+  }
+}
+
+/** PG implementation of insertPendingTask over schema app.*. ISO
+ * strings are valid timestamptz parameters; a UNIQUE violation on
+ * (pull_task_id, due_at) falls into the catch and returns false,
+ * exactly like the SQLite path. */
+export async function insertPendingTaskPg(pool: PgPoolLike, insert: PendingInsert): Promise<boolean> {
+  try {
+    const now = new Date().toISOString();
+    await pool.query(
+      `INSERT INTO app.pending_tasks (pull_task_id, pull_task_name, target, prompt, due_at, kind, status, result_external_id, result_record_id, error, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 'scheduled', 'waiting', NULL, NULL, NULL, $6, $7)`,
+      [insert.pull_task_id, insert.pull_task_name, insert.target, insert.prompt, insert.due_at, now, now],
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** SQLite implementation of loadActivePullTasks (original body). */
+function loadActivePullTasksSqlite(dbPath: string): DbPullTask[] | null {
   const db = openDb(dbPath);
   if (!db) return null;
   try {
@@ -110,8 +227,8 @@ export function loadActivePullTasks(dbPath: string): DbPullTask[] | null {
   }
 }
 
-/** Existing (pull_task_id, due_at) keys, or null on any failure. */
-export function loadExistingDueKeys(dbPath: string): Set<string> | null {
+/** SQLite implementation of loadExistingDueKeys (original body). */
+function loadExistingDueKeysSqlite(dbPath: string): Set<string> | null {
   const db = openDb(dbPath);
   if (!db) return null;
   try {
@@ -132,8 +249,8 @@ export function loadExistingDueKeys(dbPath: string): Set<string> | null {
   }
 }
 
-/** Insert one pending row. Returns false when the row already exists (UNIQUE) or on any failure. */
-export function insertPendingTask(dbPath: string, insert: PendingInsert): boolean {
+/** SQLite implementation of insertPendingTask (original body). */
+function insertPendingTaskSqlite(dbPath: string, insert: PendingInsert): boolean {
   const db = openDb(dbPath);
   if (!db) return false;
   try {

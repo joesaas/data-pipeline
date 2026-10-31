@@ -236,3 +236,64 @@ against the real target before any business migration begins.
   switches back + restart), delete only on li's say-so.
 - **EC2 step-0 measurements** (3 SQLite file sizes + per-table row
   counts) are still not done; do them before sizing the load.
+
+## Job-runner PG support
+
+The job-runner was the last SQLite holdout (it opens the API's
+`data.db` directly from a separate process, so it could not reuse
+the API's driver). It now has the same dual-implementation shape as
+the other three switches:
+
+- **Switch:** `JOB_RUNNER_STORAGE_DRIVER` (workers/job-runner/src/
+  storage.ts). Default `sqlite` (previous behavior unchanged);
+  `=pg` reads/writes PG. Unknown values throw at startup — main.ts
+  validates before Bree starts, and each job file re-validates in
+  its own worker thread (the DB functions themselves never throw, so
+  without this a bad switch would silently skip every DB-backed
+  tick). PG env validation (`assertJobRunnerPgConfig`) runs at the
+  same point when the driver is pg.
+- **Pool:** workers/job-runner/src/pg-pool.ts, a verbatim mirror of
+  the exporter/cleaner pools (rds-signer token callback per new
+  connection; `PG_HOST` default cluster endpoint, `PG_PORT` 5432,
+  `PG_DATABASE` data_pipeline, `PG_USER` data_pipeline_app,
+  `PG_REGION` ap-southeast-1; SSL encryption-required, CA chain
+  unverified — same documented caveat). Defaults must stay in sync
+  across all four pools.
+- **Lifecycle:** jobs run in Bree worker threads, so the pool lives
+  per worker thread, not in main.ts (main.ts holds no pool). The
+  pool is created lazily on the first PG call of a tick and ended by
+  the job file at tick end (`endJobRunnerPgPool`, no-op in SQLite
+  mode and no-op when never created). A thread killed by Bree
+  (throwing or hung job) takes its pool with it, so no pool can leak
+  past a tick.
+- **Modules** (SQLite paths kept verbatim as `*Sqlite` internals;
+  public functions are now async, same first parameter):
+  - `pull-task-scheduler.ts`: reads `app.pull_tasks` (`WHERE
+    is_active`, BOOLEAN) and all `app.pending_tasks` due keys, and
+    inserts pending rows (`kind='scheduled'`, `status='waiting'`).
+    TIMESTAMPTZ arrives as a Date and MUST be rendered back to an
+    ISO string before joining the `${id}|${dueAt}` key, or every
+    existing row would miss and duplicate-schedule; BIGINT ids are
+    Number()ed at the boundary.
+  - `webhook-history.ts`: appends to `app.webhook_trigger_history`
+    and prunes to the latest 1000 rows (same DELETE subquery as
+    SQLite). `ok` / `body_truncated` are BOOLEAN in PG (no 1/0
+    mapping). No DDL or migration runs on the PG path — the
+    production DDL already creates the table with all columns.
+  - `webhook-config.ts`: two read-only readers over `app.webhooks`
+    (active row, by id) and one over `app.webhook_payloads`
+    (active payload), same ordering and blank-content rules as
+    SQLite. PG always has the `cron` column, so no hasCron check.
+    Rows are returned to the caller but never logged (same secrets
+    rule: no webhook token or URL in logs).
+- **Never-throws contract preserved:** every public function still
+  returns null/false on any failure (missing file/table, PG
+  outage, unknown switch as a backstop) and never throws, so one
+  bad tick cannot kill the runner. An unknown switch yields
+  null/false rather than a guessed backend.
+- **Switch correspondence:** `STORAGE_DRIVER` (API) /
+  `CLEANER_STORAGE_DRIVER` (cleaner) / `NEWS_DETAIL_STORAGE_DRIVER`
+  (news-detail) / `EXPORTER_STORAGE_DRIVER` (exporter) /
+  `JOB_RUNNER_STORAGE_DRIVER` (job-runner). Cutover needs all five
+  set to `pg`; rolling any one back to `sqlite` re-splits that
+  writer's tables from the rest.

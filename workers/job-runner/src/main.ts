@@ -4,6 +4,7 @@ import Bree from "bree";
 import { JOBS, parseDurationMs, validateJobs } from "./registry.js";
 import { loadDefaultEnv } from "./load-env.js";
 import { setupFileLogging } from "./log.js";
+import { assertJobRunnerPgConfig, resolveJobRunnerStorageDriver } from "./storage.js";
 
 const SERVICE = "data-job-runner";
 
@@ -29,6 +30,18 @@ const SERVICE = "data-job-runner";
 async function main(): Promise<void> {
   loadDefaultEnv();
   setupFileLogging(SERVICE);
+
+  // Fail fast on a mistyped storage switch or incomplete PG env before
+  // any job thread starts: the DB functions themselves never throw,
+  // so without this a bad switch would silently skip every DB-backed
+  // tick. Job files re-check in their own worker threads.
+  try {
+    if (resolveJobRunnerStorageDriver() === "pg") assertJobRunnerPgConfig();
+  } catch (err) {
+    console.error(`[job-runner] invalid storage config: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+    return;
+  }
 
   const errors = validateJobs(JOBS);
   if (errors.length > 0) {

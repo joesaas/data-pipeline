@@ -10,9 +10,21 @@
  * A missing database/table/column (pre-migration) skips the tick with
  * a log line instead of throwing, so the runner survives an API that
  * has not migrated yet.
+ *
+ * Storage switch: JOB_RUNNER_STORAGE_DRIVER=pg reads/writes PG,
+ * otherwise SQLite. A mistyped switch or incomplete PG env fails
+ * fast here at job start (the DB functions themselves never throw,
+ * so without this check a bad switch would silently skip ticks).
+ * The tick's PG pool is ended in the finally block; a thread killed
+ * by Bree takes its pool with it.
  */
 import { loadDefaultEnv } from "../load-env.js";
 import { apiDbPath } from "../webhook-config.js";
+import {
+  assertJobRunnerPgConfig,
+  endJobRunnerPgPool,
+  resolveJobRunnerStorageDriver,
+} from "../storage.js";
 import {
   insertPendingTask,
   loadActivePullTasks,
@@ -21,24 +33,29 @@ import {
 } from "../pull-task-scheduler.js";
 
 const envFile = loadDefaultEnv();
+if (resolveJobRunnerStorageDriver() === "pg") assertJobRunnerPgConfig();
 const dbPath = apiDbPath(envFile);
 const now = new Date();
 
-const tasks = loadActivePullTasks(dbPath);
-if (tasks === null) {
-  console.log("[pull-task-scheduler] skip: pull_tasks unavailable (missing db/table)");
-} else {
-  const existing = loadExistingDueKeys(dbPath);
-  if (existing === null) {
-    console.log("[pull-task-scheduler] skip: pending_tasks unavailable (missing db/table)");
+try {
+  const tasks = await loadActivePullTasks(dbPath);
+  if (tasks === null) {
+    console.log("[pull-task-scheduler] skip: pull_tasks unavailable (missing db/table)");
   } else {
-    const inserts = tasksToSchedule(tasks, existing, now);
-    let inserted = 0;
-    for (const insert of inserts) {
-      if (insertPendingTask(dbPath, insert)) inserted++;
+    const existing = await loadExistingDueKeys(dbPath);
+    if (existing === null) {
+      console.log("[pull-task-scheduler] skip: pending_tasks unavailable (missing db/table)");
+    } else {
+      const inserts = tasksToSchedule(tasks, existing, now);
+      let inserted = 0;
+      for (const insert of inserts) {
+        if (await insertPendingTask(dbPath, insert)) inserted++;
+      }
+      console.log(
+        `[pull-task-scheduler] tick: ${tasks.length} active task(s), ${inserts.length} due, ${inserted} pending row(s) inserted`,
+      );
     }
-    console.log(
-      `[pull-task-scheduler] tick: ${tasks.length} active task(s), ${inserts.length} due, ${inserted} pending row(s) inserted`,
-    );
   }
+} finally {
+  await endJobRunnerPgPool();
 }

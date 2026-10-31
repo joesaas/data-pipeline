@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import type { PgPoolLike } from "./pg-pool.js";
+import { getJobRunnerPgPool, resolveJobRunnerStorageDriver } from "./storage.js";
 
 /**
  * Trigger-history writer for the cursor-trigger job. It writes directly
@@ -69,7 +71,62 @@ CREATE INDEX IF NOT EXISTS idx_trigger_history_webhook_time
  * (missing file, locked database, missing table that could not be
  * created) — never throws.
  */
-export function appendTriggerHistory(dbPath: string, row: TriggerHistoryRow): boolean {
+export async function appendTriggerHistory(dbPath: string, row: TriggerHistoryRow): Promise<boolean> {
+  let mode: "sqlite" | "pg" | null;
+  try {
+    mode = resolveJobRunnerStorageDriver();
+  } catch {
+    return false;
+  }
+  if (mode === "pg") {
+    try {
+      return await appendTriggerHistoryPg(getJobRunnerPgPool(), row);
+    } catch {
+      return false;
+    }
+  }
+  return appendTriggerHistorySqlite(dbPath, row);
+}
+
+/** PG implementation of appendTriggerHistory over schema app.*. No
+ * DDL or migration here: the production DDL already creates the
+ * table with all columns, so a missing table is a real failure and
+ * returns false. ok / body_truncated are BOOLEAN in PG (no 1/0
+ * mapping); the keep-latest-1000 prune is the same DELETE subquery
+ * as the SQLite path. */
+export async function appendTriggerHistoryPg(pool: PgPoolLike, row: TriggerHistoryRow): Promise<boolean> {
+  try {
+    await pool.query(
+      `INSERT INTO app.webhook_trigger_history
+         (webhook_id, webhook_name, kind, triggered_at, http_status, ok, body_kind, body, body_truncated, error, duration_ms)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        row.webhook_id,
+        row.webhook_name,
+        row.kind,
+        row.triggered_at,
+        row.http_status,
+        row.ok,
+        row.body_kind,
+        row.body,
+        row.body_truncated,
+        row.error,
+        row.duration_ms,
+      ],
+    );
+    await pool.query(
+      `DELETE FROM app.webhook_trigger_history WHERE id NOT IN
+         (SELECT id FROM app.webhook_trigger_history ORDER BY id DESC LIMIT $1)`,
+      [TRIGGER_HISTORY_LIMIT],
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** SQLite implementation of appendTriggerHistory (original body). */
+function appendTriggerHistorySqlite(dbPath: string, row: TriggerHistoryRow): boolean {
   if (!existsSync(dbPath)) return false;
   let db: DatabaseSync | null = null;
   try {
