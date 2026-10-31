@@ -1,12 +1,15 @@
 {
   "dependencies": {
+    "@aws-sdk/rds-signer": "^3.1161.0",
     "ethers": "^6.17.0",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "pg": "^8.23.1"
   },
   "description": "API app: ingest and query service for prompt+content records (Express, storage driver dual implementation).",
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
     "typescript": "^5.7.0"
   },
   "engines": {

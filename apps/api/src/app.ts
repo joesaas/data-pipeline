@@ -3,6 +3,7 @@ import express from "express";
 import type { AppConfig } from "./config.js";
 import { AuthService } from "./auth/auth.js";
 import { registerRoutes } from "./http/routes.js";
+import type { PgVerifyResult } from "./pg/verify.js";
 import { IngestService } from "./ingest/ingest-service.js";
 import { FileDriver } from "./storage/file-driver.js";
 import { SqliteDriver } from "./storage/sqlite-driver.js";
@@ -15,12 +16,19 @@ export function createDriver(config: AppConfig): StorageDriver {
 
 export function createApp(
   config: AppConfig,
-  opts?: { envFile?: string | null },
+  opts?: { envFile?: string | null; pgVerify?: () => Promise<PgVerifyResult> },
 ): { app: express.Express; driver: StorageDriver; auth: AuthService } {
   const driver = createDriver(config);
   const auth = new AuthService(driver, config.authRequired);
   const ingest = new IngestService(driver, config);
   const app = express();
-  registerRoutes(app, { config, auth, ingest, driver, envFile: opts?.envFile ?? null });
+  registerRoutes(app, {
+    config,
+    auth,
+    ingest,
+    driver,
+    envFile: opts?.envFile ?? null,
+    ...(opts?.pgVerify ? { pgVerify: opts.pgVerify } : {}),
+  });
   return { app, driver, auth };
 }

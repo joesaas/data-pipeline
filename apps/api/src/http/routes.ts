@@ -11,6 +11,7 @@ import { CleanedReader } from "../cleaned/cleaned-reader.js";
 import { NewsDetailStore } from "../news-detail/news-detail-store.js";
 import { NewsDetailService, NotFoundError } from "../news-detail/news-detail-service.js";
 import { ResourceService } from "../resource/resource-service.js";
+import type { PgVerifyResult } from "../pg/verify.js";
 import * as admin from "./admin.js";
 import * as site from "./site.js";
 
@@ -22,10 +23,23 @@ import * as site from "./site.js";
  */
 export function registerRoutes(
   app: Express,
-  deps: { config: AppConfig; auth: AuthService; ingest: IngestService; driver: StorageDriver; envFile?: string | null },
+  deps: {
+    config: AppConfig;
+    auth: AuthService;
+    ingest: IngestService;
+    driver: StorageDriver;
+    envFile?: string | null;
+    pgVerify?: () => Promise<PgVerifyResult>;
+  },
 ): void {
   const { config, auth, ingest, driver } = deps;
-  const adminDeps: admin.AdminDeps = { config, auth, driver, envFile: deps.envFile ?? null };
+  const adminDeps: admin.AdminDeps = {
+    config,
+    auth,
+    driver,
+    envFile: deps.envFile ?? null,
+    ...(deps.pgVerify ? { pgVerify: deps.pgVerify } : {}),
+  };
   const router = express.Router();
 
   // Simple fixed-window rate limit, keyed by identity (or IP when anonymous).
@@ -111,6 +125,7 @@ export function registerRoutes(
         admin_pending_complete: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/complete`,
         admin_pending_fail: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/fail`,
         admin_pending_reset: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/reset`,
+        admin_pg_verify: `GET ${base}/api/v1/admin/pg/verify`,
         pull_tasks_pending_public: `GET ${base}/api/v1/pull-tasks/pending?target=`,
         site_auth_nonce: `POST ${base}/api/v1/site-auth/nonce`,
         site_auth_verify: `POST ${base}/api/v1/site-auth/verify`,
@@ -407,6 +422,9 @@ export function registerRoutes(
   router.post("/api/v1/admin/chat/messages/:id/reset", (req, res) =>
     admin.resetChatMessage(adminDeps, req, res),
   );
+  // PostgreSQL migration verification probe (migration gate: only start
+  // the driver rewrite / data load / cutover once this reports ok:true).
+  router.get("/api/v1/admin/pg/verify", (req, res) => admin.getPgVerify(adminDeps, req, res));
   // Public detector for the 5-second hook: waiting ids only, no prompts.
   // Deliberately unauthenticated — the hook runtime holds no secrets.
   router.get("/api/v1/pull-tasks/pending", (req, res) =>

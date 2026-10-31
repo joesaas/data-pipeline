@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import type { Request, Response } from "express";
 import type { AppConfig } from "../config.js";
 import type { AuthService } from "../auth/auth.js";
+import { verifyPg, type PgVerifyResult } from "../pg/verify.js";
 import { ADMIN_IDENTITY, type ChatMessageStatus, type PendingTaskPublic, type PendingTaskStatus, type StoredPendingTask, type StoredPullTask, type StoredToken, type StoredWebhook, type TokenRole, type WebhookMeta } from "../domain/types.js";
 import { parseCron } from "@data-pipeline/shared";
 import type { StorageDriver } from "../storage/storage-driver.js";
@@ -26,6 +27,8 @@ export interface AdminDeps {
   auth: AuthService;
   driver: StorageDriver;
   envFile: string | null;
+  /** Override for the PG verify probe (tests inject a stub; production uses verifyPg). */
+  pgVerify?: () => Promise<PgVerifyResult>;
 }
 
 export function publicToken(t: StoredToken): {
@@ -1036,6 +1039,27 @@ export function resetChatMessage(deps: AdminDeps, req: Request, res: Response): 
     updated_at: new Date().toISOString(),
   });
   res.json(reset);
+}
+
+/**
+ * PostgreSQL migration verification probe (see src/pg/verify.ts). Admin
+ * only. Always answers 200 with a diagnostic envelope: ok is true only
+ * when every check passes and all 16 tables exist. A failed probe is
+ * data (the migration is not ready), not a server error, so it never
+ * surfaces as a 500 — and the envelope never carries credentials: the
+ * IAM token is generated per connection inside verifyPg and never
+ * returned, logged, or embedded in an error message.
+ */
+export async function getPgVerify(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if (adminOf(deps, req, res) === null) return;
+  try {
+    const probe = deps.pgVerify ?? (() => verifyPg());
+    const result = await probe();
+    res.json(result);
+  } catch {
+    // verifyPg itself never throws, but a probe must never crash the API.
+    res.status(500).json({ ok: false, reason: "pg verify failed" });
+  }
 }
 
 /**
