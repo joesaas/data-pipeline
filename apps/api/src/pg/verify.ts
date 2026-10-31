@@ -16,6 +16,10 @@ import { Pool } from "pg";
  * 15 minutes and are only checked at connect time, so a stored password
  * would go stale). The token value is never logged, returned, or put in
  * an error message.
+ *
+ * Deploy note: this file's first push (ccd3ab0f) failed to deploy on
+ * ENOSPC during npm install; this comment-only change retriggers the
+ * auto-deploy after disk space was freed.
  */
 
 export interface PgVerifyConfig {
