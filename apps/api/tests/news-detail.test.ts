@@ -48,6 +48,7 @@ describe("news-detail endpoints", () => {
       basePath: "/data-pipeline",
       dataDir: dir,
       storage: "sqlite",
+    newsDetailStorage: "sqlite",
       authRequired: false,
       maxContentBytes: 1_048_576,
       maxPromptBytes: 65_536,
@@ -64,7 +65,7 @@ describe("news-detail endpoints", () => {
     base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}/data-pipeline`;
   });
 
-  after(() => {
+  after(async () => {
     server.close();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -171,6 +172,7 @@ describe("news-detail endpoints without a cleaned database yet", () => {
       basePath: "/data-pipeline",
       dataDir: dir,
       storage: "sqlite",
+    newsDetailStorage: "sqlite",
       authRequired: false,
       maxContentBytes: 1_048_576,
       maxPromptBytes: 65_536,
@@ -189,7 +191,7 @@ describe("news-detail endpoints without a cleaned database yet", () => {
     assert.equal(res.status, 200);
     assert.deepEqual(((await res.json()) as { items: unknown[] }).items, []);
     server.close();
-    driver.close();
+    await driver.close();
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -246,6 +248,7 @@ describe("news-detail pending beyond 500 done items", () => {
       basePath: "/data-pipeline",
       dataDir: dir,
       storage: "sqlite",
+    newsDetailStorage: "sqlite",
       authRequired: false,
       maxContentBytes: 1_048_576,
       maxPromptBytes: 65_536,
@@ -262,7 +265,7 @@ describe("news-detail pending beyond 500 done items", () => {
     base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}/data-pipeline`;
   });
 
-  after(() => {
+  after(async () => {
     server.close();
     rmSync(dir, { recursive: true, force: true });
   });

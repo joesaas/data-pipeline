@@ -1,9 +1,9 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import type { AppConfig } from "../config.js";
-import type { CleanedReader, CleanedItemView } from "../cleaned/cleaned-reader.js";
+import type { CleanedReaderLike, CleanedItemView } from "../cleaned/cleaned-reader.js";
 import { ValidationError } from "../domain/types.js";
-import type { NewsDetailStore } from "./news-detail-store.js";
+import type { NewsDetailPage, NewsDetailStoreLike } from "./news-detail-store.js";
 
 export class NotFoundError extends Error {
   constructor(message: string) {
@@ -58,8 +58,8 @@ export function validateDetailPath(detailPath: string): void {
 
 export class NewsDetailService {
   constructor(
-    private readonly cleaned: CleanedReader,
-    private readonly store: NewsDetailStore,
+    private readonly cleaned: CleanedReaderLike,
+    private readonly store: NewsDetailStoreLike,
     private readonly config: AppConfig,
   ) {}
 
@@ -106,15 +106,15 @@ export class NewsDetailService {
    * deletes items when it re-cleans a record, so done rows can
    * outlive cleaned rows and that check could falsely report empty.
    */
-  listPending(limitInput: number): { items: PendingNewsDetailItem[]; limit: number } {
+  async listPending(limitInput: number): Promise<{ items: PendingNewsDetailItem[]; limit: number }> {
     const limit = Math.min(Math.max(Math.floor(limitInput) || 10, 1), 10);
-    const { total } = this.cleaned.listItems({ limit: 1, offset: 0 });
+    const { total } = await this.cleaned.listItems({ limit: 1, offset: 0 });
     if (total === 0) return { items: [], limit };
-    const doneIds = new Set(this.store.listDone().map((row) => row.item_id));
+    const doneIds = new Set((await this.store.listDone()).map((row) => row.item_id));
     const items: PendingNewsDetailItem[] = [];
     const pageSize = 50;
     for (let offset = 0; offset < total && items.length < limit; offset += pageSize) {
-      const page = this.cleaned.listItems({
+      const page = await this.cleaned.listItems({
         limit: pageSize,
         offset,
         order: "cleaned_asc",
@@ -129,11 +129,11 @@ export class NewsDetailService {
     return { items, limit };
   }
 
-  getPage(itemId: string): ReturnType<NewsDetailStore["get"]> {
+  getPage(itemId: string): Promise<NewsDetailPage | null> {
     return this.store.get(itemId);
   }
 
-  listDone(): { item_id: string; detail_path: string }[] {
+  async listDone(): Promise<{ item_id: string; detail_path: string }[]> {
     return this.store.listDone();
   }
 
@@ -143,18 +143,18 @@ export class NewsDetailService {
    * done, and a re-push overwrites the file and the row (status
    * "replaced", same item_id and same default file name).
    */
-  savePage(input: {
+  async savePage(input: {
     item_id: string;
     html: string;
     detail_path?: string;
-  }): {
+  }): Promise<{
     item_id: string;
     detail_path: string;
     original_url: string;
     status: "created" | "replaced";
     updated_at: string;
-  } {
-    const item = this.cleaned.getItem(input.item_id);
+  }> {
+    const item = await this.cleaned.getItem(input.item_id);
     if (!item) {
       throw new NotFoundError(`cleaned item not found: ${input.item_id}`);
     }
@@ -188,8 +188,8 @@ export class NewsDetailService {
     renameSync(tmp, target);
 
     const now = new Date().toISOString();
-    const existing = this.store.get(input.item_id);
-    const status = this.store.save({
+    const existing = await this.store.get(input.item_id);
+    const status = await this.store.save({
       item_id: input.item_id,
       detail_path: detailPath,
       status: "done",

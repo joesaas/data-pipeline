@@ -10,7 +10,7 @@ describe("loadDefaultEnv", () => {
   const file = join(dir, ".env");
   writeFileSync(file, "DP_LOADENV_SET=set-by-file\nDP_LOADENV_KEEP=file-value\n");
   process.env.DP_LOADENV_KEEP = "env-value";
-  after(() => {
+  after(async () => {
     rmSync(dir, { recursive: true, force: true });
     delete process.env.DP_LOADENV_SET;
     delete process.env.DP_LOADENV_KEEP;

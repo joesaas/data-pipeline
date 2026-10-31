@@ -6,11 +6,13 @@ import { registerRoutes } from "./http/routes.js";
 import type { PgVerifyResult } from "./pg/verify.js";
 import { IngestService } from "./ingest/ingest-service.js";
 import { FileDriver } from "./storage/file-driver.js";
+import { PgDriver } from "./storage/pg-driver.js";
 import { SqliteDriver } from "./storage/sqlite-driver.js";
 import type { StorageDriver } from "./storage/storage-driver.js";
 
 export function createDriver(config: AppConfig): StorageDriver {
   if (config.storage === "file") return new FileDriver(join(config.dataDir, "files"));
+  if (config.storage === "pg") return new PgDriver();
   return new SqliteDriver(join(config.dataDir, "data.db"));
 }
 

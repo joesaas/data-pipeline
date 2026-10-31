@@ -18,8 +18,14 @@
     "start": "node dist/src/main.js",
     "test": "node --test dist/tests/*.test.js"
   },
+  "dependencies": {
+    "@data-pipeline/shared": "*",
+    "@aws-sdk/rds-signer": "^3.1161.0",
+    "pg": "^8.23.1"
+  },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
     "typescript": "^5.7.0"
   }
 }

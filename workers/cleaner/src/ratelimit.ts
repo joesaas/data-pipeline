@@ -1,4 +1,4 @@
-import type { CleanerStore } from "./store.js";
+import type { CleanerStoreLike } from "./store.js";
 
 export interface LlmRateLimits {
   /** Max real LLM calls in any rolling 60 minutes. <= 0 disables. */
@@ -17,27 +17,27 @@ const DAY_MS = 86_400_000;
  */
 export class LlmRateLimiter {
   constructor(
-    private readonly store: CleanerStore,
+    private readonly store: CleanerStoreLike,
     readonly limits: LlmRateLimits,
     private readonly now: () => number = Date.now,
   ) {}
 
-  usage(): { lastHour: number; lastDay: number } {
+  async usage(): Promise<{ lastHour: number; lastDay: number }> {
     const t = this.now();
     return {
-      lastHour: this.store.countLlmCalls(t - HOUR_MS),
-      lastDay: this.store.countLlmCalls(t - DAY_MS),
+      lastHour: await this.store.countLlmCalls(t - HOUR_MS),
+      lastDay: await this.store.countLlmCalls(t - DAY_MS),
     };
   }
 
-  tryAcquire(): boolean {
+  async tryAcquire(): Promise<boolean> {
     const { perHour, perDay } = this.limits;
-    const u = this.usage();
+    const u = await this.usage();
     if (perHour > 0 && u.lastHour >= perHour) return false;
     if (perDay > 0 && u.lastDay >= perDay) return false;
     const t = this.now();
-    this.store.recordLlmCall(t);
-    this.store.pruneLlmCalls(t - DAY_MS);
+    await this.store.recordLlmCall(t);
+    await this.store.pruneLlmCalls(t - DAY_MS);
     return true;
   }
 }

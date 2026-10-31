@@ -19,11 +19,14 @@ import { createRecordsClient } from "./client.js";
 import { LlmRateLimiter } from "./ratelimit.js";
 import { createLlmProvider } from "./providers.js";
 import { CleanerStore } from "./store.js";
+import { PgCleanerStore } from "./pg-store.js";
+import type { CleanerStoreLike } from "./store.js";
 import { loadCleanPrompt } from "./prompt.js";
 import { loadTranslatePrompt } from "./translate.js";
 import { runBatch, type BatchStats } from "./batch.js";
 import { repoRoot, setupFileLogging } from "./log.js";
-import { exportSite } from "@data-pipeline/exporter";
+import { maybeExport } from "./maybe-export.js";
+import { createPgPool, resolvePgConfig, type PgPoolLike } from "./pg-pool.js";
 
 const logFile = setupFileLogging("data-cleaner");
 if (logFile) console.log(`[cleaner] logging to ${logFile}`);
@@ -39,32 +42,49 @@ const llmRateLimits = {
 };
 
 /**
- * After a batch that cleaned something new, re-export the static site.
- * Failure isolation is a hard rule: an export error is logged and ignored,
- * it must never change the batch outcome.
+ * Export pool for PG mode, created once per cleaner process and reused
+ * across exports (same IAM token-callback pool as the store pool, but
+ * a separate instance: the store pool belongs to PgCleanerStore and
+ * is not exposed). Only created when a PG-mode export actually runs;
+ * a SQLite-mode cleaner never creates it. resolvePgConfig cannot fail
+ * here in practice — a PG store already validated the same config at
+ * construction — but a failure still surfaces through maybeExport's
+ * log-and-ignore path instead of crashing the batch.
  */
-function maybeExport(stats: BatchStats): void {
-  if (stats.cleaned <= 0 && stats.translated <= 0) return;
-  if (process.env.WEB_EXPORT_ON_CLEAN === "false") return;
-  try {
-    const outDir = process.env.WEB_EXPORT_DIR?.trim() || join(repoRoot(), "web-dist");
-    const result = exportSite({
-      dbFile: store.filePath,
-      outDir,
-      publicApiPath: process.env.PUBLIC_API_PATH,
-      publicSiteUrl: process.env.PUBLIC_SITE_URL,
-      // Same detailDir as the manual exporter: without it, a cleaner-
-      // triggered export would silently revert list links to old pages.
-      detailDir: process.env.NEWS_DETAIL_DIR?.trim() || undefined,
-    });
-    console.log(`[cleaner] exported static site: ${result.items} items (${result.detailPages} rich detail) -> ${result.currentLink}`);
-  } catch (err) {
-    console.error(`[cleaner] export failed (ignored): ${err instanceof Error ? err.message : String(err)}`);
+let exportPool: PgPoolLike | null = null;
+function getExportPool(): PgPoolLike {
+  if (!exportPool) {
+    const config = resolvePgConfig();
+    if ("error" in config) throw new Error(config.error);
+    exportPool = createPgPool(config);
   }
+  return exportPool;
+}
+
+async function exportAfterBatch(stats: BatchStats): Promise<void> {
+  await maybeExport(stats, {
+    storeFilePath: store.filePath,
+    getPgPool: getExportPool,
+    outDir: process.env.WEB_EXPORT_DIR?.trim() || join(repoRoot(), "web-dist"),
+    publicApiPath: process.env.PUBLIC_API_PATH,
+    publicSiteUrl: process.env.PUBLIC_SITE_URL,
+    // Same detailDir as the manual exporter: without it, a cleaner-
+    // triggered export would silently revert list links to old pages.
+    detailDir: process.env.NEWS_DETAIL_DIR?.trim() || undefined,
+    webExportOnClean: process.env.WEB_EXPORT_ON_CLEAN,
+  });
 }
 
 const provider = createLlmProvider(process.env);
-const store = new CleanerStore(CleanerStore.defaultPath());
+/** Storage backend selection: default SQLite; PG only when
+ * CLEANER_STORAGE_DRIVER=pg. An unknown value fails fast instead of
+ * silently falling back — a mistyped env must not serve the wrong DB. */
+const cleanerDriver = (process.env.CLEANER_STORAGE_DRIVER ?? "").trim();
+if (cleanerDriver !== "" && cleanerDriver !== "sqlite" && cleanerDriver !== "pg") {
+  throw new Error(`unknown CLEANER_STORAGE_DRIVER: ${cleanerDriver} (expected sqlite or pg)`);
+}
+const store: CleanerStoreLike =
+  cleanerDriver === "pg" ? new PgCleanerStore() : new CleanerStore(CleanerStore.defaultPath());
 const rateLimiter = new LlmRateLimiter(store, llmRateLimits);
 const deps = {
   client: createRecordsClient(baseUrl, fetch, process.env.DATA_PIPELINE_API_KEY?.trim() || undefined),
@@ -92,15 +112,16 @@ async function runOnce(): Promise<BatchStats> {
 
 async function main(): Promise<void> {
   console.log(
-    `[cleaner] start mode=${once ? "once" : "service"} source=${baseUrl} provider=${provider.name}/${provider.model} interval=${intervalMinutes}m llm_budget=${llmRateLimits.perHour}/h,${llmRateLimits.perDay}/d store=${CleanerStore.defaultPath()}`,
+    `[cleaner] start mode=${once ? "once" : "service"} source=${baseUrl} provider=${provider.name}/${provider.model} interval=${intervalMinutes}m llm_budget=${llmRateLimits.perHour}/h,${llmRateLimits.perDay}/d store=${store.filePath ?? "pg:data_pipeline"}`,
   );
   if (provider.name === "mock") {
     console.log("[cleaner] WARNING: no LLM_API_KEY set — running the heuristic mock provider; output is marked provider=mock");
   }
   if (once) {
     const stats = await runOnce();
-    maybeExport(stats);
-    store.close();
+    await exportAfterBatch(stats);
+    await store.close();
+    if (exportPool) await exportPool.end();
     process.exit(stats.failed > 0 ? 1 : 0);
   }
   // service mode: run immediately, then schedule after each batch finishes
@@ -108,7 +129,7 @@ async function main(): Promise<void> {
     if (stopping) return;
     try {
       const stats = await runOnce();
-      maybeExport(stats);
+      await exportAfterBatch(stats);
     } catch (err) {
       console.error(`[cleaner] batch error: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -129,7 +150,8 @@ async function main(): Promise<void> {
     } catch {
       /* already logged */
     }
-    store.close();
+    await store.close();
+    if (exportPool) await exportPool.end();
     process.exit(0);
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));

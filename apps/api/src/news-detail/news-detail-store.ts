@@ -24,7 +24,18 @@ export interface NewsDetailPage {
   updated_at: string;
 }
 
-export class NewsDetailStore {
+/** Async store surface shared by the SQLite NewsDetailStore and the
+ * PG PgNewsDetailStore (news-detail/pg-news-detail-store.ts). */
+export interface NewsDetailStoreLike {
+  get(itemId: string): Promise<NewsDetailPage | null>;
+  /** Upsert by item_id. Returns "created" on first insert, "replaced" on overwrite. */
+  save(page: NewsDetailPage): Promise<"created" | "replaced">;
+  /** All done rows (item_id + detail_path only), oldest updated first. */
+  listDone(): Promise<{ item_id: string; detail_path: string }[]>;
+  countDone(): Promise<number>;
+}
+
+export class NewsDetailStore implements NewsDetailStoreLike {
   constructor(private readonly dbFile: string) {}
 
   private open(): DatabaseSync {
@@ -45,7 +56,7 @@ export class NewsDetailStore {
     return db;
   }
 
-  get(itemId: string): NewsDetailPage | null {
+  async get(itemId: string): Promise<NewsDetailPage | null> {
     const db = this.open();
     try {
       const row = db
@@ -57,8 +68,7 @@ export class NewsDetailStore {
     }
   }
 
-  /** Upsert by item_id. Returns "created" on first insert, "replaced" on overwrite. */
-  save(page: NewsDetailPage): "created" | "replaced" {
+  async save(page: NewsDetailPage): Promise<"created" | "replaced"> {
     const db = this.open();
     try {
       const existing = db
@@ -89,7 +99,7 @@ export class NewsDetailStore {
   /** All done rows (item_id + detail_path only): the public list
    *  the news-site list page uses to rewrite card links at load time,
    *  without needing an API key or a re-export. */
-  listDone(): { item_id: string; detail_path: string }[] {
+  async listDone(): Promise<{ item_id: string; detail_path: string }[]> {
     if (!existsSync(this.dbFile) && this.dbFile !== ":memory:") return [];
     const db = this.open();
     try {
@@ -101,7 +111,7 @@ export class NewsDetailStore {
     }
   }
 
-  countDone(): number {
+  async countDone(): Promise<number> {
     if (!existsSync(this.dbFile) && this.dbFile !== ":memory:") return 0;
     const db = this.open();
     try {

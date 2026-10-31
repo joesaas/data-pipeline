@@ -45,6 +45,7 @@ describe("cleaned endpoints", () => {
       basePath: "/data-pipeline",
       dataDir: dir,
       storage: "sqlite",
+    newsDetailStorage: "sqlite",
       authRequired: false,
       maxContentBytes: 1_048_576,
       maxPromptBytes: 65_536,
@@ -61,7 +62,7 @@ describe("cleaned endpoints", () => {
     base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}/data-pipeline`;
   });
 
-  after(() => {
+  after(async () => {
     server.close();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -124,6 +125,7 @@ describe("cleaned endpoints without a cleaned database yet", () => {
       basePath: "/data-pipeline",
       dataDir: dir,
       storage: "sqlite",
+    newsDetailStorage: "sqlite",
       authRequired: false,
       maxContentBytes: 1_048_576,
       maxPromptBytes: 65_536,
@@ -142,7 +144,7 @@ describe("cleaned endpoints without a cleaned database yet", () => {
     assert.equal(res.status, 200);
     assert.equal(((await res.json()) as { total: number }).total, 0);
     server.close();
-    driver.close();
+    await driver.close();
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -176,7 +178,7 @@ describe("cleaned endpoints: category merge + translation", () => {
       "Web3 DeFi", "[]", "2026-10-22", "[]", null);
     db.close();
     const config: AppConfig = {
-      port: 0, basePath: "/data-pipeline", dataDir: dir, storage: "sqlite", authRequired: false,
+      port: 0, basePath: "/data-pipeline", dataDir: dir, storage: "sqlite", newsDetailStorage: "sqlite", authRequired: false,
       maxContentBytes: 1_048_576, maxPromptBytes: 65_536, rateLimitPerMin: 60, cleanedDbFile,
       newsSiteUrl: "https://agent101.uk/news",
       newsDetailDir: join(dir, "news-detail"),
@@ -189,7 +191,7 @@ describe("cleaned endpoints: category merge + translation", () => {
     base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}/data-pipeline`;
   });
 
-  after(() => {
+  after(async () => {
     server.close();
     rmSync(dir, { recursive: true, force: true });
   });

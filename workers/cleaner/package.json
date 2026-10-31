@@ -14,10 +14,13 @@
   },
   "dependencies": {
     "@data-pipeline/shared": "*",
-    "@data-pipeline/exporter": "*"
+    "@data-pipeline/exporter": "*",
+    "pg": "^8.23.1",
+    "@aws-sdk/rds-signer": "^3.1161.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "@types/pg": "^8.23.1"
   }
 }

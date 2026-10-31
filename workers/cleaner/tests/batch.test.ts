@@ -50,7 +50,7 @@ describe("runBatch", () => {
     const second = await runBatch(deps);
     assert.equal(second.fetched, 0); // cursor moved past r1: nothing is re-fetched
     assert.equal(second.cleaned, 0);
-    store.close();
+    await store.close();
   });
   it("rejects records that fail the quality gate", async () => {
     const store = new CleanerStore(":memory:");
@@ -65,7 +65,7 @@ describe("runBatch", () => {
       log: () => {},
     });
     assert.equal(stats.rejected, 1);
-    store.close();
+    await store.close();
   });
 
   it("skips a 0-item provider result instead of failing and blocking the next record", async () => {
@@ -93,10 +93,10 @@ describe("runBatch", () => {
     assert.equal(stats.skipped, 1); // the empty brief, terminal — not a failure
     assert.equal(stats.failed, 0);
     assert.equal(stats.cleaned, 1); // the record behind it is reached in the same round
-    assert.equal(store.getAttempts("e1"), 0);
+    assert.equal(await store.getAttempts("e1"), 0);
     const second = await runBatch(deps);
     assert.equal(second.fetched, 0); // cursor advanced past both records
-    store.close();
+    await store.close();
   });
 
   it("skips mailbox records (muse-inbox / muse-inbox-result) without cleaning them", async () => {
@@ -119,7 +119,7 @@ describe("runBatch", () => {
     assert.equal(stats.cleaned, 1); // only the news record
     const second = await runBatch(deps);
     assert.equal(second.fetched, 0); // cursor advanced past all three
-    store.close();
+    await store.close();
   });
 });
 
@@ -152,8 +152,8 @@ describe("runBatch cursor + budget discipline", () => {
     assert.equal(stats.cleaned, 1);
     assert.equal(stats.deferred, 1);
     assert.equal(stats.failed, 0);
-    assert.equal(store.getCursor()?.id, "a1"); // cursor stopped before the deferred record
-    store.close();
+    assert.equal((await store.getCursor())?.id, "a1"); // cursor stopped before the deferred record
+    await store.close();
   });
 
   it("a failing record stops the batch and keeps the cursor before it", async () => {
@@ -178,9 +178,9 @@ describe("runBatch cursor + budget discipline", () => {
     });
     assert.equal(stats.failed, 1);
     assert.equal(stats.deferred, 1);
-    assert.equal(store.getCursor(), null);
-    assert.equal(store.getAttempts("a1"), 1);
-    store.close();
+    assert.equal(await store.getCursor(), null);
+    assert.equal(await store.getAttempts("a1"), 1);
+    await store.close();
   });
 });
 
@@ -217,11 +217,11 @@ describe("runBatch translation phase", () => {
     assert.equal(stats.cleaned, 2);
     assert.equal(calls.n, 1); // one batched call for the entire round
     assert.ok(stats.translated >= 2);
-    assert.equal(store.listUntranslated(10).length, 0);
+    assert.equal((await store.listUntranslated(10)).length, 0);
     const second = await runBatch(enDeps(store, calls));
     assert.equal(calls.n, 1); // nothing pending -> no further call
     assert.equal(second.translated, 0);
-    store.close();
+    await store.close();
   });
 
   it("mock provider never translates", async () => {
@@ -237,8 +237,8 @@ describe("runBatch translation phase", () => {
       log: () => {},
     });
     assert.equal(stats.translated, 0);
-    assert.equal(store.listUntranslated(10).length, 1); // left pending, not marked
-    store.close();
+    assert.equal((await store.listUntranslated(10)).length, 1); // left pending, not marked
+    await store.close();
   });
 });
 
@@ -269,7 +269,7 @@ describe("runBatch cross-record dedupe", () => {
     });
     assert.equal(second.deduped, 2);
     assert.equal(second.items, 1);
-    assert.equal(store.listUntranslated(10).length, 2); // 1 kept from each record
-    store.close();
+    assert.equal((await store.listUntranslated(10)).length, 2); // 1 kept from each record
+    await store.close();
   });
 });

@@ -49,7 +49,10 @@ export interface CleanedStats {
   providers: { provider: string; model: string; records: number }[];
 }
 
-interface ItemRow {
+/** Row shape shared by the SQLite reader (TEXT JSON, ISO text times)
+ * and the PG reader (native JSONB arrays/objects, TIMESTAMPTZ Dates).
+ * The view mapper below normalizes both to the same CleanedItemView. */
+export interface ItemRow {
   id: string;
   source_record_id: string;
   idx: number;
@@ -57,14 +60,43 @@ interface ItemRow {
   summary: string;
   detail: string | null;
   category: string;
-  tags: string;
+  tags: string | string[];
   event_date: string | null;
-  sources: string;
+  sources: string | CleanedSourceView[];
   translation_zh: string | null;
   source_agent: string;
-  cleaned_at: string;
+  cleaned_at: string | Date;
   provider: string;
   model: string;
+}
+
+/** TIMESTAMPTZ arrives as a Date from pg; SQLite TEXT is already ISO.
+ * Callers always get ISO strings, never a Date. */
+export function toIso(v: string | Date): string {
+  return v instanceof Date ? v.toISOString() : v;
+}
+
+export interface CleanedListFilter {
+  category?: string;
+  q?: string;
+  limit: number;
+  offset: number;
+  /** Default "cleaned_desc" (existing behaviour). "cleaned_asc" is
+   *  used by the news-detail pending queue so the oldest
+   *  ungenerated items are picked up first. */
+  order?: "cleaned_desc" | "cleaned_asc";
+}
+
+/** Async read surface shared by the SQLite CleanedReader and the PG
+ * PgCleanedReader. One deliberate difference: the SQLite reader
+ * degrades to empty results when the file is missing; the PG reader
+ * THROWS on connection errors, because the tables are pre-created and
+ * a silent empty on a DB outage would break the pending queue
+ * silently and mask the outage. */
+export interface CleanedReaderLike {
+  listItems(filter: CleanedListFilter): Promise<{ items: CleanedItemView[]; total: number }>;
+  getItem(id: string): Promise<CleanedItemView | null>;
+  stats(): Promise<CleanedStats>;
 }
 
 function parseJsonArray<T>(text: string): T[] {
@@ -76,13 +108,16 @@ function parseJsonArray<T>(text: string): T[] {
   }
 }
 
-function toView(row: ItemRow): CleanedItemView {
+export function toCleanedItemView(row: ItemRow): CleanedItemView {
   const parts = eventParts(row.event_date);
-  const weight = computeWeight(row.cleaned_at);
+  const cleanedAt = toIso(row.cleaned_at);
+  const weight = computeWeight(cleanedAt);
   const zh = parseTranslationZh(row.translation_zh);
   const { translation_zh: _raw, ...rest } = row;
   return {
     ...rest,
+    idx: Number(row.idx),
+    cleaned_at: cleanedAt,
     category: canonicalCategory(row.category),
     title_zh: zh?.title || null,
     summary_zh: zh?.summary || null,
@@ -91,8 +126,8 @@ function toView(row: ItemRow): CleanedItemView {
     event_day: parts?.event_day ?? null,
     weight,
     weight_tier: weightTier(weight),
-    tags: parseJsonArray<string>(row.tags),
-    sources: parseJsonArray<CleanedSourceView>(row.sources),
+    tags: typeof row.tags === "string" ? parseJsonArray<string>(row.tags) : row.tags,
+    sources: typeof row.sources === "string" ? parseJsonArray<CleanedSourceView>(row.sources) : row.sources,
   };
 }
 
@@ -121,7 +156,7 @@ function selectSql(db: DatabaseSync): string {
  * instead of failing. A fresh connection per call keeps this correct when
  * the cleaner replaces the file.
  */
-export class CleanedReader {
+export class CleanedReader implements CleanedReaderLike {
   constructor(private readonly dbFile: string) {}
 
   private open(): DatabaseSync | null {
@@ -133,16 +168,7 @@ export class CleanedReader {
     }
   }
 
-  listItems(filter: {
-    category?: string;
-    q?: string;
-    limit: number;
-    offset: number;
-    /** Default "cleaned_desc" (existing behaviour). "cleaned_asc" is
-     *  used by the news-detail pending queue so the oldest
-     *  ungenerated items are picked up first. */
-    order?: "cleaned_desc" | "cleaned_asc";
-  }): { items: CleanedItemView[]; total: number } {
+  async listItems(filter: CleanedListFilter): Promise<{ items: CleanedItemView[]; total: number }> {
     const db = this.open();
     if (!db) return { items: [], total: 0 };
     try {
@@ -171,24 +197,24 @@ export class CleanedReader {
            LIMIT ? OFFSET ?`,
         )
         .all(...params, filter.limit, filter.offset) as ItemRow[];
-      return { items: rows.map(toView), total: Number(totalRow.n) };
+      return { items: rows.map(toCleanedItemView), total: Number(totalRow.n) };
     } finally {
       db.close();
     }
   }
 
-  getItem(id: string): CleanedItemView | null {
+  async getItem(id: string): Promise<CleanedItemView | null> {
     const db = this.open();
     if (!db) return null;
     try {
       const row = db.prepare(`${selectSql(db)} WHERE i.id = ?`).get(id) as ItemRow | undefined;
-      return row ? toView(row) : null;
+      return row ? toCleanedItemView(row) : null;
     } finally {
       db.close();
     }
   }
 
-  stats(): CleanedStats {
+  async stats(): Promise<CleanedStats> {
     const empty: CleanedStats = { records: 0, items: 0, last_cleaned_at: null, categories: [], providers: [] };
     const db = this.open();
     if (!db) return empty;

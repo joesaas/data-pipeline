@@ -13,6 +13,7 @@ function baseConfig(dir: string, resourceDir: string): AppConfig {
     basePath: "/data-pipeline",
     dataDir: dir,
     storage: "sqlite",
+    newsDetailStorage: "sqlite",
     authRequired: false,
     maxContentBytes: 1_048_576,
     maxPromptBytes: 65_536,
@@ -40,14 +41,14 @@ describe("resource upload endpoints", () => {
     const { app, auth } = createApp(baseConfig(dir, resourceDir));
     // Resource uploads require a valid key even when the global
     // AUTH_REQUIRED flag is off, so issue one for these tests.
-    apiKey = auth.createToken("resource-test").plainKey;
+    apiKey = (await auth.createToken("resource-test")).plainKey;
     server = app.listen(0);
     await new Promise<void>((r) => server.once("listening", r));
     const addr = server.address();
     base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}/data-pipeline`;
   });
 
-  after(() => {
+  after(async () => {
     server.close();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -193,7 +194,7 @@ describe("resource upload endpoints with auth required", () => {
     });
     assert.equal(res.status, 401);
     server.close();
-    driver.close();
+    await driver.close();
     rmSync(dir, { recursive: true, force: true });
   });
 });

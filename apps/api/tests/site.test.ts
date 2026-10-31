@@ -14,6 +14,7 @@ function baseConfig(dir: string): AppConfig {
     basePath: "/data-pipeline",
     dataDir: join(dir, "data"),
     storage: "sqlite",
+    newsDetailStorage: "sqlite",
     authRequired: true,
     maxContentBytes: 1_048_576,
     maxPromptBytes: 65_536,
@@ -33,9 +34,9 @@ async function start(config: AppConfig) {
   const port = typeof addr === "object" && addr ? addr.port : 0;
   return {
     base: `http://127.0.0.1:${port}`,
-    close: () => {
+    close: async () => {
       server.close();
-      driver.close();
+      await driver.close();
     },
   };
 }
@@ -86,7 +87,7 @@ describe("site wallet login + favorites", () => {
     ctx = await start(baseConfig(dir));
   });
 
-  after(() => ctx.close());
+  after(async () => { await ctx.close(); });
 
   it("nonce -> signature -> session; favorites are per-address and need a session", async () => {
     const wallet = Wallet.createRandom();

@@ -3,7 +3,7 @@ import type { RecordsClient, RecordCursor } from "./client.js";
 import type { LlmProvider } from "./providers.js";
 import { checkQuality } from "./quality.js";
 import type { LlmRateLimiter } from "./ratelimit.js";
-import type { CleanerStore } from "./store.js";
+import type { CleanerStoreLike } from "./store.js";
 import { PROMPT_VERSION } from "./prompt.js";
 import { needsTranslation, TRANSLATE_PROMPT_VERSION } from "./translate.js";
 import { dedupeItems } from "./dedupe.js";
@@ -23,7 +23,7 @@ export interface BatchStats {
 export interface BatchDeps {
   client: RecordsClient;
   provider: LlmProvider;
-  store: CleanerStore;
+  store: CleanerStoreLike;
   systemPrompt: string;
   /** System prompt for the round's single batched translation call. */
   translatePrompt: string;
@@ -73,12 +73,12 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
     translated: 0,
     deduped: 0,
   };
-  const startCursor = deps.store.getCursor();
+  const startCursor = await deps.store.getCursor();
   const records: RawRecord[] = await deps.client.fetchSince(startCursor, deps.limit);
   stats.fetched = records.length;
-  const advance = (record: RawRecord): void => {
+  const advance = async (record: RawRecord): Promise<void> => {
     const cursor: RecordCursor = { updated_at: record.updated_at, id: record.id };
-    deps.store.setCursor(cursor);
+    await deps.store.setCursor(cursor);
   };
 
   for (let i = 0; i < records.length; i++) {
@@ -92,23 +92,23 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
     if (SKIPPED_SOURCE_AGENTS.has(record.source_agent)) {
       stats.skipped += 1;
       log(`[cleaner] skipped ${record.id}: source_agent=${record.source_agent} is not news content (skip list)`);
-      advance(record);
+      await advance(record);
       continue;
     }
     const quality = checkQuality(record);
     if (!quality.ok) {
       stats.rejected += 1;
       log(`[cleaner] rejected ${record.id}: ${quality.reason}`);
-      advance(record);
+      await advance(record);
       continue;
     }
-    if (deps.store.cleanedHash(record.id) === record.content_hash) {
+    if ((await deps.store.cleanedHash(record.id)) === record.content_hash) {
       stats.skipped += 1;
       advance(record);
       continue;
     }
-    if (deps.rateLimiter && deps.provider.name !== "mock" && !deps.rateLimiter.tryAcquire()) {
-      const u = deps.rateLimiter.usage();
+    if (deps.rateLimiter && deps.provider.name !== "mock" && !(await deps.rateLimiter.tryAcquire())) {
+      const u = await deps.rateLimiter.usage();
       log(
         `[cleaner] LLM budget exhausted (last hour ${u.lastHour}/${deps.rateLimiter.limits.perHour}, last day ${u.lastDay}/${deps.rateLimiter.limits.perDay}); ${remaining} record(s) deferred`,
       );
@@ -126,19 +126,19 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
         // without an items array — so [] is a valid, parsed result.
         stats.skipped += 1;
         log(`[cleaner] skipped ${record.id}: provider returned 0 items (empty brief, nothing to publish)`);
-        deps.store.setAttempts(record.id, 0);
-        advance(record);
+        await deps.store.setAttempts(record.id, 0);
+        await advance(record);
         continue;
       }
       const { kept: items, dropped } = dedupeItems(
         cleaned,
-        deps.store.recentItemKeys(deps.dedupeWindowDays ?? 7, record.id),
+        await deps.store.recentItemKeys(deps.dedupeWindowDays ?? 7, record.id),
       );
       for (const d of dropped) {
         log(`[cleaner] deduped "${d.item.title}" from ${record.id}: ${d.reason}`);
       }
       stats.deduped += dropped.length;
-      deps.store.save(
+      await deps.store.save(
         record,
         {
           provider: deps.provider.name,
@@ -148,21 +148,21 @@ export async function runBatch(deps: BatchDeps): Promise<BatchStats> {
         },
         items,
       );
-      deps.store.setAttempts(record.id, 0);
+      await deps.store.setAttempts(record.id, 0);
       stats.cleaned += 1;
       stats.items += items.length;
       log(`[cleaner] cleaned ${record.id}: ${items.length} items via ${deps.provider.name}/${deps.provider.model}${dropped.length ? ` (${dropped.length} duplicates dropped)` : ""}`);
-      advance(record);
+      await advance(record);
     } catch (err) {
-      const attempts = deps.store.getAttempts(record.id) + 1;
-      deps.store.setAttempts(record.id, attempts);
+      const attempts = (await deps.store.getAttempts(record.id)) + 1;
+      await deps.store.setAttempts(record.id, attempts);
       if (attempts >= MAX_ATTEMPTS) {
         stats.rejected += 1;
         log(
           `[cleaner] giving up on ${record.id} after ${attempts} failed attempts, treating as rejected: ${err instanceof Error ? err.message : String(err)}`,
         );
-        deps.store.setAttempts(record.id, 0);
-        advance(record);
+        await deps.store.setAttempts(record.id, 0);
+        await advance(record);
         continue;
       }
       stats.failed += 1;
@@ -197,15 +197,15 @@ async function translatePending(
   log: (line: string) => void,
 ): Promise<void> {
   if (deps.provider.name === "mock") return;
-  const pending = deps.store.listUntranslated(TRANSLATE_SWEEP_LIMIT);
+  const pending = await deps.store.listUntranslated(TRANSLATE_SWEEP_LIMIT);
   const entries: { id: string; title: string; summary: string }[] = [];
   for (const row of pending) {
     if (needsTranslation(row.title, row.summary)) entries.push(row);
-    else deps.store.markNoTranslation(row.id);
+    else await deps.store.markNoTranslation(row.id);
   }
   if (entries.length === 0) return;
-  if (deps.rateLimiter && !deps.rateLimiter.tryAcquire()) {
-    const u = deps.rateLimiter.usage();
+  if (deps.rateLimiter && !(await deps.rateLimiter.tryAcquire())) {
+    const u = await deps.rateLimiter.usage();
     log(
       `[cleaner] translation deferred: LLM budget exhausted (last hour ${u.lastHour}/${deps.rateLimiter.limits.perHour}, last day ${u.lastDay}/${deps.rateLimiter.limits.perDay}); ${entries.length} item(s) wait for the next cycle`,
     );
@@ -213,7 +213,7 @@ async function translatePending(
   }
   try {
     const results = await deps.provider.translate(entries, deps.translatePrompt);
-    for (const [id, zh] of results) deps.store.setTranslation(id, zh);
+    for (const [id, zh] of results) await deps.store.setTranslation(id, zh);
     stats.translated = results.size;
     log(
       `[cleaner] translated ${results.size}/${entries.length} items in one batch call (${TRANSLATE_PROMPT_VERSION} via ${deps.provider.name}/${deps.provider.model})`,

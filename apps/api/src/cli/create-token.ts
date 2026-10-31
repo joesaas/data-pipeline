@@ -12,6 +12,6 @@ const isAdmin = args.includes("--admin");
 const name = args.find((a) => !a.startsWith("--")) ?? "default";
 const config = loadConfig();
 const { auth, driver } = createApp(config);
-const { token, plainKey } = auth.createToken(name, isAdmin ? "admin" : "user");
+const { token, plainKey } = await auth.createToken(name, isAdmin ? "admin" : "user");
 console.log(JSON.stringify({ id: token.id, name: token.name, role: token.role ?? "user", api_key: plainKey }));
-driver.close();
+await driver.close();

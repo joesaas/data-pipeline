@@ -17,7 +17,38 @@ export interface CleanMeta {
  * (source_record_id, content_hash): a record is re-cleaned only when its
  * content actually changed.
  */
-export class CleanerStore {
+
+/**
+ * Async store surface shared by the SQLite CleanerStore and the PG
+ * PgCleanerStore (workers/cleaner/src/pg-store.ts). filePath is the
+ * SQLite file when file-backed, null for PG: the exporter still reads
+ * the SQLite file, so main.ts skips the static export when it is null.
+ * The one deliberate semantic difference is listUntranslated order:
+ * SQLite orders by rowid DESC (insertion order); PG has no rowid, so
+ * the PG version orders by (cleaned_at DESC, idx ASC) — newest record
+ * first, deterministic. Order only decides which untranslated items
+ * the sweep picks first, never correctness.
+ */
+export interface CleanerStoreLike {
+  readonly filePath: string | null;
+  listUntranslated(limit: number): Promise<{ id: string; title: string; summary: string }[]>;
+  setTranslation(id: string, zh: { title: string; summary: string }): Promise<void>;
+  markNoTranslation(id: string): Promise<void>;
+  cleanedHash(sourceRecordId: string): Promise<string | null>;
+  save(record: RawRecord, meta: CleanMeta, items: CleanedItem[]): Promise<void>;
+  recentItemKeys(windowDays: number, excludeRecordId: string): Promise<{ title: string; sourceUrls: string[] }[]>;
+  getCursor(): Promise<{ updated_at: string; id: string } | null>;
+  setCursor(cursor: { updated_at: string; id: string }): Promise<void>;
+  getAttempts(sourceRecordId: string): Promise<number>;
+  setAttempts(sourceRecordId: string, n: number): Promise<void>;
+  recordLlmCall(atMs: number): Promise<void>;
+  countLlmCalls(sinceMs: number): Promise<number>;
+  pruneLlmCalls(beforeMs: number): Promise<void>;
+  counts(): Promise<{ records: number; items: number }>;
+  close(): Promise<void>;
+}
+
+export class CleanerStore implements CleanerStoreLike {
   private readonly db: DatabaseSync;
   readonly filePath: string;
 
@@ -119,7 +150,7 @@ export class CleanerStore {
   }
 
   /** Items still awaiting a translation decision, newest first. */
-  listUntranslated(limit: number): { id: string; title: string; summary: string }[] {
+  async listUntranslated(limit: number): Promise<{ id: string; title: string; summary: string }[]> {
     return this.db
       .prepare(
         "SELECT id, title, summary FROM cleaned_items WHERE translation_zh IS NULL ORDER BY rowid DESC LIMIT ?",
@@ -127,14 +158,14 @@ export class CleanerStore {
       .all(limit) as { id: string; title: string; summary: string }[];
   }
 
-  setTranslation(id: string, zh: { title: string; summary: string }): void {
+  async setTranslation(id: string, zh: { title: string; summary: string }): Promise<void> {
     this.db
       .prepare("UPDATE cleaned_items SET translation_zh = ? WHERE id = ?")
       .run(JSON.stringify(zh), id);
   }
 
   /** Mark an item as checked-but-not-needing-translation (already Chinese). */
-  markNoTranslation(id: string): void {
+  async markNoTranslation(id: string): Promise<void> {
     this.db.prepare("UPDATE cleaned_items SET translation_zh = '' WHERE id = ?").run(id);
   }
 
@@ -143,14 +174,14 @@ export class CleanerStore {
     return join(dir && dir.length > 0 ? dir : join(process.cwd(), "data"), "cleaned.sqlite");
   }
 
-  cleanedHash(sourceRecordId: string): string | null {
+  async cleanedHash(sourceRecordId: string): Promise<string | null> {
     const row = this.db
       .prepare("SELECT content_hash FROM cleaned_records WHERE source_record_id = ?")
       .get(sourceRecordId) as { content_hash: string } | undefined;
     return row?.content_hash ?? null;
   }
 
-  save(record: RawRecord, meta: CleanMeta, items: CleanedItem[]): void {
+  async save(record: RawRecord, meta: CleanMeta, items: CleanedItem[]): Promise<void> {
     this.db.exec("BEGIN");
     try {
       this.db
@@ -196,7 +227,7 @@ export class CleanerStore {
    * one record (the one being cleaned — its stored items are about to be
    * replaced by save(), so they must not dedupe against themselves).
    */
-  recentItemKeys(windowDays: number, excludeRecordId: string): { title: string; sourceUrls: string[] }[] {
+  async recentItemKeys(windowDays: number, excludeRecordId: string): Promise<{ title: string; sourceUrls: string[] }[]> {
     const cutoff = new Date(Date.now() - windowDays * 86_400_000).toISOString();
     const rows = this.db
       .prepare(
@@ -219,8 +250,8 @@ export class CleanerStore {
   // fully dealt with. Records after it are fetched next round; the cursor
   // never jumps over an unprocessed record (failure / rate limit stop the
   // batch first), so nothing is silently dropped.
-  getCursor(): { updated_at: string; id: string } | null {
-    const raw = this.getMeta("cursor");
+  async getCursor(): Promise<{ updated_at: string; id: string } | null> {
+    const raw = await this.getMeta("cursor");
     if (!raw) return null;
     try {
       const parsed = JSON.parse(raw) as { updated_at: string; id: string };
@@ -230,16 +261,16 @@ export class CleanerStore {
     }
   }
 
-  setCursor(cursor: { updated_at: string; id: string }): void {
-    this.setMeta("cursor", JSON.stringify(cursor));
+  async setCursor(cursor: { updated_at: string; id: string }): Promise<void> {
+    await this.setMeta("cursor", JSON.stringify(cursor));
   }
 
   // ---- consecutive failure attempts per record (poison-record escape hatch)
-  getAttempts(sourceRecordId: string): number {
-    return Number(this.getMeta(`attempts:${sourceRecordId}`) ?? 0) || 0;
+  async getAttempts(sourceRecordId: string): Promise<number> {
+    return Number(await this.getMeta(`attempts:${sourceRecordId}`) ?? 0) || 0;
   }
 
-  setAttempts(sourceRecordId: string, n: number): void {
+  async setAttempts(sourceRecordId: string, n: number): Promise<void> {
     if (n <= 0) {
       this.db.prepare("DELETE FROM cleaner_meta WHERE key = ?").run(`attempts:${sourceRecordId}`);
     } else {
@@ -248,29 +279,29 @@ export class CleanerStore {
   }
 
   // ---- LLM call log for rolling-window rate limits
-  recordLlmCall(atMs: number): void {
+  async recordLlmCall(atMs: number): Promise<void> {
     this.db.prepare("INSERT INTO llm_calls (called_at) VALUES (?)").run(atMs);
   }
 
-  countLlmCalls(sinceMs: number): number {
+  async countLlmCalls(sinceMs: number): Promise<number> {
     const row = this.db
       .prepare("SELECT COUNT(*) AS n FROM llm_calls WHERE called_at >= ?")
       .get(sinceMs) as { n: number };
     return Number(row.n);
   }
 
-  pruneLlmCalls(beforeMs: number): void {
+  async pruneLlmCalls(beforeMs: number): Promise<void> {
     this.db.prepare("DELETE FROM llm_calls WHERE called_at < ?").run(beforeMs);
   }
 
-  private getMeta(key: string): string | null {
+  private async getMeta(key: string): Promise<string | null> {
     const row = this.db.prepare("SELECT value FROM cleaner_meta WHERE key = ?").get(key) as
       | { value: string }
       | undefined;
     return row?.value ?? null;
   }
 
-  private setMeta(key: string, value: string): void {
+  private async setMeta(key: string, value: string): Promise<void> {
     this.db
       .prepare(
         "INSERT INTO cleaner_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -278,13 +309,13 @@ export class CleanerStore {
       .run(key, value);
   }
 
-  counts(): { records: number; items: number } {
+  async counts(): Promise<{ records: number; items: number }> {
     const r = this.db.prepare("SELECT COUNT(*) AS n FROM cleaned_records").get() as { n: number };
     const i = this.db.prepare("SELECT COUNT(*) AS n FROM cleaned_items").get() as { n: number };
     return { records: Number(r.n), items: Number(i.n) };
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.db.close();
   }
 }

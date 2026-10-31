@@ -28,7 +28,7 @@ function seedDb(file: string): void {
 }
 
 describe("esc", () => {
-  it("escapes HTML-significant characters", () => {
+  it("escapes HTML-significant characters", async () => {
     assert.equal(esc(`<a href="x">&'</a>`), "&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;");
   });
 });
@@ -40,8 +40,8 @@ describe("exportSite", () => {
   seedDb(dbFile);
   after(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("renders index, detail pages, items.json and styles into a release", () => {
-    const result = exportSite({ dbFile, outDir, now: new Date("2026-10-22T15:00:00Z") });
+  it("renders index, detail pages, items.json and styles into a release", async () => {
+    const result = await exportSite({ dbFile, outDir, now: new Date("2026-10-22T15:00:00Z") });
     assert.equal(result.items, 1);
     const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
     assert.ok(index.includes("全部资讯"));
@@ -96,25 +96,25 @@ describe("exportSite", () => {
     assert.ok(readlinkSync(join(outDir, "current")).includes("releases"));
   });
 
-  it("flips current on re-export and prunes old releases", () => {
+  it("flips current on re-export and prunes old releases", async () => {
     const first = readlinkSync(join(outDir, "current"));
-    exportSite({ dbFile, outDir, now: new Date("2026-10-22T16:00:00Z") });
+    await exportSite({ dbFile, outDir, now: new Date("2026-10-22T16:00:00Z") });
     const second = readlinkSync(join(outDir, "current"));
     assert.notEqual(first, second);
-    exportSite({ dbFile, outDir, now: new Date("2026-10-22T17:00:00Z") });
-    exportSite({ dbFile, outDir, now: new Date("2026-10-22T18:00:00Z") });
+    await exportSite({ dbFile, outDir, now: new Date("2026-10-22T17:00:00Z") });
+    await exportSite({ dbFile, outDir, now: new Date("2026-10-22T18:00:00Z") });
     assert.ok(readdirSync(join(outDir, "releases")).length <= 3);
   });
 
-  it("exports an empty site when the database does not exist yet", () => {
-    const result = exportSite({ dbFile: join(dir, "missing.sqlite"), outDir: join(dir, "empty-dist") });
+  it("exports an empty site when the database does not exist yet", async () => {
+    const result = await exportSite({ dbFile: join(dir, "missing.sqlite"), outDir: join(dir, "empty-dist") });
     assert.equal(result.items, 0);
     assert.ok(readFileSync(join(result.releaseDir, "index.html"), "utf8").includes("这里还没有资讯"));
   });
 });
 
 describe("exportSite: category merge + zh display", () => {
-  it("folds DeFi Protocol into Web3 DeFi and prefers zh titles", () => {
+  it("folds DeFi Protocol into Web3 DeFi and prefers zh titles", async () => {
     const dir = mkdtempSync(join(tmpdir(), "exporter-zh-"));
     const dbFile = join(dir, "cleaned.sqlite");
     const db = new DatabaseSync(dbFile);
@@ -136,7 +136,7 @@ describe("exportSite: category merge + zh display", () => {
     insert.run("x2", "rec-1", 1, "Solana Alpenglow goes live", "New consensus", null, "Web3 DeFi",
       "[]", "2026-10-22", "[]", null);
     db.close();
-    const result = exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-23T02:00:00Z") });
+    const result = await exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-23T02:00:00Z") });
     const data = JSON.parse(readFileSync(join(result.releaseDir, "items.json"), "utf8")) as {
       items: { category: string; title_zh: string | null }[];
       categories: { name: string; count: number }[];
@@ -151,7 +151,7 @@ describe("exportSite: category merge + zh display", () => {
 });
 
 describe("exportSite: dynamic detail links", () => {
-  it("list page JS fetches the public done list and rewrites card hrefs at load time", () => {
+  it("list page JS fetches the public done list and rewrites card hrefs at load time", async () => {
     const dir = mkdtempSync(join(tmpdir(), "exporter-dynamic-"));
     const dbFile = join(dir, "cleaned.sqlite");
     const db = new DatabaseSync(dbFile);
@@ -170,7 +170,7 @@ describe("exportSite: dynamic detail links", () => {
     db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run("item-x", "rec-1", 0, "X title", "X summary", null, "Web3 DeFi", "[]", "2026-10-21", "[]");
     db.close();
-    const result = exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
+    const result = await exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
     const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
     assert.ok(index.includes("/data-pipeline/api/v1/news-detail/done"), "list JS asks the public done endpoint");
     assert.ok(index.includes('"/docs/news/"'), "rewritten hrefs point at /docs/news/");
@@ -180,7 +180,7 @@ describe("exportSite: dynamic detail links", () => {
 });
 
 describe("exportSite: pagination", () => {
-  it("list page ships a pager container and paginates at 10 per page", () => {
+  it("list page ships a pager container and paginates at 10 per page", async () => {
     const dir = mkdtempSync(join(tmpdir(), "exporter-pager-"));
     const dbFile = join(dir, "cleaned.sqlite");
     const db = new DatabaseSync(dbFile);
@@ -199,7 +199,7 @@ describe("exportSite: pagination", () => {
     db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run("item-x", "rec-1", 0, "X title", "X summary", null, "Web3 DeFi", "[]", "2026-10-21", "[]");
     db.close();
-    const result = exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
+    const result = await exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
     const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
     assert.ok(index.includes('<nav class="pager" id="pager"'), "pager container exists below the grid");
     assert.ok(index.includes("var PAGE_SIZE = 10"), "default page size is 10");
@@ -215,7 +215,7 @@ describe("exportSite: pagination", () => {
 });
 
 describe("exportSite: Other category", () => {
-  it("renders legacy 未分类 items and sidebar as Other, with no 未分类 bucket left", () => {
+  it("renders legacy 未分类 items and sidebar as Other, with no 未分类 bucket left", async () => {
     const dir = mkdtempSync(join(tmpdir(), "exporter-other-"));
     const dbFile = join(dir, "cleaned.sqlite");
     const db = new DatabaseSync(dbFile);
@@ -234,7 +234,7 @@ describe("exportSite: Other category", () => {
     db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run("item-u", "rec-1", 0, "U title", "U summary", null, "未分类", "[]", "2026-10-21", "[]");
     db.close();
-    const result = exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
+    const result = await exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
     const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
     assert.ok(index.includes('data-category="Other"'), "legacy item is filed under Other");
     assert.ok(!index.includes("未分类"), "no 未分类 label or bucket remains in the list page");
@@ -243,7 +243,7 @@ describe("exportSite: Other category", () => {
 });
 
 describe("exportSite: rich detail links (new-old compatible)", () => {
-  it("links items with a detail file to /docs/news/<id>.html and keeps the rest on item/<id>/, without copying into the release", () => {
+  it("links items with a detail file to /docs/news/<id>.html and keeps the rest on item/<id>/, without copying into the release", async () => {
     const dir = mkdtempSync(join(tmpdir(), "exporter-detail-"));
     const dbFile = join(dir, "cleaned.sqlite");
     const detailDir = join(dir, "news-detail");
@@ -267,7 +267,7 @@ describe("exportSite: rich detail links (new-old compatible)", () => {
     // Only item-rich has a rich detail file on disk.
     mkdirSync(detailDir, { recursive: true });
     writeFileSync(join(detailDir, "item-rich.html"), "<!doctype html><title>rich</title>", "utf8");
-    const result = exportSite({ dbFile, outDir: join(dir, "web-dist"), detailDir, now: new Date("2026-10-22T15:00:00Z") });
+    const result = await exportSite({ dbFile, outDir: join(dir, "web-dist"), detailDir, now: new Date("2026-10-22T15:00:00Z") });
     assert.equal(result.detailPages, 1);
     const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
     assert.ok(index.includes('href="/docs/news/item-rich.html"'), "rich item links directly to its /docs/news/ page");
@@ -282,7 +282,7 @@ describe("exportSite: rich detail links (new-old compatible)", () => {
 });
 
 describe("exportSite: list-state restore", () => {
-  it("list page JS saves state to sessionStorage, restores it on load, and anchors to the last clicked card", () => {
+  it("list page JS saves state to sessionStorage, restores it on load, and anchors to the last clicked card", async () => {
     const dir = mkdtempSync(join(tmpdir(), "exporter-list-state-"));
     const dbFile = join(dir, "cleaned.sqlite");
     const db = new DatabaseSync(dbFile);
@@ -301,7 +301,7 @@ describe("exportSite: list-state restore", () => {
     db.prepare("INSERT INTO cleaned_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run("item-x", "rec-1", 0, "X title", "X summary", null, "Web3 DeFi", "[]", "2026-10-21", "[]");
     db.close();
-    const result = exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
+    const result = await exportSite({ dbFile, outDir: join(dir, "web-dist"), now: new Date("2026-10-22T15:00:00Z") });
     const index = readFileSync(join(result.releaseDir, "index.html"), "utf8");
     assert.ok(index.includes('var LIST_STATE_KEY = "agent101-list-state"'), "state key is sessionStorage-scoped");
     assert.ok(index.includes("window.sessionStorage.setItem(LIST_STATE_KEY"), "state is saved on render");

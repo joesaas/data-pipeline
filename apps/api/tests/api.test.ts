@@ -13,6 +13,7 @@ function baseConfig(dir: string, over: Partial<AppConfig> = {}): AppConfig {
     basePath: "/data-pipeline",
     dataDir: dir,
     storage: "sqlite",
+    newsDetailStorage: "sqlite",
     authRequired: false,
     maxContentBytes: 1_048_576,
     maxPromptBytes: 65_536,
@@ -34,9 +35,9 @@ async function start(config: AppConfig): Promise<{ base: string; server: Server;
   return {
     base: `http://127.0.0.1:${port}`,
     server,
-    close: () => {
+    close: async () => {
       server.close();
-      driver.close();
+      await driver.close();
     },
   };
 }
@@ -57,8 +58,8 @@ describe("api: auth off (default)", () => {
     dir = mkdtempSync(join(tmpdir(), "dp-api-"));
     ctx = await start(baseConfig(dir));
   });
-  after(() => {
-    ctx.close();
+  after(async () => {
+    await ctx.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -154,12 +155,12 @@ describe("api: auth on", () => {
   before(async () => {
     dir = mkdtempSync(join(tmpdir(), "dp-api-auth-"));
     const probe = createApp(baseConfig(dir, { authRequired: true }));
-    key = probe.auth.createToken("tester").plainKey;
-    probe.driver.close();
+    key = (await probe.auth.createToken("tester")).plainKey;
+    await probe.driver.close();
     ctx = await start(baseConfig(dir, { authRequired: true }));
   });
-  after(() => {
-    ctx.close();
+  after(async () => {
+    await ctx.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -175,9 +176,9 @@ describe("api: auth on", () => {
   it("an admin token reads records pushed under another identity", async () => {
     const dir2 = mkdtempSync(join(tmpdir(), "dp-api-admin-"));
     const probe = createApp(baseConfig(dir2, { authRequired: true }));
-    const userKey = probe.auth.createToken("pusher").plainKey;
-    const adminKey = probe.auth.createToken("cleaner", "admin").plainKey;
-    probe.driver.close();
+    const userKey = (await probe.auth.createToken("pusher")).plainKey;
+    const adminKey = (await probe.auth.createToken("cleaner", "admin")).plainKey;
+    await probe.driver.close();
     const ctx2 = await start(baseConfig(dir2, { authRequired: true }));
     try {
       const pushed = await post(ctx2.base, "/api/v1/records", { prompt: "p", content: "cross-identity" }, { "x-api-key": userKey });

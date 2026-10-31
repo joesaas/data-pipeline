@@ -257,7 +257,7 @@ export class SqliteDriver implements StorageDriver {
     }
   }
 
-  insertRecord(rec: StoredRecord): void {
+  async insertRecord(rec: StoredRecord): Promise<void> {
     this.db
       .prepare(
         `INSERT INTO records (id, token_id, external_id, title, prompt, content, content_format,
@@ -271,7 +271,7 @@ export class SqliteDriver implements StorageDriver {
       );
   }
 
-  updateRecord(rec: StoredRecord): void {
+  async updateRecord(rec: StoredRecord): Promise<void> {
     this.db
       .prepare(
         `UPDATE records SET title = ?, prompt = ?, content = ?, content_format = ?,
@@ -285,7 +285,7 @@ export class SqliteDriver implements StorageDriver {
       );
   }
 
-  findRecordByExternalId(identity: string, externalId: string): StoredRecord | null {
+  async findRecordByExternalId(identity: string, externalId: string): Promise<StoredRecord | null> {
     const row = (
       identity === ADMIN_IDENTITY
         ? this.db.prepare("SELECT * FROM records WHERE external_id = ?").get(externalId)
@@ -294,7 +294,7 @@ export class SqliteDriver implements StorageDriver {
     return row ? rowToRecord(row) : null;
   }
 
-  findRecordByHash(identity: string, contentHash: string): StoredRecord | null {
+  async findRecordByHash(identity: string, contentHash: string): Promise<StoredRecord | null> {
     const row = (
       identity === ADMIN_IDENTITY
         ? this.db
@@ -307,7 +307,7 @@ export class SqliteDriver implements StorageDriver {
     return row ? rowToRecord(row) : null;
   }
 
-  getRecord(identity: string, id: string): StoredRecord | null {
+  async getRecord(identity: string, id: string): Promise<StoredRecord | null> {
     const row = (
       identity === ADMIN_IDENTITY
         ? this.db.prepare("SELECT * FROM records WHERE id = ?").get(id)
@@ -316,7 +316,7 @@ export class SqliteDriver implements StorageDriver {
     return row ? rowToRecord(row) : null;
   }
 
-  listRecords(
+  async listRecords(
     identity: string,
     filter: {
       source_agent?: string;
@@ -327,7 +327,7 @@ export class SqliteDriver implements StorageDriver {
       after_id?: string;
       order?: "created_desc" | "updated_asc";
     },
-  ): { items: StoredRecord[]; total: number } {
+  ): Promise<{ items: StoredRecord[]; total: number }> {
     let where = identity === ADMIN_IDENTITY ? "WHERE 1 = 1" : "WHERE token_id = ?";
     const params: unknown[] = identity === ADMIN_IDENTITY ? [] : [identity];
     if (filter.source_agent) {
@@ -354,7 +354,7 @@ export class SqliteDriver implements StorageDriver {
     return { items: rows.map(rowToRecord), total: totalRow.n };
   }
 
-  deleteRecord(identity: string, id: string): boolean {
+  async deleteRecord(identity: string, id: string): Promise<boolean> {
     const res =
       identity === ADMIN_IDENTITY
         ? this.db.prepare("DELETE FROM records WHERE id = ?").run(id)
@@ -362,39 +362,39 @@ export class SqliteDriver implements StorageDriver {
     return Number(res.changes) > 0;
   }
 
-  createToken(tok: StoredToken): void {
+  async createToken(tok: StoredToken): Promise<void> {
     this.db
       .prepare("INSERT INTO tokens (id, name, key_hash, created_at, revoked_at, role) VALUES (?, ?, ?, ?, ?, ?)")
       .run(tok.id, tok.name, tok.key_hash, tok.created_at, tok.revoked_at, tok.role ?? "user");
   }
 
-  findTokenByHash(keyHash: string): StoredToken | null {
+  async findTokenByHash(keyHash: string): Promise<StoredToken | null> {
     const row = this.db
       .prepare("SELECT * FROM tokens WHERE key_hash = ?")
       .get(keyHash) as TokenRow | undefined;
     return row ? rowToToken(row) : null;
   }
 
-  listTokens(): StoredToken[] {
+  async listTokens(): Promise<StoredToken[]> {
     const rows = this.db
       .prepare("SELECT * FROM tokens ORDER BY created_at ASC, id ASC")
       .all() as TokenRow[];
     return rows.map(rowToToken);
   }
 
-  revokeToken(id: string): boolean {
+  async revokeToken(id: string): Promise<boolean> {
     const res = this.db
       .prepare("UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
       .run(new Date().toISOString(), id);
     return Number(res.changes) > 0;
   }
 
-  deleteToken(id: string): boolean {
+  async deleteToken(id: string): Promise<boolean> {
     const res = this.db.prepare("DELETE FROM tokens WHERE id = ?").run(id);
     return Number(res.changes) > 0;
   }
 
-  saveSiteNonce(n: SiteNonce): void {
+  async saveSiteNonce(n: SiteNonce): Promise<void> {
     this.db
       .prepare(
         "INSERT INTO site_nonces (address, nonce, message, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET nonce = excluded.nonce, message = excluded.message, expires_at = excluded.expires_at",
@@ -402,55 +402,55 @@ export class SqliteDriver implements StorageDriver {
       .run(n.address, n.nonce, n.message, n.expires_at);
   }
 
-  getSiteNonce(address: string): SiteNonce | null {
+  async getSiteNonce(address: string): Promise<SiteNonce | null> {
     const row = this.db
       .prepare("SELECT * FROM site_nonces WHERE address = ?")
       .get(address) as SiteNonce | undefined;
     return row ?? null;
   }
 
-  deleteSiteNonce(address: string): void {
+  async deleteSiteNonce(address: string): Promise<void> {
     this.db.prepare("DELETE FROM site_nonces WHERE address = ?").run(address);
   }
 
-  saveSiteSession(s: SiteSession): void {
+  async saveSiteSession(s: SiteSession): Promise<void> {
     this.db
       .prepare("INSERT INTO site_sessions (token_hash, address, created_at, expires_at) VALUES (?, ?, ?, ?)")
       .run(s.token_hash, s.address, s.created_at, s.expires_at);
   }
 
-  findSiteSessionByHash(tokenHash: string): SiteSession | null {
+  async findSiteSessionByHash(tokenHash: string): Promise<SiteSession | null> {
     const row = this.db
       .prepare("SELECT * FROM site_sessions WHERE token_hash = ?")
       .get(tokenHash) as SiteSession | undefined;
     return row ?? null;
   }
 
-  deleteSiteSession(tokenHash: string): void {
+  async deleteSiteSession(tokenHash: string): Promise<void> {
     this.db.prepare("DELETE FROM site_sessions WHERE token_hash = ?").run(tokenHash);
   }
 
-  listSiteFavorites(address: string): SiteFavorite[] {
+  async listSiteFavorites(address: string): Promise<SiteFavorite[]> {
     const rows = this.db
       .prepare("SELECT * FROM site_favorites WHERE address = ? ORDER BY created_at ASC")
       .all(address) as SiteFavorite[];
     return rows;
   }
 
-  saveSiteFavorite(f: SiteFavorite): void {
+  async saveSiteFavorite(f: SiteFavorite): Promise<void> {
     this.db
       .prepare("INSERT OR IGNORE INTO site_favorites (address, item_id, created_at) VALUES (?, ?, ?)")
       .run(f.address, f.item_id, f.created_at);
   }
 
-  deleteSiteFavorite(address: string, itemId: string): boolean {
+  async deleteSiteFavorite(address: string, itemId: string): Promise<boolean> {
     const res = this.db
       .prepare("DELETE FROM site_favorites WHERE address = ? AND item_id = ?")
       .run(address, itemId);
     return Number(res.changes) > 0;
   }
 
-  getWebhook(id: number): StoredWebhook | null {
+  async getWebhook(id: number): Promise<StoredWebhook | null> {
     type RawRow = Omit<StoredWebhook, "is_active"> & { is_active: number };
     const row = this.db
       .prepare("SELECT id, name, url, token, payload, cron, is_active, created_at, updated_at FROM webhooks WHERE id = ?")
@@ -460,7 +460,7 @@ export class SqliteDriver implements StorageDriver {
     return { ...rest, cron: rest.cron ?? null, is_active: is_active === 1 };
   }
 
-  listWebhooks(): WebhookMeta[] {
+  async listWebhooks(): Promise<WebhookMeta[]> {
     type RawRow = Omit<StoredWebhook, "is_active"> & { is_active: number };
     const rows = this.db
       .prepare("SELECT id, name, url, token, payload, cron, is_active, updated_at FROM webhooks ORDER BY updated_at ASC, id ASC")
@@ -473,7 +473,7 @@ export class SqliteDriver implements StorageDriver {
     }));
   }
 
-  saveWebhook(w: StoredWebhook): StoredWebhook {
+  async saveWebhook(w: StoredWebhook): Promise<StoredWebhook> {
     if (w.id > 0) {
       this.db
         .prepare(
@@ -481,25 +481,25 @@ export class SqliteDriver implements StorageDriver {
            ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, token = excluded.token, payload = excluded.payload, cron = excluded.cron, is_active = excluded.is_active, updated_at = excluded.updated_at`,
         )
         .run(w.id, w.name, w.url, w.token, w.payload, w.cron ?? null, w.is_active ? 1 : 0, w.created_at, w.updated_at);
-      return this.getWebhook(w.id) as StoredWebhook;
+      return await this.getWebhook(w.id) as StoredWebhook;
     }
     const res = this.db
       .prepare(
         "INSERT INTO webhooks (name, url, token, payload, cron, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(w.name, w.url, w.token, w.payload, w.cron ?? null, w.is_active ? 1 : 0, w.created_at, w.updated_at);
-    return this.getWebhook(Number(res.lastInsertRowid)) as StoredWebhook;
+    return await this.getWebhook(Number(res.lastInsertRowid)) as StoredWebhook;
   }
 
-  deleteWebhook(id: number): boolean {
+  async deleteWebhook(id: number): Promise<boolean> {
     const res = this.db.prepare("DELETE FROM webhooks WHERE id = ?").run(id);
     return Number(res.changes) > 0;
   }
 
-  listTriggerHistory(filter: { webhook_id?: number; limit: number }): {
+  async listTriggerHistory(filter: { webhook_id?: number; limit: number }): Promise<{
     items: WebhookTriggerHistory[];
     total: number;
-  } {
+  }> {
     type RawRow = Omit<WebhookTriggerHistory, "ok" | "body_truncated"> & {
       ok: number;
       body_truncated: number;
@@ -530,7 +530,7 @@ export class SqliteDriver implements StorageDriver {
     };
   }
 
-  appendTriggerHistory(row: Omit<WebhookTriggerHistory, "id">): WebhookTriggerHistory {
+  async appendTriggerHistory(row: Omit<WebhookTriggerHistory, "id">): Promise<WebhookTriggerHistory> {
     const res = this.db
       .prepare(
         `INSERT INTO webhook_trigger_history
@@ -561,7 +561,7 @@ export class SqliteDriver implements StorageDriver {
     return { ...row, id };
   }
 
-  getPullTask(id: number): StoredPullTask | null {
+  async getPullTask(id: number): Promise<StoredPullTask | null> {
     type RawRow = Omit<StoredPullTask, "is_active"> & { is_active: number };
     const row = this.db
       .prepare("SELECT id, name, prompt, cron, target, is_active, last_run_at, created_at, updated_at FROM pull_tasks WHERE id = ?")
@@ -571,7 +571,7 @@ export class SqliteDriver implements StorageDriver {
     return { ...rest, target: rest.target ?? "muse", last_run_at: rest.last_run_at ?? null, is_active: is_active === 1 };
   }
 
-  listPullTasks(): StoredPullTask[] {
+  async listPullTasks(): Promise<StoredPullTask[]> {
     type RawRow = Omit<StoredPullTask, "is_active"> & { is_active: number };
     const rows = this.db
       .prepare("SELECT id, name, prompt, cron, target, is_active, last_run_at, created_at, updated_at FROM pull_tasks ORDER BY updated_at ASC, id ASC")
@@ -584,7 +584,7 @@ export class SqliteDriver implements StorageDriver {
     }));
   }
 
-  savePullTask(t: StoredPullTask): StoredPullTask {
+  async savePullTask(t: StoredPullTask): Promise<StoredPullTask> {
     if (t.id > 0) {
       this.db
         .prepare(
@@ -592,22 +592,22 @@ export class SqliteDriver implements StorageDriver {
            ON CONFLICT(id) DO UPDATE SET name = excluded.name, prompt = excluded.prompt, cron = excluded.cron, target = excluded.target, is_active = excluded.is_active, last_run_at = excluded.last_run_at, updated_at = excluded.updated_at`,
         )
         .run(t.id, t.name, t.prompt, t.cron, t.target, t.is_active ? 1 : 0, t.last_run_at, t.created_at, t.updated_at);
-      return this.getPullTask(t.id) as StoredPullTask;
+      return await this.getPullTask(t.id) as StoredPullTask;
     }
     const res = this.db
       .prepare(
         "INSERT INTO pull_tasks (name, prompt, cron, target, is_active, last_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(t.name, t.prompt, t.cron, t.target, t.is_active ? 1 : 0, t.last_run_at, t.created_at, t.updated_at);
-    return this.getPullTask(Number(res.lastInsertRowid)) as StoredPullTask;
+    return await this.getPullTask(Number(res.lastInsertRowid)) as StoredPullTask;
   }
 
-  deletePullTask(id: number): boolean {
+  async deletePullTask(id: number): Promise<boolean> {
     const res = this.db.prepare("DELETE FROM pull_tasks WHERE id = ?").run(id);
     return Number(res.changes) > 0;
   }
 
-  getPendingTask(id: number): StoredPendingTask | null {
+  async getPendingTask(id: number): Promise<StoredPendingTask | null> {
     const row = this.db
       .prepare("SELECT id, pull_task_id, pull_task_name, target, prompt, due_at, kind, status, result_external_id, result_record_id, error, created_at, updated_at FROM pending_tasks WHERE id = ?")
       .get(id) as StoredPendingTask | undefined;
@@ -622,7 +622,7 @@ export class SqliteDriver implements StorageDriver {
     };
   }
 
-  listPendingTasks(filter: { target?: string; status?: PendingTaskStatus }): StoredPendingTask[] {
+  async listPendingTasks(filter: { target?: string; status?: PendingTaskStatus }): Promise<StoredPendingTask[]> {
     const where: string[] = [];
     const params: (string | number)[] = [];
     if (filter.target) {
@@ -648,7 +648,7 @@ export class SqliteDriver implements StorageDriver {
     }));
   }
 
-  savePendingTask(t: StoredPendingTask): StoredPendingTask {
+  async savePendingTask(t: StoredPendingTask): Promise<StoredPendingTask> {
     if (t.id > 0) {
       this.db
         .prepare(
@@ -656,7 +656,7 @@ export class SqliteDriver implements StorageDriver {
            ON CONFLICT(id) DO UPDATE SET status = excluded.status, result_external_id = excluded.result_external_id, result_record_id = excluded.result_record_id, error = excluded.error, updated_at = excluded.updated_at`,
         )
         .run(t.id, t.pull_task_id, t.pull_task_name, t.target, t.prompt, t.due_at, t.kind, t.status, t.result_external_id, t.result_record_id, t.error, t.created_at, t.updated_at);
-      return this.getPendingTask(t.id) as StoredPendingTask;
+      return await this.getPendingTask(t.id) as StoredPendingTask;
     }
     // Throws on UNIQUE(pull_task_id, due_at) — the caller treats that as a conflict.
     const res = this.db
@@ -664,29 +664,29 @@ export class SqliteDriver implements StorageDriver {
         "INSERT INTO pending_tasks (pull_task_id, pull_task_name, target, prompt, due_at, kind, status, result_external_id, result_record_id, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(t.pull_task_id, t.pull_task_name, t.target, t.prompt, t.due_at, t.kind, t.status, t.result_external_id, t.result_record_id, t.error, t.created_at, t.updated_at);
-    return this.getPendingTask(Number(res.lastInsertRowid)) as StoredPendingTask;
+    return await this.getPendingTask(Number(res.lastInsertRowid)) as StoredPendingTask;
   }
 
-  deletePendingTask(id: number): boolean {
+  async deletePendingTask(id: number): Promise<boolean> {
     const res = this.db.prepare("DELETE FROM pending_tasks WHERE id = ?").run(id);
     return Number(res.changes) > 0;
   }
 
-  createChatMessage(m: {
+  async createChatMessage(m: {
     source: ChatMessageSource;
     content: string;
     in_reply_to?: number | null;
-  }): StoredChatMessage {
+  }): Promise<StoredChatMessage> {
     const now = new Date().toISOString();
     const res = this.db
       .prepare(
         "INSERT INTO chat_messages (source, content, status, in_reply_to, error, created_at, updated_at) VALUES (?, ?, 'pending', ?, NULL, ?, ?)",
       )
       .run(m.source, m.content, m.in_reply_to ?? null, now, now);
-    return this.getChatMessage(Number(res.lastInsertRowid)) as StoredChatMessage;
+    return await this.getChatMessage(Number(res.lastInsertRowid)) as StoredChatMessage;
   }
 
-  getChatMessage(id: number): StoredChatMessage | null {
+  async getChatMessage(id: number): Promise<StoredChatMessage | null> {
     const row = this.db
       .prepare(
         "SELECT id, source, content, status, in_reply_to, error, created_at, updated_at FROM chat_messages WHERE id = ?",
@@ -702,10 +702,10 @@ export class SqliteDriver implements StorageDriver {
     };
   }
 
-  listChatMessages(filter: {
+  async listChatMessages(filter: {
     source?: ChatMessageSource;
     status?: ChatMessageStatus;
-  }): StoredChatMessage[] {
+  }): Promise<StoredChatMessage[]> {
     const where: string[] = [];
     const params: (string | number)[] = [];
     if (filter.source) {
@@ -730,20 +730,20 @@ export class SqliteDriver implements StorageDriver {
     }));
   }
 
-  saveChatMessage(m: StoredChatMessage): StoredChatMessage {
+  async saveChatMessage(m: StoredChatMessage): Promise<StoredChatMessage> {
     this.db
       .prepare(
         `INSERT INTO chat_messages (id, source, content, status, in_reply_to, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET status = excluded.status, error = excluded.error, updated_at = excluded.updated_at`,
       )
       .run(m.id, m.source, m.content, m.status, m.in_reply_to, m.error, m.created_at, m.updated_at);
-    return this.getChatMessage(m.id) as StoredChatMessage;
+    return await this.getChatMessage(m.id) as StoredChatMessage;
   }
 
-  completeChatMessage(
+  async completeChatMessage(
     id: number,
     reply: string,
-  ): { human: StoredChatMessage; muse: StoredChatMessage } | null {
+  ): Promise<{ human: StoredChatMessage; muse: StoredChatMessage } | null> {
     const now = new Date().toISOString();
     // node:sqlite has no transaction() helper on this version: BEGIN/COMMIT by hand.
     this.db.exec("BEGIN IMMEDIATE;");
@@ -769,19 +769,19 @@ export class SqliteDriver implements StorageDriver {
     }
     if (museId === null) return null;
     return {
-      human: this.getChatMessage(id) as StoredChatMessage,
-      muse: this.getChatMessage(museId) as StoredChatMessage,
+      human: await this.getChatMessage(id) as StoredChatMessage,
+      muse: await this.getChatMessage(museId) as StoredChatMessage,
     };
   }
 
-  deleteWaitingPendingTasks(pullTaskId: number): number {
+  async deleteWaitingPendingTasks(pullTaskId: number): Promise<number> {
     const res = this.db
       .prepare("DELETE FROM pending_tasks WHERE pull_task_id = ? AND status = 'waiting'")
       .run(pullTaskId);
     return Number(res.changes);
   }
 
-  listWebhookPayloads(): WebhookPayload[] {
+  async listWebhookPayloads(): Promise<WebhookPayload[]> {
     return (
       this.db
         .prepare(
@@ -791,14 +791,14 @@ export class SqliteDriver implements StorageDriver {
     ).map((r) => ({ ...r, is_active: r.is_active === 1 }));
   }
 
-  getWebhookPayload(id: string): WebhookPayload | null {
+  async getWebhookPayload(id: string): Promise<WebhookPayload | null> {
     const row = this.db
       .prepare("SELECT id, name, content, is_active, created_at, updated_at FROM webhook_payloads WHERE id = ?")
       .get(id) as (Omit<WebhookPayload, "is_active"> & { is_active: number }) | undefined;
     return row ? { ...row, is_active: row.is_active === 1 } : null;
   }
 
-  saveWebhookPayload(p: WebhookPayload): void {
+  async saveWebhookPayload(p: WebhookPayload): Promise<void> {
     this.db
       .prepare(
         `INSERT INTO webhook_payloads (id, name, content, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -807,12 +807,12 @@ export class SqliteDriver implements StorageDriver {
       .run(p.id, p.name, p.content, p.is_active ? 1 : 0, p.created_at, p.updated_at);
   }
 
-  deleteWebhookPayload(id: string): boolean {
+  async deleteWebhookPayload(id: string): Promise<boolean> {
     const res = this.db.prepare("DELETE FROM webhook_payloads WHERE id = ?").run(id);
     return Number(res.changes) > 0;
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.db.close();
   }
 }

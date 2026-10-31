@@ -1,4 +1,4 @@
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import express from "express";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -8,7 +8,9 @@ import type { AuthService } from "../auth/auth.js";
 import type { IngestService } from "../ingest/ingest-service.js";
 import type { StorageDriver } from "../storage/storage-driver.js";
 import { CleanedReader } from "../cleaned/cleaned-reader.js";
+import { PgCleanedReader } from "../cleaned/pg-cleaned-reader.js";
 import { NewsDetailStore } from "../news-detail/news-detail-store.js";
+import { PgNewsDetailStore } from "../news-detail/pg-news-detail-store.js";
 import { NewsDetailService, NotFoundError } from "../news-detail/news-detail-service.js";
 import { ResourceService } from "../resource/resource-service.js";
 import type { PgVerifyResult } from "../pg/verify.js";
@@ -42,6 +44,22 @@ export function registerRoutes(
   };
   const router = express.Router();
 
+  // Express 4 does not catch async handler rejections: without this
+  // wrapper a rejected driver call would become an unhandled rejection
+  // (a process crash) instead of the 500 a sync throw already produces.
+  // Forwarding to next() keeps async failures on exactly the same path
+  // as today's sync throws: Express's default error handler.
+  function handle(fn: (req: Request, res: Response) => Promise<void> | void) {
+    return (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const r = fn(req, res);
+        if (r instanceof Promise) r.catch(next);
+      } catch (err) {
+        next(err);
+      }
+    };
+  }
+
   // Simple fixed-window rate limit, keyed by identity (or IP when anonymous).
   const windows = new Map<string, { start: number; count: number }>();
   function rateLimited(key: string): boolean {
@@ -55,8 +73,8 @@ export function registerRoutes(
     return w.count > config.rateLimitPerMin;
   }
 
-  function identityOf(req: Request, res: Response): string | null {
-    const identity = auth.resolveIdentity(req.header("x-api-key") ?? undefined);
+  async function identityOf(req: Request, res: Response): Promise<string | null> {
+    const identity = await auth.resolveIdentity(req.header("x-api-key") ?? undefined);
     if (identity === null) {
       res.status(401).json({ error: "unauthorized" });
       return null;
@@ -144,15 +162,15 @@ export function registerRoutes(
     res.json({ ok: true });
   });
 
-  router.post("/api/v1/records", (req, res) => {
-    const identity = identityOf(req, res);
+  router.post("/api/v1/records", handle(async (req, res) => {
+    const identity = await identityOf(req, res);
     if (identity === null) return;
     if (rateLimited(config.authRequired ? identity : (req.ip ?? "unknown"))) {
       res.status(429).json({ error: "rate limit exceeded" });
       return;
     }
     try {
-      const result = ingest.push(identity, req.body);
+      const result = await ingest.push(identity, req.body);
       res.status(result.status === "created" ? 201 : 200).json(result);
     } catch (err) {
       if (err instanceof ValidationError) {
@@ -163,14 +181,14 @@ export function registerRoutes(
       }
       throw err;
     }
-  });
+  }));
 
-  router.get("/api/v1/records", (req, res) => {
-    const identity = identityOf(req, res);
+  router.get("/api/v1/records", handle(async (req, res) => {
+    const identity = await identityOf(req, res);
     if (identity === null) return;
     const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
     const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
-    const { items, total } = driver.listRecords(identity, {
+    const { items, total } = await driver.listRecords(identity, {
       source_agent: typeof req.query.source_agent === "string" ? req.query.source_agent : undefined,
       tag: typeof req.query.tag === "string" ? req.query.tag : undefined,
       limit,
@@ -180,51 +198,58 @@ export function registerRoutes(
       order: req.query.order === "updated_asc" ? "updated_asc" : undefined,
     });
     res.json({ items, total, limit, offset });
-  });
+  }));
 
-  router.get("/api/v1/records/:id", (req, res) => {
-    const identity = identityOf(req, res);
+  router.get("/api/v1/records/:id", handle(async (req, res) => {
+    const identity = await identityOf(req, res);
     if (identity === null) return;
-    const rec = driver.getRecord(identity, req.params.id);
+    const rec = await driver.getRecord(identity, req.params.id);
     if (!rec) {
       res.status(404).json({ error: "record not found" });
       return;
     }
     res.json(rec);
-  });
+  }));
 
-  const cleaned = new CleanedReader(config.cleanedDbFile);
+  // News-detail domain pair: one backend switch covers BOTH the
+  // cleaned reader and the detail store, so the pending queue can
+  // never join a PG reader against a stale SQLite store (or vice
+  // versa). Default SQLite; PG only on NEWS_DETAIL_STORAGE_DRIVER=pg.
+  // The same `cleaned` instance also serves /cleaned/*, so in PG mode
+  // those endpoints read PG too — consistent by construction.
+  const cleaned =
+    config.newsDetailStorage === "pg" ? new PgCleanedReader() : new CleanedReader(config.cleanedDbFile);
 
-  router.get("/api/v1/cleaned/items", (req, res) => {
-    const identity = identityOf(req, res);
+  router.get("/api/v1/cleaned/items", handle(async (req, res) => {
+    const identity = await identityOf(req, res);
     if (identity === null) return;
     const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
     const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
-    const { items, total } = cleaned.listItems({
+    const { items, total } = await cleaned.listItems({
       category: typeof req.query.category === "string" && req.query.category ? req.query.category : undefined,
       q: typeof req.query.q === "string" && req.query.q ? req.query.q : undefined,
       limit,
       offset,
     });
     res.json({ items, total, limit, offset });
-  });
+  }));
 
-  router.get("/api/v1/cleaned/items/:id", (req, res) => {
-    const identity = identityOf(req, res);
+  router.get("/api/v1/cleaned/items/:id", handle(async (req, res) => {
+    const identity = await identityOf(req, res);
     if (identity === null) return;
-    const item = cleaned.getItem(req.params.id);
+    const item = await cleaned.getItem(req.params.id);
     if (!item) {
       res.status(404).json({ error: "cleaned item not found" });
       return;
     }
     res.json(item);
-  });
+  }));
 
-  router.get("/api/v1/cleaned/stats", (req, res) => {
-    const identity = identityOf(req, res);
+  router.get("/api/v1/cleaned/stats", handle(async (req, res) => {
+    const identity = await identityOf(req, res);
     if (identity === null) return;
-    res.json(cleaned.stats());
-  });
+    res.json(await cleaned.stats());
+  }));
 
   // Rich detail pages (news-detail): a separate single-HTML-file
   // pipeline on top of the cleaned items. The pre-existing
@@ -235,17 +260,17 @@ export function registerRoutes(
   // never the cleaner's database and never the records database.
   const newsDetail = new NewsDetailService(
     cleaned,
-    new NewsDetailStore(config.newsDetailDbFile),
+    config.newsDetailStorage === "pg" ? new PgNewsDetailStore() : new NewsDetailStore(config.newsDetailDbFile),
     config,
   );
 
-  router.get("/api/v1/news-detail/pending", (req, res) => {
-    const identity = identityOf(req, res);
+  router.get("/api/v1/news-detail/pending", handle(async (req, res) => {
+    const identity = await identityOf(req, res);
     if (identity === null) return;
     const raw = Number(req.query.limit ?? 10);
     const limit = Math.min(Math.max(Number.isFinite(raw) ? raw : 10, 1), 10);
-    res.json(newsDetail.listPending(limit));
-  });
+    res.json(await newsDetail.listPending(limit));
+  }));
 
   // Public done list for the news-site list page: deliberately
   // unauthenticated, like the public pull-tasks pending endpoint —
@@ -254,31 +279,31 @@ export function registerRoutes(
   // It returns ids only, never HTML content, so a browser can rewrite
   // card links at load time the moment a detail page exists, with no
   // re-export and no deploy in between.
-  router.get("/api/v1/news-detail/done", (_req, res) => {
-    const items = newsDetail.listDone();
+  router.get("/api/v1/news-detail/done", handle(async (_req, res) => {
+    const items = await newsDetail.listDone();
     res.json({ item_ids: items.map((i) => i.item_id), items, count: items.length });
-  });
+  }));
 
-  router.get("/api/v1/news-detail/pages/:item_id", (req, res) => {
-    const identity = identityOf(req, res);
+  router.get("/api/v1/news-detail/pages/:item_id", handle(async (req, res) => {
+    const identity = await identityOf(req, res);
     if (identity === null) return;
-    const page = newsDetail.getPage(req.params.item_id);
+    const page = await newsDetail.getPage(req.params.item_id);
     if (!page) {
       res.status(404).json({ error: "detail page not found" });
       return;
     }
     res.json(page);
-  });
+  }));
 
-  router.post("/api/v1/news-detail/pages", (req, res) => {
-    const identity = identityOf(req, res);
+  router.post("/api/v1/news-detail/pages", handle(async (req, res) => {
+    const identity = await identityOf(req, res);
     if (identity === null) return;
     if (rateLimited(config.authRequired ? identity : (req.ip ?? "unknown"))) {
       res.status(429).json({ error: "rate limit exceeded" });
       return;
     }
     try {
-      const result = newsDetail.savePage({
+      const result = await newsDetail.savePage({
         item_id: typeof req.body?.item_id === "string" ? req.body.item_id : "",
         html: typeof req.body?.html === "string" ? req.body.html : "",
         detail_path: typeof req.body?.detail_path === "string" ? req.body.detail_path : undefined,
@@ -297,7 +322,7 @@ export function registerRoutes(
       }
       throw err;
     }
-  });
+  }));
 
   // Resource uploads: a file + relative path, written under the
   // fixed RESOURCE_DIR (default /home/ec2-user/app/resource) and
@@ -307,8 +332,8 @@ export function registerRoutes(
   // then served publicly by nginx. No DB row is created.
   const resource = new ResourceService(config);
 
-  router.post("/api/v1/resource/files", (req, res) => {
-    const identity = auth.resolveValidKey(req.header("x-api-key") ?? undefined);
+  router.post("/api/v1/resource/files", handle(async (req, res) => {
+    const identity = await auth.resolveValidKey(req.header("x-api-key") ?? undefined);
     if (identity === null) {
       res.status(401).json({ error: "unauthorized" });
       return;
@@ -334,129 +359,129 @@ export function registerRoutes(
       }
       throw err;
     }
-  });
+  }));
 
-  router.delete("/api/v1/records/:id", (req, res) => {
-    const identity = identityOf(req, res);
+  router.delete("/api/v1/records/:id", handle(async (req, res) => {
+    const identity = await identityOf(req, res);
     if (identity === null) return;
-    if (!driver.deleteRecord(identity, req.params.id)) {
+    if (!await driver.deleteRecord(identity, req.params.id)) {
       res.status(404).json({ error: "record not found" });
       return;
     }
     res.status(204).send();
-  });
+  }));
 
   // Admin routes (web console). No rate limit: unlike the public push
   // endpoint, these are gated to a single admin identity, and a stolen
   // admin key is already total compromise — throttling would not help.
-  router.get("/api/v1/admin/tokens", (req, res) => admin.listTokens(adminDeps, req, res));
-  router.post("/api/v1/admin/tokens", (req, res) => admin.createToken(adminDeps, req, res));
-  router.post("/api/v1/admin/tokens/:id/revoke", (req, res) => admin.revokeToken(adminDeps, req, res));
-  router.delete("/api/v1/admin/tokens/:id", (req, res) => admin.deleteToken(adminDeps, req, res));
-  router.get("/api/v1/admin/webhooks", (req, res) => admin.listWebhooks(adminDeps, req, res));
-  router.post("/api/v1/admin/webhooks", (req, res) => admin.createWebhook(adminDeps, req, res));
-  router.get("/api/v1/admin/webhooks/:id", (req, res) => admin.getWebhook(adminDeps, req, res));
-  router.put("/api/v1/admin/webhooks/:id", (req, res) => admin.updateWebhook(adminDeps, req, res));
-  router.delete("/api/v1/admin/webhooks/:id", (req, res) => admin.deleteWebhook(adminDeps, req, res));
-  router.post("/api/v1/admin/webhooks/:id/active", (req, res) =>
+  router.get("/api/v1/admin/tokens", handle((req, res) => admin.listTokens(adminDeps, req, res)));
+  router.post("/api/v1/admin/tokens", handle((req, res) => admin.createToken(adminDeps, req, res)));
+  router.post("/api/v1/admin/tokens/:id/revoke", handle((req, res) => admin.revokeToken(adminDeps, req, res)));
+  router.delete("/api/v1/admin/tokens/:id", handle((req, res) => admin.deleteToken(adminDeps, req, res)));
+  router.get("/api/v1/admin/webhooks", handle((req, res) => admin.listWebhooks(adminDeps, req, res)));
+  router.post("/api/v1/admin/webhooks", handle((req, res) => admin.createWebhook(adminDeps, req, res)));
+  router.get("/api/v1/admin/webhooks/:id", handle((req, res) => admin.getWebhook(adminDeps, req, res)));
+  router.put("/api/v1/admin/webhooks/:id", handle((req, res) => admin.updateWebhook(adminDeps, req, res)));
+  router.delete("/api/v1/admin/webhooks/:id", handle((req, res) => admin.deleteWebhook(adminDeps, req, res)));
+  router.post("/api/v1/admin/webhooks/:id/active", handle((req, res) =>
     admin.setWebhookActive(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/webhooks/:id/test", (req, res) =>
+  ));
+  router.post("/api/v1/admin/webhooks/:id/test", handle((req, res) =>
     admin.testWebhook(adminDeps, req, res),
-  );
-  router.get("/api/v1/admin/webhook-trigger-history", (req, res) =>
+  ));
+  router.get("/api/v1/admin/webhook-trigger-history", handle((req, res) =>
     admin.listTriggerHistory(adminDeps, req, res),
-  );
+  ));
   // Pull tasks (queue model). The /pending routes must be registered
   // before /:id, or "pending" would be parsed as an id and 400.
-  router.get("/api/v1/admin/pull-tasks/pending", (req, res) =>
+  router.get("/api/v1/admin/pull-tasks/pending", handle((req, res) =>
     admin.listPendingTasks(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/pull-tasks/pending/:id/claim", (req, res) =>
+  ));
+  router.post("/api/v1/admin/pull-tasks/pending/:id/claim", handle((req, res) =>
     admin.claimPendingTask(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/pull-tasks/pending/:id/complete", (req, res) =>
+  ));
+  router.post("/api/v1/admin/pull-tasks/pending/:id/complete", handle((req, res) =>
     admin.completePendingTask(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/pull-tasks/pending/:id/fail", (req, res) =>
+  ));
+  router.post("/api/v1/admin/pull-tasks/pending/:id/fail", handle((req, res) =>
     admin.failPendingTask(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/pull-tasks/pending/:id/reset", (req, res) =>
+  ));
+  router.post("/api/v1/admin/pull-tasks/pending/:id/reset", handle((req, res) =>
     admin.resetPendingTask(adminDeps, req, res),
-  );
-  router.get("/api/v1/admin/pull-tasks", (req, res) => admin.listPullTasks(adminDeps, req, res));
-  router.post("/api/v1/admin/pull-tasks", (req, res) => admin.createPullTask(adminDeps, req, res));
-  router.get("/api/v1/admin/pull-tasks/:id", (req, res) => admin.getPullTask(adminDeps, req, res));
-  router.put("/api/v1/admin/pull-tasks/:id", (req, res) =>
+  ));
+  router.get("/api/v1/admin/pull-tasks", handle((req, res) => admin.listPullTasks(adminDeps, req, res)));
+  router.post("/api/v1/admin/pull-tasks", handle((req, res) => admin.createPullTask(adminDeps, req, res)));
+  router.get("/api/v1/admin/pull-tasks/:id", handle((req, res) => admin.getPullTask(adminDeps, req, res)));
+  router.put("/api/v1/admin/pull-tasks/:id", handle((req, res) =>
     admin.updatePullTask(adminDeps, req, res),
-  );
-  router.delete("/api/v1/admin/pull-tasks/:id", (req, res) =>
+  ));
+  router.delete("/api/v1/admin/pull-tasks/:id", handle((req, res) =>
     admin.deletePullTask(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/pull-tasks/:id/active", (req, res) =>
+  ));
+  router.post("/api/v1/admin/pull-tasks/:id/active", handle((req, res) =>
     admin.setPullTaskActive(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/pull-tasks/:id/run-now", (req, res) =>
+  ));
+  router.post("/api/v1/admin/pull-tasks/:id/run-now", handle((req, res) =>
     admin.runPullTaskNow(adminDeps, req, res),
-  );
+  ));
   // Console chat (single stream). The /pending route must be registered
   // before /:id, or "pending" would be parsed as an id and 400.
-  router.get("/api/v1/admin/chat/messages", (req, res) =>
+  router.get("/api/v1/admin/chat/messages", handle((req, res) =>
     admin.listChatMessages(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/chat/messages", (req, res) =>
+  ));
+  router.post("/api/v1/admin/chat/messages", handle((req, res) =>
     admin.createChatMessage(adminDeps, req, res),
-  );
-  router.get("/api/v1/admin/chat/messages/pending", (req, res) =>
+  ));
+  router.get("/api/v1/admin/chat/messages/pending", handle((req, res) =>
     admin.listPendingChatMessages(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/chat/messages/:id/claim", (req, res) =>
+  ));
+  router.post("/api/v1/admin/chat/messages/:id/claim", handle((req, res) =>
     admin.claimChatMessage(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/chat/messages/:id/complete", (req, res) =>
+  ));
+  router.post("/api/v1/admin/chat/messages/:id/complete", handle((req, res) =>
     admin.completeChatMessage(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/chat/messages/:id/fail", (req, res) =>
+  ));
+  router.post("/api/v1/admin/chat/messages/:id/fail", handle((req, res) =>
     admin.failChatMessage(adminDeps, req, res),
-  );
-  router.post("/api/v1/admin/chat/messages/:id/reset", (req, res) =>
+  ));
+  router.post("/api/v1/admin/chat/messages/:id/reset", handle((req, res) =>
     admin.resetChatMessage(adminDeps, req, res),
-  );
+  ));
   // PostgreSQL migration verification probe (migration gate: only start
   // the driver rewrite / data load / cutover once this reports ok:true).
-  router.get("/api/v1/admin/pg/verify", (req, res) => admin.getPgVerify(adminDeps, req, res));
+  router.get("/api/v1/admin/pg/verify", handle((req, res) => admin.getPgVerify(adminDeps, req, res)));
   // Public detector for the 5-second hook: waiting ids only, no prompts.
   // Deliberately unauthenticated — the hook runtime holds no secrets.
-  router.get("/api/v1/pull-tasks/pending", (req, res) =>
+  router.get("/api/v1/pull-tasks/pending", handle((req, res) =>
     admin.listPendingTasksPublic(adminDeps, req, res),
-  );
+  ));
 
   // News-site reader auth (wallet) + favorites. These use their own
   // session Bearer tokens, never API keys, and are rate-limited by IP
   // on the two login steps so nonce/verify cannot be spammed freely.
   const siteDeps: site.SiteDeps = { driver };
-  router.post("/api/v1/site-auth/nonce", (req, res) => {
+  router.post("/api/v1/site-auth/nonce", handle(async (req, res) => {
     if (rateLimited(req.ip ?? "unknown")) {
       res.status(429).json({ error: "rate limit exceeded" });
       return;
     }
-    site.requestNonce(siteDeps, req, res);
-  });
-  router.post("/api/v1/site-auth/verify", (req, res) => {
+    await site.requestNonce(siteDeps, req, res);
+  }));
+  router.post("/api/v1/site-auth/verify", handle(async (req, res) => {
     if (rateLimited(req.ip ?? "unknown")) {
       res.status(429).json({ error: "rate limit exceeded" });
       return;
     }
-    site.verifyNonce(siteDeps, req, res);
-  });
-  router.get("/api/v1/site-auth/me", (req, res) => site.getMe(siteDeps, req, res));
-  router.post("/api/v1/site-auth/logout", (req, res) => site.logout(siteDeps, req, res));
-  router.get("/api/v1/site-favorites", (req, res) => site.listFavorites(siteDeps, req, res));
-  router.get("/api/v1/site-favorites/ids", (req, res) => site.listFavoriteIds(siteDeps, req, res));
-  router.post("/api/v1/site-favorites", (req, res) => site.addFavorite(siteDeps, req, res));
-  router.delete("/api/v1/site-favorites/:item_id", (req, res) =>
+    await site.verifyNonce(siteDeps, req, res);
+  }));
+  router.get("/api/v1/site-auth/me", handle((req, res) => site.getMe(siteDeps, req, res)));
+  router.post("/api/v1/site-auth/logout", handle((req, res) => site.logout(siteDeps, req, res)));
+  router.get("/api/v1/site-favorites", handle((req, res) => site.listFavorites(siteDeps, req, res)));
+  router.get("/api/v1/site-favorites/ids", handle((req, res) => site.listFavoriteIds(siteDeps, req, res)));
+  router.post("/api/v1/site-favorites", handle((req, res) => site.addFavorite(siteDeps, req, res)));
+  router.delete("/api/v1/site-favorites/:item_id", handle((req, res) =>
     site.removeFavorite(siteDeps, req, res),
-  );
+  ));
 
   if (config.basePath) app.use(config.basePath, router);
   app.use(router);

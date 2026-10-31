@@ -20,25 +20,25 @@ const item = (title: string): CleanedItem => ({
 const meta = { provider: "mock", model: "m", promptVersion: "clean-v1", cleanedAt: "2026-10-22T00:00:00Z" };
 
 describe("CleanerStore", () => {
-  it("saves and reports counts", () => {
+  it("saves and reports counts", async () => {
     const store = new CleanerStore(":memory:");
-    store.save(record("h1"), meta, [item("一"), item("二")]);
-    assert.deepEqual(store.counts(), { records: 1, items: 2 });
-    assert.equal(store.cleanedHash("r1"), "h1");
-    store.close();
+    await store.save(record("h1"), meta, [item("一"), item("二")]);
+    assert.deepEqual(await store.counts(), { records: 1, items: 2 });
+    assert.equal(await store.cleanedHash("r1"), "h1");
+    await store.close();
   });
-  it("replaces items when the same record is re-cleaned", () => {
+  it("replaces items when the same record is re-cleaned", async () => {
     const store = new CleanerStore(":memory:");
-    store.save(record("h1"), meta, [item("一"), item("二")]);
-    store.save(record("h2"), meta, [item("三")]);
-    assert.deepEqual(store.counts(), { records: 1, items: 1 });
-    assert.equal(store.cleanedHash("r1"), "h2");
-    store.close();
+    await store.save(record("h1"), meta, [item("一"), item("二")]);
+    await store.save(record("h2"), meta, [item("三")]);
+    assert.deepEqual(await store.counts(), { records: 1, items: 1 });
+    assert.equal(await store.cleanedHash("r1"), "h2");
+    await store.close();
   });
 });
 
 describe("CleanerStore v2 migration", () => {
-  it("drops importance, adds source_agent, and keeps existing rows", () => {
+  it("drops importance, adds source_agent, and keeps existing rows", async () => {
     const dir = mkdtempSync(join(tmpdir(), "store-mig-"));
     const file = join(dir, "cleaned.sqlite");
     const raw = new DatabaseSync(file);
@@ -56,8 +56,8 @@ describe("CleanerStore v2 migration", () => {
     raw.close();
 
     const store = new CleanerStore(file);
-    assert.deepEqual(store.counts(), { records: 1, items: 1 });
-    store.close();
+    assert.deepEqual(await store.counts(), { records: 1, items: 1 });
+    await store.close();
 
     const check = new DatabaseSync(file);
     const itemCols = (check.prepare("PRAGMA table_info(cleaned_items)").all() as { name: string }[]).map((c) => c.name);

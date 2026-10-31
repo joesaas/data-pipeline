@@ -74,7 +74,7 @@ export class IngestService {
     return p as unknown as PushPayload;
   }
 
-  push(identity: string, rawPayload: unknown): PushResult {
+  async push(identity: string, rawPayload: unknown): Promise<PushResult> {
     const payload = this.validate(rawPayload);
     const contentHash = hashContent(payload.content);
     const now = new Date().toISOString();
@@ -94,7 +94,7 @@ export class IngestService {
     };
 
     if (payload.external_id) {
-      const existing = this.driver.findRecordByExternalId(identity, payload.external_id);
+      const existing = await this.driver.findRecordByExternalId(identity, payload.external_id);
       if (existing) {
         // external_id addresses the record: a re-push that changes ANY
         // field — content, prompt, tags, metadata, title, source —
@@ -120,16 +120,16 @@ export class IngestService {
           created_at: existing.created_at,
           updated_at: now,
         };
-        this.driver.updateRecord(updated);
+        await this.driver.updateRecord(updated);
         return { id: existing.id, status: "replaced", created_at: existing.created_at };
       }
     } else {
-      const dup = this.driver.findRecordByHash(identity, contentHash);
+      const dup = await this.driver.findRecordByHash(identity, contentHash);
       if (dup) return { id: dup.id, status: "deduped", created_at: dup.created_at };
     }
 
     const rec: StoredRecord = { ...base, id: randomUUID(), created_at: now, updated_at: now };
-    this.driver.insertRecord(rec);
+    await this.driver.insertRecord(rec);
     return { id: rec.id, status: "created", created_at: now };
   }
 }

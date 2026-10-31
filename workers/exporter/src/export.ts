@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readExportData } from "./reader.js";
+import { readExportData, readExportDataPg } from "./reader.js";
+import type { PgPoolLike } from "./pg-pool.js";
 import { DEFAULT_SITE_URL, esc, renderIndex, renderItem } from "./render.js";
 
 export interface ExportResult {
@@ -30,9 +31,17 @@ function assetPath(name: string): string {
  * <outDir>/current, so it always sees a complete generation. Old releases
  * are pruned to the newest few. A failure mid-export leaves `current`
  * untouched.
+ *
+ * Data source: exactly one of dbFile (SQLite) or pgPool (PG). The read
+ * happens before any directory is created, so a read failure — PG
+ * connection errors throw, they never degrade to empty — writes
+ * nothing and leaves `current` untouched.
  */
-export function exportSite(options: {
-  dbFile: string;
+export async function exportSite(options: {
+  dbFile?: string;
+  /** PG pool for the cleaner schema (cleaner-triggered exports pass
+   * the cleaner's pool; the standalone CLI builds its own). */
+  pgPool?: PgPoolLike;
   outDir: string;
   publicApiPath?: string;
   /** Public base URL of the news site, e.g. https://agent101.uk/news (no trailing slash). */
@@ -47,12 +56,18 @@ export function exportSite(options: {
    *  release. */
   detailDir?: string;
   now?: Date;
-}): ExportResult {
-  const { dbFile, outDir } = options;
+}): Promise<ExportResult> {
+  const { outDir } = options;
+  if (options.pgPool && options.dbFile) {
+    throw new Error("exportSite: pass exactly one of dbFile or pgPool, not both");
+  }
+  if (!options.pgPool && !options.dbFile) {
+    throw new Error("exportSite: pass dbFile (SQLite) or pgPool (PG)");
+  }
   const publicApiPath = (options.publicApiPath ?? "/data-pipeline").replace(/\/$/, "");
   const siteUrl = (options.publicSiteUrl ?? DEFAULT_SITE_URL).replace(/\/$/, "");
   const now = options.now ?? new Date();
-  const data = readExportData(dbFile);
+  const data = options.pgPool ? await readExportDataPg(options.pgPool) : readExportData(options.dbFile!);
 
   // Rich detail pages present at export time. File existence is the
   // check, not the detail_pages DB: the exporter and the API share

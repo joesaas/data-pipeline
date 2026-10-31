@@ -112,36 +112,36 @@ export class FileDriver implements StorageDriver {
     writeFileSync(this.tokensPath, JSON.stringify(tokens, null, 1));
   }
 
-  insertRecord(rec: StoredRecord): void {
+  async insertRecord(rec: StoredRecord): Promise<void> {
     writeFileSync(join(this.recordsDir, `${rec.id}.json`), JSON.stringify(rec, null, 1));
   }
 
-  updateRecord(rec: StoredRecord): void {
-    this.insertRecord(rec);
+  async updateRecord(rec: StoredRecord): Promise<void> {
+    await this.insertRecord(rec);
   }
 
-  findRecordByExternalId(identity: string, externalId: string): StoredRecord | null {
+  async findRecordByExternalId(identity: string, externalId: string): Promise<StoredRecord | null> {
     return (
       this.readAllRecords().find((r) => inScope(identity, r) && r.external_id === externalId) ??
       null
     );
   }
 
-  findRecordByHash(identity: string, contentHash: string): StoredRecord | null {
+  async findRecordByHash(identity: string, contentHash: string): Promise<StoredRecord | null> {
     const matches = this.readAllRecords()
       .filter((r) => inScope(identity, r) && r.content_hash === contentHash)
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
     return matches[0] ?? null;
   }
 
-  getRecord(identity: string, id: string): StoredRecord | null {
+  async getRecord(identity: string, id: string): Promise<StoredRecord | null> {
     const path = join(this.recordsDir, `${id}.json`);
     if (!existsSync(path)) return null;
     const rec = JSON.parse(readFileSync(path, "utf8")) as StoredRecord;
     return inScope(identity, rec) ? rec : null;
   }
 
-  listRecords(
+  async listRecords(
     identity: string,
     filter: {
       source_agent?: string;
@@ -152,7 +152,7 @@ export class FileDriver implements StorageDriver {
       after_id?: string;
       order?: "created_desc" | "updated_asc";
     },
-  ): { items: StoredRecord[]; total: number } {
+  ): Promise<{ items: StoredRecord[]; total: number }> {
     let items = this.readAllRecords().filter((r) => inScope(identity, r));
     if (filter.source_agent) items = items.filter((r) => r.source_agent === filter.source_agent);
     if (filter.tag) items = items.filter((r) => r.tags.includes(filter.tag as string));
@@ -171,29 +171,29 @@ export class FileDriver implements StorageDriver {
     return { items: items.slice(filter.offset, filter.offset + filter.limit), total: items.length };
   }
 
-  deleteRecord(identity: string, id: string): boolean {
-    if (!this.getRecord(identity, id)) return false;
+  async deleteRecord(identity: string, id: string): Promise<boolean> {
+    if (!await this.getRecord(identity, id)) return false;
     rmSync(join(this.recordsDir, `${id}.json`));
     return true;
   }
 
-  createToken(tok: StoredToken): void {
+  async createToken(tok: StoredToken): Promise<void> {
     const tokens = this.readTokens();
     tokens.push(tok);
     this.writeTokens(tokens);
   }
 
-  findTokenByHash(keyHash: string): StoredToken | null {
+  async findTokenByHash(keyHash: string): Promise<StoredToken | null> {
     return this.readTokens().find((t) => t.key_hash === keyHash) ?? null;
   }
 
-  listTokens(): StoredToken[] {
+  async listTokens(): Promise<StoredToken[]> {
     return this.readTokens().sort(
       (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
     );
   }
 
-  revokeToken(id: string): boolean {
+  async revokeToken(id: string): Promise<boolean> {
     const tokens = this.readTokens();
     const tok = tokens.find((t) => t.id === id && t.revoked_at === null);
     if (!tok) return false;
@@ -202,7 +202,7 @@ export class FileDriver implements StorageDriver {
     return true;
   }
 
-  deleteToken(id: string): boolean {
+  async deleteToken(id: string): Promise<boolean> {
     const tokens = this.readTokens();
     const kept = tokens.filter((t) => t.id !== id);
     if (kept.length === tokens.length) return false;
@@ -218,17 +218,17 @@ export class FileDriver implements StorageDriver {
     writeFileSync(this.siteNoncesPath, JSON.stringify(rows, null, 1));
   }
 
-  saveSiteNonce(n: SiteNonce): void {
+  async saveSiteNonce(n: SiteNonce): Promise<void> {
     const rows = this.readSiteNonces().filter((r) => r.address !== n.address);
     rows.push(n);
     this.writeSiteNonces(rows);
   }
 
-  getSiteNonce(address: string): SiteNonce | null {
+  async getSiteNonce(address: string): Promise<SiteNonce | null> {
     return this.readSiteNonces().find((r) => r.address === address) ?? null;
   }
 
-  deleteSiteNonce(address: string): void {
+  async deleteSiteNonce(address: string): Promise<void> {
     this.writeSiteNonces(this.readSiteNonces().filter((r) => r.address !== address));
   }
 
@@ -240,17 +240,17 @@ export class FileDriver implements StorageDriver {
     writeFileSync(this.siteSessionsPath, JSON.stringify(rows, null, 1));
   }
 
-  saveSiteSession(s: SiteSession): void {
+  async saveSiteSession(s: SiteSession): Promise<void> {
     const rows = this.readSiteSessions();
     rows.push(s);
     this.writeSiteSessions(rows);
   }
 
-  findSiteSessionByHash(tokenHash: string): SiteSession | null {
+  async findSiteSessionByHash(tokenHash: string): Promise<SiteSession | null> {
     return this.readSiteSessions().find((r) => r.token_hash === tokenHash) ?? null;
   }
 
-  deleteSiteSession(tokenHash: string): void {
+  async deleteSiteSession(tokenHash: string): Promise<void> {
     this.writeSiteSessions(this.readSiteSessions().filter((r) => r.token_hash !== tokenHash));
   }
 
@@ -262,20 +262,20 @@ export class FileDriver implements StorageDriver {
     writeFileSync(this.siteFavoritesPath, JSON.stringify(rows, null, 1));
   }
 
-  listSiteFavorites(address: string): SiteFavorite[] {
+  async listSiteFavorites(address: string): Promise<SiteFavorite[]> {
     return this.readSiteFavorites()
       .filter((r) => r.address === address)
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
-  saveSiteFavorite(f: SiteFavorite): void {
+  async saveSiteFavorite(f: SiteFavorite): Promise<void> {
     const rows = this.readSiteFavorites();
     if (rows.some((r) => r.address === f.address && r.item_id === f.item_id)) return;
     rows.push(f);
     this.writeSiteFavorites(rows);
   }
 
-  deleteSiteFavorite(address: string, itemId: string): boolean {
+  async deleteSiteFavorite(address: string, itemId: string): Promise<boolean> {
     const rows = this.readSiteFavorites();
     const kept = rows.filter((r) => !(r.address === address && r.item_id === itemId));
     if (kept.length === rows.length) return false;
@@ -291,11 +291,11 @@ export class FileDriver implements StorageDriver {
     writeFileSync(this.webhooksPath, JSON.stringify(rows, null, 1));
   }
 
-  getWebhook(id: number): StoredWebhook | null {
+  async getWebhook(id: number): Promise<StoredWebhook | null> {
     return this.readWebhooks().find((w) => w.id === id) ?? null;
   }
 
-  listWebhooks(): WebhookMeta[] {
+  async listWebhooks(): Promise<WebhookMeta[]> {
     return this.readWebhooks()
       .map((w) => ({
         id: w.id,
@@ -310,7 +310,7 @@ export class FileDriver implements StorageDriver {
       .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.id - b.id);
   }
 
-  saveWebhook(w: StoredWebhook): StoredWebhook {
+  async saveWebhook(w: StoredWebhook): Promise<StoredWebhook> {
     const rows = this.readWebhooks();
     if (w.id > 0) {
       const i = rows.findIndex((x) => x.id === w.id);
@@ -326,7 +326,7 @@ export class FileDriver implements StorageDriver {
     return saved;
   }
 
-  deleteWebhook(id: number): boolean {
+  async deleteWebhook(id: number): Promise<boolean> {
     const rows = this.readWebhooks();
     const kept = rows.filter((w) => w.id !== id);
     if (kept.length === rows.length) return false;
@@ -342,10 +342,10 @@ export class FileDriver implements StorageDriver {
     writeFileSync(this.triggerHistoryPath, JSON.stringify(rows, null, 1));
   }
 
-  listTriggerHistory(filter: { webhook_id?: number; limit: number }): {
+  async listTriggerHistory(filter: { webhook_id?: number; limit: number }): Promise<{
     items: WebhookTriggerHistory[];
     total: number;
-  } {
+  }> {
     const all = this.readTriggerHistory().sort(
       (a, b) => b.triggered_at.localeCompare(a.triggered_at) || b.id - a.id,
     );
@@ -361,7 +361,7 @@ export class FileDriver implements StorageDriver {
     };
   }
 
-  appendTriggerHistory(row: Omit<WebhookTriggerHistory, "id">): WebhookTriggerHistory {
+  async appendTriggerHistory(row: Omit<WebhookTriggerHistory, "id">): Promise<WebhookTriggerHistory> {
     const rows = this.readTriggerHistory();
     const next = rows.reduce((m, x) => Math.max(m, x.id), 0) + 1;
     const saved = { ...row, id: next };
@@ -382,11 +382,11 @@ export class FileDriver implements StorageDriver {
     writeFileSync(this.pullTasksPath, JSON.stringify(rows, null, 1));
   }
 
-  getPullTask(id: number): StoredPullTask | null {
+  async getPullTask(id: number): Promise<StoredPullTask | null> {
     return this.readPullTasks().find((t) => t.id === id) ?? null;
   }
 
-  listPullTasks(): StoredPullTask[] {
+  async listPullTasks(): Promise<StoredPullTask[]> {
     return this.readPullTasks().sort(
       (a, b) => a.updated_at.localeCompare(b.updated_at) || a.id - b.id,
     );
@@ -400,18 +400,18 @@ export class FileDriver implements StorageDriver {
     writeFileSync(this.pendingTasksPath, JSON.stringify(rows, null, 1));
   }
 
-  getPendingTask(id: number): StoredPendingTask | null {
+  async getPendingTask(id: number): Promise<StoredPendingTask | null> {
     return this.readPendingTasks().find((t) => t.id === id) ?? null;
   }
 
-  listPendingTasks(filter: { target?: string; status?: PendingTaskStatus }): StoredPendingTask[] {
+  async listPendingTasks(filter: { target?: string; status?: PendingTaskStatus }): Promise<StoredPendingTask[]> {
     return this.readPendingTasks()
       .filter((t) => (filter.target ? t.target === filter.target : true))
       .filter((t) => (filter.status ? t.status === filter.status : true))
       .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
   }
 
-  savePendingTask(t: StoredPendingTask): StoredPendingTask {
+  async savePendingTask(t: StoredPendingTask): Promise<StoredPendingTask> {
     const rows = this.readPendingTasks();
     if (t.id > 0) {
       const i = rows.findIndex((x) => x.id === t.id);
@@ -430,7 +430,7 @@ export class FileDriver implements StorageDriver {
     return saved;
   }
 
-  deletePendingTask(id: number): boolean {
+  async deletePendingTask(id: number): Promise<boolean> {
     const rows = this.readPendingTasks();
     const kept = rows.filter((t) => t.id !== id);
     if (kept.length === rows.length) return false;
@@ -438,7 +438,7 @@ export class FileDriver implements StorageDriver {
     return true;
   }
 
-  deleteWaitingPendingTasks(pullTaskId: number): number {
+  async deleteWaitingPendingTasks(pullTaskId: number): Promise<number> {
     const rows = this.readPendingTasks();
     const kept = rows.filter((t) => !(t.pull_task_id === pullTaskId && t.status === "waiting"));
     const removed = rows.length - kept.length;
@@ -454,11 +454,11 @@ export class FileDriver implements StorageDriver {
     writeFileSync(this.chatMessagesPath, JSON.stringify(rows, null, 1));
   }
 
-  createChatMessage(m: {
+  async createChatMessage(m: {
     source: ChatMessageSource;
     content: string;
     in_reply_to?: number | null;
-  }): StoredChatMessage {
+  }): Promise<StoredChatMessage> {
     const rows = this.readChatMessages();
     const now = new Date().toISOString();
     const saved: StoredChatMessage = {
@@ -476,21 +476,21 @@ export class FileDriver implements StorageDriver {
     return saved;
   }
 
-  getChatMessage(id: number): StoredChatMessage | null {
+  async getChatMessage(id: number): Promise<StoredChatMessage | null> {
     return this.readChatMessages().find((m) => m.id === id) ?? null;
   }
 
-  listChatMessages(filter: {
+  async listChatMessages(filter: {
     source?: ChatMessageSource;
     status?: ChatMessageStatus;
-  }): StoredChatMessage[] {
+  }): Promise<StoredChatMessage[]> {
     return this.readChatMessages()
       .filter((m) => (filter.source ? m.source === filter.source : true))
       .filter((m) => (filter.status ? m.status === filter.status : true))
       .sort((a, b) => a.id - b.id);
   }
 
-  saveChatMessage(m: StoredChatMessage): StoredChatMessage {
+  async saveChatMessage(m: StoredChatMessage): Promise<StoredChatMessage> {
     const rows = this.readChatMessages();
     const i = rows.findIndex((x) => x.id === m.id);
     if (i >= 0) rows[i] = m;
@@ -499,10 +499,10 @@ export class FileDriver implements StorageDriver {
     return m;
   }
 
-  completeChatMessage(
+  async completeChatMessage(
     id: number,
     reply: string,
-  ): { human: StoredChatMessage; muse: StoredChatMessage } | null {
+  ): Promise<{ human: StoredChatMessage; muse: StoredChatMessage } | null> {
     const rows = this.readChatMessages();
     const human = rows.find((m) => m.id === id);
     if (!human || human.status !== "processing") return null;
@@ -525,7 +525,7 @@ export class FileDriver implements StorageDriver {
     return { human, muse };
   }
 
-  savePullTask(t: StoredPullTask): StoredPullTask {
+  async savePullTask(t: StoredPullTask): Promise<StoredPullTask> {
     const rows = this.readPullTasks();
     if (t.id > 0) {
       const i = rows.findIndex((x) => x.id === t.id);
@@ -541,7 +541,7 @@ export class FileDriver implements StorageDriver {
     return saved;
   }
 
-  deletePullTask(id: number): boolean {
+  async deletePullTask(id: number): Promise<boolean> {
     const rows = this.readPullTasks();
     const kept = rows.filter((t) => t.id !== id);
     if (kept.length === rows.length) return false;
@@ -557,17 +557,17 @@ export class FileDriver implements StorageDriver {
     writeFileSync(this.webhookPayloadsPath, JSON.stringify(items, null, 1));
   }
 
-  listWebhookPayloads(): WebhookPayload[] {
+  async listWebhookPayloads(): Promise<WebhookPayload[]> {
     return this.readWebhookPayloads().sort(
       (a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id),
     );
   }
 
-  getWebhookPayload(id: string): WebhookPayload | null {
+  async getWebhookPayload(id: string): Promise<WebhookPayload | null> {
     return this.readWebhookPayloads().find((p) => p.id === id) ?? null;
   }
 
-  saveWebhookPayload(p: WebhookPayload): void {
+  async saveWebhookPayload(p: WebhookPayload): Promise<void> {
     const items = this.readWebhookPayloads();
     const i = items.findIndex((x) => x.id === p.id);
     if (i >= 0) items[i] = p;
@@ -575,7 +575,7 @@ export class FileDriver implements StorageDriver {
     this.writeWebhookPayloads(items);
   }
 
-  deleteWebhookPayload(id: string): boolean {
+  async deleteWebhookPayload(id: string): Promise<boolean> {
     const items = this.readWebhookPayloads();
     const kept = items.filter((p) => p.id !== id);
     if (kept.length === items.length) return false;
@@ -583,7 +583,7 @@ export class FileDriver implements StorageDriver {
     return true;
   }
 
-  close(): void {
+  async close(): Promise<void> {
     // Nothing to release; files are written synchronously.
   }
 }

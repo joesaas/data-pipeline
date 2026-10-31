@@ -58,8 +58,8 @@ export function cursorRunnerScript(config: AppConfig, envFile: string | null): s
 }
 
 /** 401 when no/invalid key, 403 when a valid non-admin key. Returns null after responding. */
-export function adminOf(deps: AdminDeps, req: Request, res: Response): string | null {
-  const identity = deps.auth.resolveIdentity(req.header("x-api-key") ?? undefined);
+export async function adminOf(deps: AdminDeps, req: Request, res: Response): Promise<string | null> {
+  const identity = await deps.auth.resolveIdentity(req.header("x-api-key") ?? undefined);
   if (identity === null) {
     res.status(401).json({ error: "unauthorized" });
     return null;
@@ -71,14 +71,14 @@ export function adminOf(deps: AdminDeps, req: Request, res: Response): string | 
   return identity;
 }
 
-export function listTokens(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
-  const items = deps.driver.listTokens().map(publicToken);
+export async function listTokens(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
+  const items = (await deps.driver.listTokens()).map(publicToken);
   res.json({ items, total: items.length });
 }
 
-export function createToken(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function createToken(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const body = (req.body ?? {}) as { name?: unknown; role?: unknown };
   const name = typeof body.name === "string" ? body.name.trim() : "";
   if (!name || name.length > 100) {
@@ -93,21 +93,21 @@ export function createToken(deps: AdminDeps, req: Request, res: Response): void 
     }
     role = body.role;
   }
-  const { token, plainKey } = deps.auth.createToken(name, role);
+  const { token, plainKey } = await deps.auth.createToken(name, role);
   // Plaintext is returned exactly once; it is never stored.
   res.status(201).json({ ...publicToken(token), api_key: plainKey });
 }
 
-export function revokeToken(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function revokeToken(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = req.params.id;
-  const found = deps.driver.listTokens().find((t) => t.id === id);
+  const found = (await deps.driver.listTokens()).find((t) => t.id === id);
   if (!found) {
     res.status(404).json({ error: "token not found" });
     return;
   }
-  deps.driver.revokeToken(id);
-  const updated = deps.driver.listTokens().find((t) => t.id === id);
+  await deps.driver.revokeToken(id);
+  const updated = (await deps.driver.listTokens()).find((t) => t.id === id);
   res.json(publicToken(updated ?? found));
 }
 
@@ -119,10 +119,10 @@ export function revokeToken(deps: AdminDeps, req: Request, res: Response): void 
  * with the token are NOT deleted; they stay readable by admin, with
  * their bucket falling back to the token id in the Records page.
  */
-export function deleteToken(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function deleteToken(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = req.params.id;
-  const found = deps.driver.listTokens().find((t) => t.id === id);
+  const found = (await deps.driver.listTokens()).find((t) => t.id === id);
   if (!found) {
     res.status(404).json({ error: "token not found" });
     return;
@@ -131,7 +131,7 @@ export function deleteToken(deps: AdminDeps, req: Request, res: Response): void 
     res.status(409).json({ error: "only revoked tokens can be deleted (revoke first)" });
     return;
   }
-  deps.driver.deleteToken(id);
+  await deps.driver.deleteToken(id);
   res.json({ ok: true });
 }
 
@@ -201,27 +201,27 @@ function parseCronField(raw: unknown, present: boolean): { cron: string | null }
 }
 
 /** Mark one webhook scheduled and clear every other (at most one active). */
-export function activateWebhook(driver: StorageDriver, id: number): void {
+export async function activateWebhook(driver: StorageDriver, id: number): Promise<void> {
   const now = new Date().toISOString();
-  for (const m of driver.listWebhooks()) {
+  for (const m of await driver.listWebhooks()) {
     if (m.is_active && m.id !== id) {
-      const full = driver.getWebhook(m.id);
-      if (full) driver.saveWebhook({ ...full, is_active: false, updated_at: now });
+      const full = await driver.getWebhook(m.id);
+      if (full) await driver.saveWebhook({ ...full, is_active: false, updated_at: now });
     }
   }
-  const target = driver.getWebhook(id);
+  const target = await driver.getWebhook(id);
   if (target && !target.is_active) {
-    driver.saveWebhook({ ...target, is_active: true, updated_at: now });
+    await driver.saveWebhook({ ...target, is_active: true, updated_at: now });
   }
 }
 
-export function listWebhooks(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
-  res.json(deps.driver.listWebhooks());
+export async function listWebhooks(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
+  res.json(await deps.driver.listWebhooks());
 }
 
-export function createWebhook(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function createWebhook(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const body = (req.body ?? {}) as {
     name?: unknown;
     webhookUrl?: unknown;
@@ -234,7 +234,7 @@ export function createWebhook(deps: AdminDeps, req: Request, res: Response): voi
     res.status(400).json({ error: name.error, field: "name" });
     return;
   }
-  if (deps.driver.listWebhooks().some((m) => m.name === name.name)) {
+  if ((await deps.driver.listWebhooks()).some((m) => m.name === name.name)) {
     res.status(409).json({ error: "webhook already exists", field: "name" });
     return;
   }
@@ -272,7 +272,7 @@ export function createWebhook(deps: AdminDeps, req: Request, res: Response): voi
   const now = new Date().toISOString();
   // A new row is never scheduled by default: the timed trigger keeps
   // firing the row that was scheduled before, until one is set active.
-  const saved = deps.driver.saveWebhook({
+  const saved = await deps.driver.saveWebhook({
     id: 0,
     name: name.name,
     url: urlRaw,
@@ -286,11 +286,11 @@ export function createWebhook(deps: AdminDeps, req: Request, res: Response): voi
   res.status(201).json(webhookMeta(saved));
 }
 
-export function getWebhook(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function getWebhook(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parseWebhookId(req, res);
   if (id === null) return;
-  const row = deps.driver.getWebhook(id);
+  const row = await deps.driver.getWebhook(id);
   if (!row) {
     res.status(404).json({ error: "webhook not found" });
     return;
@@ -298,11 +298,11 @@ export function getWebhook(deps: AdminDeps, req: Request, res: Response): void {
   res.json(webhookMeta(row));
 }
 
-export function updateWebhook(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function updateWebhook(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parseWebhookId(req, res);
   if (id === null) return;
-  const existing = deps.driver.getWebhook(id);
+  const existing = await deps.driver.getWebhook(id);
   if (!existing) {
     res.status(404).json({ error: "webhook not found" });
     return;
@@ -357,7 +357,7 @@ export function updateWebhook(deps: AdminDeps, req: Request, res: Response): voi
       payload = parsed.content;
     }
   }
-  const row = deps.driver.saveWebhook({
+  const row = await deps.driver.saveWebhook({
     ...existing,
     url,
     token,
@@ -368,22 +368,22 @@ export function updateWebhook(deps: AdminDeps, req: Request, res: Response): voi
   res.json(webhookMeta(row));
 }
 
-export function deleteWebhook(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function deleteWebhook(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parseWebhookId(req, res);
   if (id === null) return;
-  if (!deps.driver.deleteWebhook(id)) {
+  if (!await deps.driver.deleteWebhook(id)) {
     res.status(404).json({ error: "webhook not found" });
     return;
   }
   res.json({ ok: true });
 }
 
-export function setWebhookActive(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function setWebhookActive(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parseWebhookId(req, res);
   if (id === null) return;
-  const target = deps.driver.getWebhook(id);
+  const target = await deps.driver.getWebhook(id);
   if (!target) {
     res.status(404).json({ error: "webhook not found" });
     return;
@@ -394,15 +394,15 @@ export function setWebhookActive(deps: AdminDeps, req: Request, res: Response): 
     return;
   }
   if (body.active) {
-    activateWebhook(deps.driver, target.id);
+    await activateWebhook(deps.driver, target.id);
   } else {
-    deps.driver.saveWebhook({
+    await deps.driver.saveWebhook({
       ...target,
       is_active: false,
       updated_at: new Date().toISOString(),
     });
   }
-  const row = deps.driver.getWebhook(target.id);
+  const row = await deps.driver.getWebhook(target.id);
   res.json(webhookMeta(row ?? { ...target, is_active: body.active }));
 }
 
@@ -438,11 +438,11 @@ let triggerInFlight = false;
  * (see the job file). The row must exist — resolved here, before spawn,
  * so an unknown id is a 404, never a misdirected fire.
  */
-export function testWebhook(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function testWebhook(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parseWebhookId(req, res);
   if (id === null) return;
-  const row = deps.driver.getWebhook(id);
+  const row = await deps.driver.getWebhook(id);
   if (!row) {
     res.status(404).json({ error: "webhook not found" });
     return;
@@ -461,8 +461,8 @@ export function testWebhook(deps: AdminDeps, req: Request, res: Response): void 
  * webhook-history.ts), so scheduled fires show up here without any API
  * involvement; rows survive webhook deletion (the name is a snapshot).
  */
-export function listTriggerHistory(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function listTriggerHistory(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   let webhookId: number | undefined;
   const rawId = req.query.webhook_id;
   if (rawId !== undefined) {
@@ -475,7 +475,7 @@ export function listTriggerHistory(deps: AdminDeps, req: Request, res: Response)
   }
   const rawLimit = Number(req.query.limit);
   const limit = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, Math.floor(rawLimit))) : 50;
-  const { items, total } = deps.driver.listTriggerHistory({ webhook_id: webhookId, limit });
+  const { items, total } = await deps.driver.listTriggerHistory({ webhook_id: webhookId, limit });
   res.json({ items, total });
 }
 
@@ -530,20 +530,20 @@ function parsePullTaskTarget(raw: unknown): { target: string } | { error: string
   return { target };
 }
 
-export function listPullTasks(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
-  res.json(deps.driver.listPullTasks());
+export async function listPullTasks(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
+  res.json(await deps.driver.listPullTasks());
 }
 
-export function createPullTask(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function createPullTask(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const body = (req.body ?? {}) as { name?: unknown; prompt?: unknown; cron?: unknown; target?: unknown };
   const name = parsePullTaskName(body.name);
   if ("error" in name) {
     res.status(400).json({ error: name.error, field: "name" });
     return;
   }
-  if (deps.driver.listPullTasks().some((t) => t.name === name.name)) {
+  if ((await deps.driver.listPullTasks()).some((t) => t.name === name.name)) {
     res.status(409).json({ error: "pull task already exists", field: "name" });
     return;
   }
@@ -565,7 +565,7 @@ export function createPullTask(deps: AdminDeps, req: Request, res: Response): vo
   const now = new Date().toISOString();
   // A new task is never active by default, like a new webhook: the
   // scheduler must not start queueing a task the moment it is created.
-  const saved = deps.driver.savePullTask({
+  const saved = await deps.driver.savePullTask({
     id: 0,
     name: name.name,
     prompt: prompt.prompt,
@@ -579,11 +579,11 @@ export function createPullTask(deps: AdminDeps, req: Request, res: Response): vo
   res.status(201).json(saved);
 }
 
-export function getPullTask(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function getPullTask(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parsePullTaskId(req, res);
   if (id === null) return;
-  const row = deps.driver.getPullTask(id);
+  const row = await deps.driver.getPullTask(id);
   if (!row) {
     res.status(404).json({ error: "pull task not found" });
     return;
@@ -591,11 +591,11 @@ export function getPullTask(deps: AdminDeps, req: Request, res: Response): void 
   res.json(row);
 }
 
-export function updatePullTask(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function updatePullTask(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parsePullTaskId(req, res);
   if (id === null) return;
-  const existing = deps.driver.getPullTask(id);
+  const existing = await deps.driver.getPullTask(id);
   if (!existing) {
     res.status(404).json({ error: "pull task not found" });
     return;
@@ -631,7 +631,7 @@ export function updatePullTask(deps: AdminDeps, req: Request, res: Response): vo
   // Editing a task never rewrites already-queued rows: pending rows
   // carry their own prompt/target snapshot, so only future scheduled
   // rows (and future manual runs) pick up the new values.
-  const row = deps.driver.savePullTask({
+  const row = await deps.driver.savePullTask({
     ...existing,
     prompt,
     cron,
@@ -641,25 +641,25 @@ export function updatePullTask(deps: AdminDeps, req: Request, res: Response): vo
   res.json(row);
 }
 
-export function deletePullTask(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function deletePullTask(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parsePullTaskId(req, res);
   if (id === null) return;
-  if (!deps.driver.deletePullTask(id)) {
+  if (!await deps.driver.deletePullTask(id)) {
     res.status(404).json({ error: "pull task not found" });
     return;
   }
   // Waiting rows of a deleted task will never be wanted; done/failed
   // rows stay as history.
-  const cancelled = deps.driver.deleteWaitingPendingTasks(id);
+  const cancelled = await deps.driver.deleteWaitingPendingTasks(id);
   res.json({ ok: true, cancelled_waiting: cancelled });
 }
 
-export function setPullTaskActive(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function setPullTaskActive(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parsePullTaskId(req, res);
   if (id === null) return;
-  const target = deps.driver.getPullTask(id);
+  const target = await deps.driver.getPullTask(id);
   if (!target) {
     res.status(404).json({ error: "pull task not found" });
     return;
@@ -671,7 +671,7 @@ export function setPullTaskActive(deps: AdminDeps, req: Request, res: Response):
   }
   // Unlike webhooks, activating one pull task never deactivates others:
   // each task runs on its own cron.
-  const row = deps.driver.savePullTask({
+  const row = await deps.driver.savePullTask({
     ...target,
     is_active: body.active,
     updated_at: new Date().toISOString(),
@@ -702,8 +702,8 @@ function parsePendingStatus(raw: unknown): { status: PendingTaskStatus } | { err
   return { status: raw };
 }
 
-export function listPendingTasks(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function listPendingTasks(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const target = typeof req.query.target === "string" ? req.query.target : undefined;
   if (target !== undefined) {
     const parsed = parsePullTaskTarget(target);
@@ -722,7 +722,7 @@ export function listPendingTasks(deps: AdminDeps, req: Request, res: Response): 
     }
     statusFilter = parsed.status;
   }
-  let items = deps.driver.listPendingTasks({ target, status: statusFilter });
+  let items = await deps.driver.listPendingTasks({ target, status: statusFilter });
   const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
   const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 100;
   items = items.slice(0, limit);
@@ -737,26 +737,25 @@ export function listPendingTasks(deps: AdminDeps, req: Request, res: Response): 
  * admin-only claim endpoint. The hook wakes the worker, which then
  * claims with an admin key.
  */
-export function listPendingTasksPublic(deps: AdminDeps, req: Request, res: Response): void {
+export async function listPendingTasksPublic(deps: AdminDeps, req: Request, res: Response): Promise<void> {
   const targetRaw = typeof req.query.target === "string" && req.query.target ? req.query.target : "muse";
   const parsed = parsePullTaskTarget(targetRaw);
   if ("error" in parsed) {
     res.status(400).json({ error: parsed.error, field: "target" });
     return;
   }
-  const items: PendingTaskPublic[] = deps.driver
-    .listPendingTasks({ target: parsed.target, status: "waiting" })
+  const items: PendingTaskPublic[] = (await deps.driver.listPendingTasks({ target: parsed.target, status: "waiting" }))
     .slice(0, 100)
     .map((t) => ({ id: t.id, pull_task_id: t.pull_task_id, due_at: t.due_at, kind: t.kind }));
   res.json({ target: parsed.target, waiting: items.length, items });
 }
 
 /** Claim a waiting row: waiting -> running. Anything else is a 409 — two workers can never run one row. */
-export function claimPendingTask(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function claimPendingTask(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parsePendingTaskId(req, res);
   if (id === null) return;
-  const row = deps.driver.getPendingTask(id);
+  const row = await deps.driver.getPendingTask(id);
   if (!row) {
     res.status(404).json({ error: "pending task not found" });
     return;
@@ -765,7 +764,7 @@ export function claimPendingTask(deps: AdminDeps, req: Request, res: Response): 
     res.status(409).json({ error: `pending task is ${row.status}, not waiting`, status: row.status });
     return;
   }
-  const claimed = deps.driver.savePendingTask({
+  const claimed = await deps.driver.savePendingTask({
     ...row,
     status: "running",
     updated_at: new Date().toISOString(),
@@ -774,11 +773,11 @@ export function claimPendingTask(deps: AdminDeps, req: Request, res: Response): 
 }
 
 /** Mark a running row done after its result was pushed. Requires the pushed record's external_id. */
-export function completePendingTask(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function completePendingTask(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parsePendingTaskId(req, res);
   if (id === null) return;
-  const row = deps.driver.getPendingTask(id);
+  const row = await deps.driver.getPendingTask(id);
   if (!row) {
     res.status(404).json({ error: "pending task not found" });
     return;
@@ -796,7 +795,7 @@ export function completePendingTask(deps: AdminDeps, req: Request, res: Response
     res.status(400).json({ error: "record_id must be a string", field: "record_id" });
     return;
   }
-  const done = deps.driver.savePendingTask({
+  const done = await deps.driver.savePendingTask({
     ...row,
     status: "done",
     result_external_id: body.external_id.trim(),
@@ -805,19 +804,19 @@ export function completePendingTask(deps: AdminDeps, req: Request, res: Response
     updated_at: new Date().toISOString(),
   });
   // Display-only bookkeeping on the task itself (scheduling runs off the queue, not this field).
-  const task = deps.driver.getPullTask(row.pull_task_id);
+  const task = await deps.driver.getPullTask(row.pull_task_id);
   if (task) {
-    deps.driver.savePullTask({ ...task, last_run_at: new Date().toISOString(), updated_at: task.updated_at });
+    await deps.driver.savePullTask({ ...task, last_run_at: new Date().toISOString(), updated_at: task.updated_at });
   }
   res.json(done);
 }
 
 /** Mark a running row failed, with a short error for the queue display. */
-export function failPendingTask(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function failPendingTask(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parsePendingTaskId(req, res);
   if (id === null) return;
-  const row = deps.driver.getPendingTask(id);
+  const row = await deps.driver.getPendingTask(id);
   if (!row) {
     res.status(404).json({ error: "pending task not found" });
     return;
@@ -829,7 +828,7 @@ export function failPendingTask(deps: AdminDeps, req: Request, res: Response): v
   const body = (req.body ?? {}) as { error?: unknown };
   const error =
     typeof body.error === "string" && body.error.trim() ? body.error.trim().slice(0, 1000) : "failed";
-  const failed = deps.driver.savePendingTask({
+  const failed = await deps.driver.savePendingTask({
     ...row,
     status: "failed",
     error,
@@ -841,11 +840,11 @@ export function failPendingTask(deps: AdminDeps, req: Request, res: Response): v
 /** Stale-running recovery: a worker that died mid-run leaves its row
  *  "running" forever; after 30 minutes anyone may reset it to waiting
  *  so the next wake retries it. Only running rows reset, never done ones. */
-export function resetPendingTask(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function resetPendingTask(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parsePendingTaskId(req, res);
   if (id === null) return;
-  const row = deps.driver.getPendingTask(id);
+  const row = await deps.driver.getPendingTask(id);
   if (!row) {
     res.status(404).json({ error: "pending task not found" });
     return;
@@ -854,7 +853,7 @@ export function resetPendingTask(deps: AdminDeps, req: Request, res: Response): 
     res.status(409).json({ error: `pending task is ${row.status}, not running`, status: row.status });
     return;
   }
-  const reset = deps.driver.savePendingTask({
+  const reset = await deps.driver.savePendingTask({
     ...row,
     status: "waiting",
     error: null,
@@ -883,8 +882,8 @@ function parseChatStatus(raw: unknown): { status: ChatMessageStatus } | { error:
  * Console chat list: newest `limit` rows in chronological order, so a
  * long stream never pushes new messages out of view. Default 200, max 1000.
  */
-export function listChatMessages(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function listChatMessages(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const sourceRaw = req.query.source;
   let source: "human" | "muse" | undefined;
   if (typeof sourceRaw === "string" && sourceRaw) {
@@ -905,23 +904,22 @@ export function listChatMessages(deps: AdminDeps, req: Request, res: Response): 
   }
   const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
   const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : 200;
-  const items = deps.driver.listChatMessages({ source, status: statusFilter });
+  const items = await deps.driver.listChatMessages({ source, status: statusFilter });
   res.json({ items: items.slice(-limit), total: items.length });
 }
 
 /** Worker queue: oldest pending human rows first, so prompts are answered in order. */
-export function listPendingChatMessages(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function listPendingChatMessages(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
   const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 10;
-  const items = deps.driver
-    .listChatMessages({ source: "human", status: "pending" })
+  const items = (await deps.driver.listChatMessages({ source: "human", status: "pending" }))
     .slice(0, limit);
   res.json({ items, total: items.length });
 }
 
-export function createChatMessage(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function createChatMessage(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const body = (req.body ?? {}) as { content?: unknown };
   if (typeof body.content !== "string") {
     res.status(400).json({ error: "content is required", field: "content" });
@@ -932,16 +930,16 @@ export function createChatMessage(deps: AdminDeps, req: Request, res: Response):
     res.status(400).json({ error: "content is required (max 200000 chars)", field: "content" });
     return;
   }
-  const saved = deps.driver.createChatMessage({ source: "human", content });
+  const saved = await deps.driver.createChatMessage({ source: "human", content });
   res.status(201).json(saved);
 }
 
 /** Claim an oldest-pending human row: pending -> processing. Anything else is a 409. */
-export function claimChatMessage(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function claimChatMessage(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parseChatMessageId(req, res);
   if (id === null) return;
-  const row = deps.driver.getChatMessage(id);
+  const row = await deps.driver.getChatMessage(id);
   if (!row) {
     res.status(404).json({ error: "chat message not found" });
     return;
@@ -950,7 +948,7 @@ export function claimChatMessage(deps: AdminDeps, req: Request, res: Response): 
     res.status(409).json({ error: `chat message is ${row.source}/${row.status}, not human/pending`, status: row.status });
     return;
   }
-  const claimed = deps.driver.saveChatMessage({
+  const claimed = await deps.driver.saveChatMessage({
     ...row,
     status: "processing",
     updated_at: new Date().toISOString(),
@@ -959,11 +957,11 @@ export function claimChatMessage(deps: AdminDeps, req: Request, res: Response): 
 }
 
 /** Complete a processing human row: human -> done, plus its muse reply row. Requires reply content. */
-export function completeChatMessage(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function completeChatMessage(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parseChatMessageId(req, res);
   if (id === null) return;
-  const row = deps.driver.getChatMessage(id);
+  const row = await deps.driver.getChatMessage(id);
   if (!row) {
     res.status(404).json({ error: "chat message not found" });
     return;
@@ -982,7 +980,7 @@ export function completeChatMessage(deps: AdminDeps, req: Request, res: Response
     res.status(400).json({ error: "content is required (max 200000 chars)", field: "content" });
     return;
   }
-  const done = deps.driver.completeChatMessage(id, reply);
+  const done = await deps.driver.completeChatMessage(id, reply);
   if (!done) {
     res.status(409).json({ error: "chat message is no longer processing", status: row.status });
     return;
@@ -991,11 +989,11 @@ export function completeChatMessage(deps: AdminDeps, req: Request, res: Response
 }
 
 /** Mark a processing row failed, with a short error for the console display. */
-export function failChatMessage(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function failChatMessage(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parseChatMessageId(req, res);
   if (id === null) return;
-  const row = deps.driver.getChatMessage(id);
+  const row = await deps.driver.getChatMessage(id);
   if (!row) {
     res.status(404).json({ error: "chat message not found" });
     return;
@@ -1007,7 +1005,7 @@ export function failChatMessage(deps: AdminDeps, req: Request, res: Response): v
   const body = (req.body ?? {}) as { error?: unknown };
   const error =
     typeof body.error === "string" && body.error.trim() ? body.error.trim().slice(0, 1000) : "failed";
-  const failed = deps.driver.saveChatMessage({
+  const failed = await deps.driver.saveChatMessage({
     ...row,
     status: "failed",
     error,
@@ -1019,11 +1017,11 @@ export function failChatMessage(deps: AdminDeps, req: Request, res: Response): v
 /** Stale-processing recovery: a worker that died mid-run leaves its row
  *  "processing" forever; anyone may reset it to pending so the next
  *  round retries it. Only processing rows reset, never done ones. */
-export function resetChatMessage(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function resetChatMessage(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parseChatMessageId(req, res);
   if (id === null) return;
-  const row = deps.driver.getChatMessage(id);
+  const row = await deps.driver.getChatMessage(id);
   if (!row) {
     res.status(404).json({ error: "chat message not found" });
     return;
@@ -1032,7 +1030,7 @@ export function resetChatMessage(deps: AdminDeps, req: Request, res: Response): 
     res.status(409).json({ error: `chat message is ${row.status}, not processing`, status: row.status });
     return;
   }
-  const reset = deps.driver.saveChatMessage({
+  const reset = await deps.driver.saveChatMessage({
     ...row,
     status: "pending",
     error: null,
@@ -1051,7 +1049,7 @@ export function resetChatMessage(deps: AdminDeps, req: Request, res: Response): 
  * returned, logged, or embedded in an error message.
  */
 export async function getPgVerify(deps: AdminDeps, req: Request, res: Response): Promise<void> {
-  if (adminOf(deps, req, res) === null) return;
+  if ((await adminOf(deps, req, res)) === null) return;
   try {
     const probe = deps.pgVerify ?? (() => verifyPg());
     const result = await probe();
@@ -1069,17 +1067,16 @@ export async function getPgVerify(deps: AdminDeps, req: Request, res: Response):
  * not the task is active: a manual run is an explicit action, not a
  * schedule. due_at is now, so it never collides with a scheduled row.
  */
-export function runPullTaskNow(deps: AdminDeps, req: Request, res: Response): void {
-  if (adminOf(deps, req, res) === null) return;
+export async function runPullTaskNow(deps: AdminDeps, req: Request, res: Response): Promise<void> {
+  if ((await adminOf(deps, req, res)) === null) return;
   const id = parsePullTaskId(req, res);
   if (id === null) return;
-  const task = deps.driver.getPullTask(id);
+  const task = await deps.driver.getPullTask(id);
   if (!task) {
     res.status(404).json({ error: "pull task not found" });
     return;
   }
-  const waiting = deps.driver
-    .listPendingTasks({ target: task.target, status: "waiting" })
+  const waiting = (await deps.driver.listPendingTasks({ target: task.target, status: "waiting" }))
     .find((t) => t.pull_task_id === id);
   if (waiting) {
     res.status(409).json({ error: "task already has a waiting execution", pending_id: waiting.id });
@@ -1087,7 +1084,7 @@ export function runPullTaskNow(deps: AdminDeps, req: Request, res: Response): vo
   }
   const now = new Date().toISOString();
   try {
-    const row = deps.driver.savePendingTask({
+    const row = await deps.driver.savePendingTask({
       id: 0,
       pull_task_id: task.id,
       pull_task_name: task.name,

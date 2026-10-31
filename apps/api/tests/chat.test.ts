@@ -13,6 +13,7 @@ function baseConfig(dir: string): AppConfig {
     basePath: "/data-pipeline",
     dataDir: join(dir, "data"),
     storage: "sqlite",
+    newsDetailStorage: "sqlite",
     authRequired: true,
     maxContentBytes: 1_048_576,
     maxPromptBytes: 65_536,
@@ -27,13 +28,13 @@ function baseConfig(dir: string): AppConfig {
 async function start(config: AppConfig): Promise<{
   base: string;
   server: Server;
-  close: () => void;
+  close: () => Promise<void>;
   adminKey: string;
   userKey: string;
 }> {
   const { app, driver, auth } = createApp(config);
-  const adminKey = auth.createToken("console-admin", "admin").plainKey;
-  const userKey = auth.createToken("some-user", "user").plainKey;
+  const adminKey = (await auth.createToken("console-admin", "admin")).plainKey;
+  const userKey = (await auth.createToken("some-user", "user")).plainKey;
   const server = app.listen(0);
   await new Promise<void>((r) => server.once("listening", r));
   const addr = server.address();
@@ -41,9 +42,9 @@ async function start(config: AppConfig): Promise<{
   return {
     base: `http://127.0.0.1:${port}`,
     server,
-    close: () => {
+    close: async () => {
       server.close();
-      driver.close();
+      await driver.close();
     },
     adminKey,
     userKey,
@@ -82,8 +83,8 @@ describe("console chat routes", () => {
     ctx = await start(baseConfig(dir));
   });
 
-  after(() => {
-    ctx.close();
+  after(async () => {
+    await ctx.close();
   });
 
   it("rejects anonymous callers with 401 and non-admin keys with 403", async () => {
