@@ -115,6 +115,57 @@ describe("pg driver (stub pool)", () => {
     }
   });
 
+  it("serializes tags/metadata as JSON strings for JSONB, not Postgres array literals", async () => {
+    // Regression: passing a JS array raw makes node-postgres emit {"news"},
+    // which jsonb rejects with 22P02 (real-PG contract, 2026-10-31).
+    const pool = stubPool(() => ({ rows: [], rowCount: 1 }));
+    const driver = new PgDriver(pool);
+    try {
+      await driver.insertRecord({
+        id: "r3",
+        token_id: "tok",
+        external_id: null,
+        title: null,
+        prompt: "p",
+        content: "c",
+        content_format: "text",
+        content_hash: "h3",
+        source_agent: "other",
+        skill_version: null,
+        tags: ["news"],
+        metadata: { k: 1 },
+        created_at: T0,
+        updated_at: T0,
+      });
+      const insert = pool.calls.find((c) => c.text.includes("INSERT INTO app.records"));
+      assert.ok(insert);
+      assert.equal(insert.params[10], '["news"]');
+      assert.equal(insert.params[11], '{"k":1}');
+      await driver.updateRecord({
+        id: "r3",
+        token_id: "tok",
+        external_id: null,
+        title: null,
+        prompt: "p",
+        content: "c",
+        content_format: "text",
+        content_hash: "h3",
+        source_agent: "other",
+        skill_version: null,
+        tags: ["a", "b"],
+        metadata: {},
+        created_at: T0,
+        updated_at: T0,
+      });
+      const update = pool.calls.find((c) => c.text.includes("UPDATE app.records"));
+      assert.ok(update);
+      assert.equal(update.params[7], '["a","b"]');
+      assert.equal(update.params[8], "{}");
+    } finally {
+      await driver.close();
+    }
+  });
+
   it("normalizes JSONB: native arrays/objects pass through, JSON strings are parsed", async () => {
     const native = stubPool(() => ({ rows: [recordRow()], rowCount: 1 }));
     const d1 = new PgDriver(native);

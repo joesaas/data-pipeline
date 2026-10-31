@@ -37,8 +37,9 @@
  *   bigint   数值（BIGINT / IDENTITY 列；显式写 id，IDENTITY 为 BY DEFAULT 允许）
  *   bool     0/1 转布尔（BOOLEAN 列：is_active、ok、body_truncated）
  *   ts       ISO 字符串原样喂 TIMESTAMPTZ（非法时间值直接报错，不猜测转换）
- *   json     TEXT 先 JSON.parse 再喂 JSONB（tags / metadata / sources；
- *            解析失败直接报错，不写脏数据）
+ *   json     TEXT 先 JSON.parse 校验、再 JSON.stringify 成 JSON 文本喂 JSONB
+ *            （tags / metadata / sources；直接喂数组会被 node-postgres 写成
+ *            Postgres 数组字面量，jsonb 拒绝 22P02；解析失败直接报错，不写脏数据）
  */
 
 const { createHash } = require('node:crypto');
@@ -265,14 +266,17 @@ function convert(table, col, type, value) {
       return value;
     }
     case 'json': {
+      // JSONB 列必须传 JSON 文本：node-postgres 会把 JS 数组直接序列化成
+      // Postgres 数组字面量（["news"] -> {"news"}），jsonb 拒绝 22P02。
+      // 与 API pg-driver 的 insertRecord/updateRecord 同款修复（2026-10-31 真实 PG contract）。
       if (typeof value === 'string') {
         try {
-          return JSON.parse(value);
+          return JSON.stringify(JSON.parse(value));
         } catch {
           throw new Error(`invalid JSON in ${table}.${col}`);
         }
       }
-      if (Array.isArray(value) || (typeof value === 'object' && value !== null)) return value;
+      if (Array.isArray(value) || (typeof value === 'object' && value !== null)) return JSON.stringify(value);
       throw new Error(`invalid JSON value in ${table}.${col}`);
     }
     default:

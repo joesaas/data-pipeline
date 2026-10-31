@@ -184,7 +184,10 @@ export class PgDriver implements StorageDriver {
       [
         rec.id, rec.token_id, rec.external_id, rec.title, rec.prompt, rec.content,
         rec.content_format, rec.content_hash, rec.source_agent, rec.skill_version,
-        rec.tags, rec.metadata, rec.created_at, rec.updated_at,
+        // JSONB 列必须传 JSON 文本：node-postgres 会把 JS 数组直接序列化成
+        // Postgres 数组字面量（["news"] -> {"news"}），jsonb 拒绝 22P02。
+        // SQLite 驱动同款做法（JSON.stringify），见 2026-10-31 真实 PG contract 两例失败。
+        JSON.stringify(rec.tags), JSON.stringify(rec.metadata), rec.created_at, rec.updated_at,
       ],
     );
   }
@@ -196,7 +199,7 @@ export class PgDriver implements StorageDriver {
          updated_at = $10 WHERE id = $11`,
       [
         rec.title, rec.prompt, rec.content, rec.content_format, rec.content_hash,
-        rec.source_agent, rec.skill_version, rec.tags, rec.metadata, rec.updated_at, rec.id,
+        rec.source_agent, rec.skill_version, JSON.stringify(rec.tags), JSON.stringify(rec.metadata), rec.updated_at, rec.id,
       ],
     );
   }
