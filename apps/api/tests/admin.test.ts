@@ -230,7 +230,7 @@ describe("admin routes", () => {
     // List returns both rows, oldest-updated first, without tokens.
     const list = await req(ctx, "GET", W, ctx.adminKey);
     assert.equal(list.status, 200);
-    const items = list.body as unknown as Record<string, unknown>[];
+    const items = list.body.items as unknown as Record<string, unknown>[];
     assert.ok(Array.isArray(items));
     assert.ok(items.some((w) => w.id === idA && w.name === "hook-a"));
     assert.ok(items.some((w) => w.id === idB && w.name === "hook-b"));
@@ -366,7 +366,7 @@ describe("admin routes", () => {
     const id = created.body.id as number;
     // Detail and list echo cron; token still never returned.
     assert.equal((await req(ctx, "GET", `${W}/${id}`, ctx.adminKey)).body.cron, "0 9 * * 1-5");
-    const items = (await req(ctx, "GET", W, ctx.adminKey)).body as unknown as Record<string, unknown>[];
+    const items = ((await req(ctx, "GET", W, ctx.adminKey)).body.items as unknown as Record<string, unknown>[]);
     assert.equal(items.find((w) => w.id === id)?.cron, "0 9 * * 1-5");
     // Update without cron keeps it; an empty cron clears it.
     assert.equal(
@@ -432,6 +432,89 @@ describe("admin routes", () => {
     const limited = await req(ctx, "GET", `${H}?limit=1`, ctx.adminKey);
     assert.equal(limited.body.total, 2);
     assert.equal((limited.body.items as unknown[]).length, 1);
+  });
+
+  it("webhooks: list paginates with limit/offset and reports total", async () => {
+    const W = "/data-pipeline/api/v1/admin/webhooks";
+    const before = (await req(ctx, "GET", W, ctx.adminKey)).body as unknown as {
+      items: Record<string, unknown>[];
+      total: number;
+    };
+    const base = before.total;
+    const ids: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const created = await req(ctx, "POST", W, ctx.adminKey, {
+        name: `page-w${i}`,
+        webhookUrl: `https://page${i}.example/hook`,
+        webhookToken: `page-token-${i}`,
+      });
+      assert.equal(created.status, 201);
+      ids.push(created.body.id as number);
+    }
+    // New rows sort last (updated_at ASC, id ASC): page through from base.
+    const page1 = (await req(ctx, "GET", `${W}?limit=10&offset=${base}`, ctx.adminKey)).body as unknown as {
+      items: Record<string, unknown>[];
+      total: number;
+    };
+    assert.equal(page1.total, base + 12);
+    assert.equal(page1.items.length, 10);
+    assert.equal(page1.items[0].name, "page-w0");
+    const page2 = (await req(ctx, "GET", `${W}?limit=10&offset=${base + 10}`, ctx.adminKey)).body as unknown as {
+      items: Record<string, unknown>[];
+      total: number;
+    };
+    assert.equal(page2.items.length, 2);
+    assert.equal(page2.items[0].name, "page-w10");
+    const beyond = (await req(ctx, "GET", `${W}?limit=10&offset=${base + 100}`, ctx.adminKey)).body as unknown as {
+      items: unknown[];
+      total: number;
+    };
+    assert.deepEqual(beyond.items, []);
+    assert.equal(beyond.total, base + 12);
+    const negative = (await req(ctx, "GET", `${W}?limit=10&offset=-5`, ctx.adminKey)).body as unknown as {
+      items: unknown[];
+      total: number;
+    };
+    assert.equal(negative.items.length, 10);
+    assert.equal(negative.total, base + 12);
+    for (const id of ids) assert.equal((await req(ctx, "DELETE", `${W}/${id}`, ctx.adminKey)).status, 200);
+    assert.equal(((await req(ctx, "GET", W, ctx.adminKey)).body as unknown as { total: number }).total, base);
+  });
+
+  it("webhook trigger history: list paginates with limit/offset, newest first", async () => {
+    const H = "/data-pipeline/api/v1/admin/webhook-trigger-history";
+    const before = (await req(ctx, "GET", H, ctx.adminKey)).body as unknown as { total: number };
+    const base = before.total;
+    for (let i = 0; i < 12; i++) {
+      await ctx.driver.appendTriggerHistory({
+        webhook_id: 9,
+        webhook_name: "page-bot",
+        kind: "scheduled",
+        triggered_at: `2026-11-01T${String(i).padStart(2, "0")}:00:00.000Z`,
+        http_status: 200,
+        ok: true,
+        body_kind: "payload(single)",
+        body: JSON.stringify({ n: i }),
+        body_truncated: false,
+        error: null,
+        duration_ms: 10,
+      });
+    }
+    // Newest first: the 12 new rows sort before any older rows.
+    const page1 = (await req(ctx, "GET", `${H}?limit=10`, ctx.adminKey)).body as unknown as {
+      items: Record<string, unknown>[];
+      total: number;
+    };
+    assert.equal(page1.total, base + 12);
+    assert.equal(page1.items.length, 10);
+    assert.equal(page1.items[0].triggered_at, "2026-11-01T11:00:00.000Z");
+    const page2 = (await req(ctx, "GET", `${H}?limit=10&offset=10`, ctx.adminKey)).body as unknown as {
+      items: Record<string, unknown>[];
+      total: number;
+    };
+    assert.equal(page2.items.length, Math.min(10, base + 2));
+    assert.equal(page2.items[0].triggered_at, "2026-11-01T01:00:00.000Z");
+    assert.equal(page2.items[1].triggered_at, "2026-11-01T00:00:00.000Z");
   });
 
   it("pull tasks: create/list/get/update/active, many may be active", async () => {

@@ -496,7 +496,7 @@ export class SqliteDriver implements StorageDriver {
     return Number(res.changes) > 0;
   }
 
-  async listTriggerHistory(filter: { webhook_id?: number; limit: number }): Promise<{
+  async listTriggerHistory(filter: { webhook_id?: number; limit: number; offset?: number }): Promise<{
     items: WebhookTriggerHistory[];
     total: number;
   }> {
@@ -512,9 +512,9 @@ export class SqliteDriver implements StorageDriver {
     const rows = this.db
       .prepare(
         `SELECT id, webhook_id, webhook_name, kind, triggered_at, http_status, ok, body_kind, body, body_truncated, error, duration_ms
-         FROM webhook_trigger_history ${where} ORDER BY triggered_at DESC, id DESC LIMIT ?`,
+         FROM webhook_trigger_history ${where} ORDER BY triggered_at DESC, id DESC LIMIT ? OFFSET ?`,
       )
-      .all(...params, filter.limit) as RawRow[];
+      .all(...params, filter.limit, filter.offset ?? 0) as RawRow[];
     return {
       items: rows.map(({ ok, body_truncated, ...rest }) => ({
         ...rest,

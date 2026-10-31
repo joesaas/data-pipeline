@@ -484,14 +484,15 @@ export class PgDriver implements StorageDriver {
   async listTriggerHistory(filter: {
     webhook_id?: number;
     limit: number;
+    offset?: number;
   }): Promise<{ items: WebhookTriggerHistory[]; total: number }> {
     const where = filter.webhook_id !== undefined ? "WHERE webhook_id = $1" : "";
     const params = filter.webhook_id !== undefined ? [filter.webhook_id] : [];
     const totalRows = await this.q(`SELECT COUNT(*) AS n FROM app.webhook_trigger_history ${where}`, params);
     const rows = await this.q(
       `SELECT id, webhook_id, webhook_name, kind, triggered_at, http_status, ok, body_kind, body, body_truncated, error, duration_ms
-       FROM app.webhook_trigger_history ${where} ORDER BY triggered_at DESC, id DESC LIMIT $${params.length + 1}`,
-      [...params, filter.limit],
+       FROM app.webhook_trigger_history ${where} ORDER BY triggered_at DESC, id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, filter.limit, filter.offset ?? 0],
     );
     return { items: rows.map((r) => this.rowToHistory(r)), total: asInt(totalRows[0]?.n) };
   }

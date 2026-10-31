@@ -130,31 +130,40 @@
         <p class="hint">
           上次刷新：{{ webhooksLastRefreshed || "尚未刷新" }}
           <span v-if="webhooksRefreshing"> · 正在从服务器拉取最新数据…</span>
-          <span v-else-if="webhooks.length"> · 当前共 {{ webhooks.length }} 条</span>
+          <span v-else-if="webhooksTotal"> · 当前共 {{ webhooksTotal }} 条</span>
         </p>
         <div v-if="webhookView === 'list'">
-          <table v-if="webhooks.length">
-            <thead>
-              <tr><th>名字</th><th>URL</th><th>定时</th><th>cron</th><th>更新时间</th><th></th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="w in webhooks" :key="w.id" @click="openWebhook(w)">
-                <td>{{ w.name }}</td>
-                <td class="mono short">{{ w.url }}</td>
-                <td><span v-if="w.is_active" class="badge">定时</span><span v-else>—</span></td>
-                <td class="mono short">{{ w.cron || "间隔" }}</td>
-                <td>{{ fmtTime(w.updated_at) }}</td>
-                <td @click.stop>
-                  <button class="btn small" :disabled="busy" @click="openWebhook(w)">详情</button>
-                  <button class="btn small" :disabled="busy" @click="startEditWebhook(w)">编辑</button>
-                  <button class="btn small" :disabled="busy" @click="testWebhook(w)">测试一次</button>
-                  <button v-if="!w.is_active" class="btn small" :disabled="busy" @click="setWebhookActive(w, true)">设为定时</button>
-                  <button v-else class="btn small" :disabled="busy" @click="setWebhookActive(w, false)">取消定时</button>
-                  <button class="btn danger small" :disabled="busy" @click="deleteWebhook(w)">删除</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <template v-if="webhooks.length">
+            <table>
+              <thead>
+                <tr><th>名字</th><th>URL</th><th>定时</th><th>cron</th><th>更新时间</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="w in webhooks" :key="w.id" @click="openWebhook(w)">
+                  <td>{{ w.name }}</td>
+                  <td class="mono short">{{ w.url }}</td>
+                  <td><span v-if="w.is_active" class="badge">定时</span><span v-else>—</span></td>
+                  <td class="mono short">{{ w.cron || "间隔" }}</td>
+                  <td>{{ fmtTime(w.updated_at) }}</td>
+                  <td @click.stop>
+                    <button class="btn small" :disabled="busy" @click="openWebhook(w)">详情</button>
+                    <button class="btn small" :disabled="busy" @click="startEditWebhook(w)">编辑</button>
+                    <button class="btn small" :disabled="busy" @click="testWebhook(w)">测试一次</button>
+                    <button v-if="!w.is_active" class="btn small" :disabled="busy" @click="setWebhookActive(w, true)">设为定时</button>
+                    <button v-else class="btn small" :disabled="busy" @click="setWebhookActive(w, false)">取消定时</button>
+                    <button class="btn danger small" :disabled="busy" @click="deleteWebhook(w)">删除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="row space">
+              <span class="hint">共 {{ webhooksTotal }} 条，当前第 {{ webhooksOffset + 1 }}–{{ webhooksOffset + webhooks.length }} 条</span>
+              <span class="row">
+                <button class="btn small" :disabled="webhooksRefreshing || webhooksOffset === 0" @click="webhooksPage(-1)">上一页</button>
+                <button class="btn small" :disabled="webhooksRefreshing || webhooksOffset + webhooks.length >= webhooksTotal" @click="webhooksPage(1)">下一页</button>
+              </span>
+            </div>
+          </template>
           <p v-else class="hint">还没有 webhook，在下方新建一个。</p>
           <form class="create" @submit.prevent="createWebhook">
             <input v-model="newWebhookName" placeholder="新 webhook 名字，如：grok-bot" class="input" />
@@ -206,6 +215,13 @@
               </tr>
             </tbody>
           </table>
+          <div v-if="triggerHistory.length" class="row space">
+            <span class="hint">共 {{ triggerHistoryTotal }} 条，当前第 {{ triggerHistoryOffset + 1 }}–{{ triggerHistoryOffset + triggerHistory.length }} 条</span>
+            <span class="row">
+              <button class="btn small" :disabled="triggerHistoryOffset === 0" @click="triggerHistoryPage(-1)">上一页</button>
+              <button class="btn small" :disabled="triggerHistoryOffset + triggerHistory.length >= triggerHistoryTotal" @click="triggerHistoryPage(1)">下一页</button>
+            </span>
+          </div>
           <div v-if="selectedHistory" class="history-detail">
             <h4>payload · {{ selectedHistory.webhook_name }} · {{ fmtTime(selectedHistory.triggered_at) }}（{{ selectedHistory.kind === "test" ? "测试" : "定时" }}）</h4>
             <p v-if="selectedHistory.body_truncated" class="hint">这条 payload 超过 8000 字，已截断，只显示前 8000 字。</p>
@@ -627,6 +643,9 @@ const createdKey = ref(null);
 const copied = ref(false);
 
 const webhooks = ref([]);
+const webhooksOffset = ref(0);
+const webhooksTotal = ref(0);
+const webhooksPageSize = 10;
 const webhookView = ref("list");
 const selectedWebhook = ref(null);
 const newWebhookName = ref("");
@@ -648,6 +667,8 @@ const webhooksLastRefreshed = ref("");
 let webhooksRefreshSeq = 0;
 const triggerHistory = ref([]);
 const triggerHistoryTotal = ref(0);
+const triggerHistoryOffset = ref(0);
+const triggerHistoryPageSize = 10;
 const triggerHistoryFilter = ref("");
 const triggerHistoryError = ref("");
 const selectedHistory = ref(null);
@@ -852,6 +873,14 @@ function toggleHistoryDetail(h) {
 
 function onHistoryFilterChange() {
   selectedHistory.value = null;
+  triggerHistoryOffset.value = 0;
+  refreshTriggerHistory();
+}
+
+function triggerHistoryPage(dir) {
+  const next = triggerHistoryOffset.value + dir * triggerHistoryPageSize;
+  if (next < 0 || (dir > 0 && triggerHistoryOffset.value + triggerHistory.value.length >= triggerHistoryTotal.value)) return;
+  triggerHistoryOffset.value = next;
   refreshTriggerHistory();
 }
 
@@ -861,7 +890,8 @@ async function refreshTriggerHistory() {
   try {
     const data = await adminApi.listTriggerHistory(key.value, {
       webhook_id: triggerHistoryFilter.value || undefined,
-      limit: 50,
+      limit: triggerHistoryPageSize,
+      offset: triggerHistoryOffset.value,
     });
     if (seq !== triggerHistorySeq) return;
     triggerHistory.value = data.items;
@@ -875,10 +905,20 @@ async function refreshWebhooks() {
   const seq = ++webhooksRefreshSeq;
   webhooksRefreshing.value = true;
   try {
-    const rows = await adminApi.listWebhooks(key.value);
+    const data = await adminApi.listWebhooks(key.value, {
+      limit: webhooksPageSize,
+      offset: webhooksOffset.value,
+    });
     if (seq !== webhooksRefreshSeq) return;
-    webhooks.value = rows;
+    webhooks.value = data.items;
+    webhooksTotal.value = data.total;
     webhooksLastRefreshed.value = new Date().toLocaleString();
+    // A page left empty because its rows were deleted steps back one
+    // page instead of showing an empty table; same rule as Records.
+    if (webhooks.value.length === 0 && webhooksOffset.value > 0) {
+      webhooksOffset.value -= webhooksPageSize;
+      return refreshWebhooks();
+    }
     refreshTriggerHistory();
     if (selectedWebhook.value) {
       selectedWebhook.value =
@@ -890,6 +930,13 @@ async function refreshWebhooks() {
   } finally {
     if (seq === webhooksRefreshSeq) webhooksRefreshing.value = false;
   }
+}
+
+function webhooksPage(dir) {
+  const next = webhooksOffset.value + dir * webhooksPageSize;
+  if (next < 0 || (dir > 0 && webhooksOffset.value + webhooks.value.length >= webhooksTotal.value)) return;
+  webhooksOffset.value = next;
+  refreshWebhooks();
 }
 
 function openWebhook(w) {

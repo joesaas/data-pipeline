@@ -58,7 +58,12 @@ export const adminApi = {
     api("POST", "/api/v1/admin/tokens", key, { name, role }),
   revokeToken: (key, id) => api("POST", `/api/v1/admin/tokens/${id}/revoke`, key),
   deleteToken: (key, id) => api("DELETE", `/api/v1/admin/tokens/${id}`, key),
-  listWebhooks: (key) => api("GET", "/api/v1/admin/webhooks", key),
+  listWebhooks: (key, { limit, offset }) => {
+    const q = new URLSearchParams();
+    q.set("limit", String(limit));
+    q.set("offset", String(offset));
+    return api("GET", `/api/v1/admin/webhooks?${q}`, key);
+  },
   createWebhook: (key, body) => api("POST", "/api/v1/admin/webhooks", key, body),
   updateWebhook: (key, id, body) => api("PUT", `/api/v1/admin/webhooks/${id}`, key, body),
   deleteWebhook: (key, id) => api("DELETE", `/api/v1/admin/webhooks/${id}`, key),
@@ -68,10 +73,11 @@ export const adminApi = {
   // Trigger history: one row per actual fire (scheduled or test),
   // written by the trigger job; newest first. Filter by webhook id,
   // limit defaults to 50 on the server (max 200).
-  listTriggerHistory: (key, { webhook_id, limit }) => {
+  listTriggerHistory: (key, { webhook_id, limit, offset }) => {
     const q = new URLSearchParams();
     if (webhook_id) q.set("webhook_id", String(webhook_id));
     if (limit) q.set("limit", String(limit));
+    q.set("offset", String(offset));
     return api("GET", `/api/v1/admin/webhook-trigger-history?${q}`, key);
   },
   // Records: no admin-only route exists, and none is needed — the

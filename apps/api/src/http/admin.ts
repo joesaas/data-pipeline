@@ -217,7 +217,12 @@ export async function activateWebhook(driver: StorageDriver, id: number): Promis
 
 export async function listWebhooks(deps: AdminDeps, req: Request, res: Response): Promise<void> {
   if ((await adminOf(deps, req, res)) === null) return;
-  res.json(await deps.driver.listWebhooks());
+  const all = await deps.driver.listWebhooks();
+  const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 100;
+  const offsetRaw = typeof req.query.offset === "string" ? Number(req.query.offset) : NaN;
+  const offset = Number.isInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+  res.json({ items: all.slice(offset, offset + limit), total: all.length });
 }
 
 export async function createWebhook(deps: AdminDeps, req: Request, res: Response): Promise<void> {
@@ -475,7 +480,9 @@ export async function listTriggerHistory(deps: AdminDeps, req: Request, res: Res
   }
   const rawLimit = Number(req.query.limit);
   const limit = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, Math.floor(rawLimit))) : 50;
-  const { items, total } = await deps.driver.listTriggerHistory({ webhook_id: webhookId, limit });
+  const rawOffset = Number(req.query.offset);
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
+  const { items, total } = await deps.driver.listTriggerHistory({ webhook_id: webhookId, limit, offset });
   res.json({ items, total });
 }
 

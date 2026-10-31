@@ -122,7 +122,7 @@ export interface StorageDriver {
   /** Trigger history (written by the trigger job, read by the console).
    *  Newest first. Appending prunes the table to the latest 1000 rows
    *  so the history stays bounded no matter how often a webhook fires. */
-  listTriggerHistory(filter: { webhook_id?: number; limit: number }): Promise<{
+  listTriggerHistory(filter: { webhook_id?: number; limit: number; offset?: number }): Promise<{
     items: WebhookTriggerHistory[];
     total: number;
   }>;
