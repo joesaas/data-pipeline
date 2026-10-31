@@ -570,7 +570,7 @@ describe("admin routes", () => {
     assert.equal(done.body.result_record_id, "rec-1");
     // After done, run-now works again (no waiting row left).
     assert.equal((await req(ctx, "POST", `${P}/${taskId}/run-now`, ctx.adminKey, {})).status, 201);
-    const pending2 = (await req(ctx, "GET", `${P}/pending?status=waiting`, ctx.adminKey)).body as unknown as Record<string, unknown>[];
+    const pending2 = ((await req(ctx, "GET", `${P}/pending?status=waiting`, ctx.adminKey)).body.items as unknown as Record<string, unknown>[]);
     assert.equal(pending2.length, 1);
     const pendingId2 = pending2[0].id as number;
     // Fail from running: a failed row stays failed (no auto-retry) —
@@ -591,7 +591,7 @@ describe("admin routes", () => {
     );
     // Stale-running recovery: claim a fresh row, then reset it to waiting.
     assert.equal((await req(ctx, "POST", `${P}/${taskId}/run-now`, ctx.adminKey, {})).status, 201);
-    const waiting3 = (await req(ctx, "GET", `${P}/pending?status=waiting`, ctx.adminKey)).body as unknown as Record<string, unknown>[];
+    const waiting3 = ((await req(ctx, "GET", `${P}/pending?status=waiting`, ctx.adminKey)).body.items as unknown as Record<string, unknown>[]);
     assert.equal(waiting3.length, 1);
     const pendingId3 = waiting3[0].id as number;
     await req(ctx, "POST", `${P}/pending/${pendingId3}/claim`, ctx.adminKey, {});
@@ -602,6 +602,64 @@ describe("admin routes", () => {
     assert.equal(del.body.cancelled_waiting, 1);
     const pub2 = await req(ctx, "GET", "/data-pipeline/api/v1/pull-tasks/pending?target=muse");
     assert.equal(pub2.body.waiting, 0);
+  });
+
+  it("pending queue: admin list paginates with limit/offset and reports total", async () => {
+    const P = "/data-pipeline/api/v1/admin/pull-tasks";
+    const created = await req(ctx, "POST", P, ctx.adminKey, {
+      name: "page-task",
+      prompt: "page prompt",
+      cron: "0 9 * * *",
+    });
+    assert.equal(created.status, 201);
+    const taskId = created.body.id as number;
+    // Seed 12 waiting rows with distinct due_at (UNIQUE(pull_task_id, due_at)).
+    for (let i = 0; i < 12; i++) {
+      const stamp = `2026-10-31T${String(i).padStart(2, "0")}:00:00.000Z`;
+      await ctx.driver.savePendingTask({
+        id: 0,
+        pull_task_id: taskId,
+        pull_task_name: "page-task",
+        target: "muse",
+        prompt: "page prompt",
+        due_at: stamp,
+        kind: "scheduled",
+        status: "waiting",
+        result_external_id: null,
+        result_record_id: null,
+        error: null,
+        created_at: stamp,
+        updated_at: stamp,
+      });
+    }
+    const list = async (q: string) =>
+      (await req(ctx, "GET", `${P}/pending?status=waiting${q}`, ctx.adminKey)).body as unknown as {
+        items: Record<string, unknown>[];
+        total: number;
+      };
+    const first = await list("&limit=10");
+    assert.equal(first.total, 12);
+    assert.equal(first.items.length, 10);
+    assert.equal(first.items[0].due_at, "2026-10-31T00:00:00.000Z");
+    const second = await list("&limit=10&offset=10");
+    assert.equal(second.total, 12);
+    assert.equal(second.items.length, 2);
+    // Order is created_at ASC, id ASC: page 2 starts at the 11th seeded row.
+    assert.equal(second.items[0].due_at, "2026-10-31T10:00:00.000Z");
+    const beyond = await list("&limit=10&offset=100");
+    assert.deepEqual(beyond.items, []);
+    assert.equal(beyond.total, 12);
+    const negative = await list("&limit=10&offset=-5");
+    assert.equal(negative.items.length, 10);
+    assert.equal(negative.items[0].due_at, "2026-10-31T00:00:00.000Z");
+    const dflt = await list("");
+    assert.equal(dflt.total, 12);
+    assert.equal(dflt.items.length, 12);
+    assert.equal((await req(ctx, "GET", `${P}/pending?status=waiting`)).status, 401);
+    assert.equal((await req(ctx, "GET", `${P}/pending?status=waiting`, ctx.userKey)).status, 403);
+    // Cleanup: deleting the task cancels its waiting rows.
+    assert.equal((await req(ctx, "DELETE", `${P}/${taskId}`, ctx.adminKey)).status, 200);
+    assert.equal((await list("")).total, 0);
   });
 
   it("webhooks: test unknown id 404s before spawn; missing runner script fails cleanly", async () => {

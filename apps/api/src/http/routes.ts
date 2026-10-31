@@ -138,7 +138,7 @@ export function registerRoutes(
         admin_pull_task_delete: `DELETE ${base}/api/v1/admin/pull-tasks/:id`,
         admin_pull_task_active: `POST ${base}/api/v1/admin/pull-tasks/:id/active`,
         admin_pull_task_run_now: `POST ${base}/api/v1/admin/pull-tasks/:id/run-now`,
-        admin_pending_tasks: `GET ${base}/api/v1/admin/pull-tasks/pending`,
+        admin_pending_tasks: `GET ${base}/api/v1/admin/pull-tasks/pending?limit= (max 200, default 100) &offset= (default 0)`,
         admin_pending_claim: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/claim`,
         admin_pending_complete: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/complete`,
         admin_pending_fail: `POST ${base}/api/v1/admin/pull-tasks/pending/:id/fail`,

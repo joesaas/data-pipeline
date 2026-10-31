@@ -725,8 +725,11 @@ export async function listPendingTasks(deps: AdminDeps, req: Request, res: Respo
   let items = await deps.driver.listPendingTasks({ target, status: statusFilter });
   const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
   const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 100;
-  items = items.slice(0, limit);
-  res.json(items);
+  const offsetRaw = typeof req.query.offset === "string" ? Number(req.query.offset) : NaN;
+  const offset = Number.isInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+  const total = items.length;
+  items = items.slice(offset, offset + limit);
+  res.json({ items, total });
 }
 
 /**

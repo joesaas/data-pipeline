@@ -455,22 +455,31 @@
           （失败不自动重试，点立即执行可重新排队）。删任务时会取消它还没执行的等待行，
           已完成/失败的行留作记录。
         </p>
-        <table v-if="pendingTasks.length">
-          <thead>
-            <tr><th>任务</th><th>目标</th><th>到期时刻</th><th>方式</th><th>状态</th><th>结果</th><th>更新时间</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="p in pendingTasks" :key="p.id">
-              <td>{{ p.pull_task_name }}</td>
-              <td>{{ p.target }}</td>
-              <td>{{ fmtTime(p.due_at) }}</td>
-              <td>{{ p.kind === "manual" ? "立即执行" : "定时" }}</td>
-              <td><span v-if="p.status === 'waiting'" class="badge">等待</span><span v-else-if="p.status === 'running'" class="badge">执行中</span><span v-else-if="p.status === 'done'">完成</span><span v-else>失败</span></td>
-              <td class="short">{{ p.result_external_id || p.error || "—" }}</td>
-              <td>{{ fmtTime(p.updated_at) }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <template v-if="pendingTasks.length">
+          <table>
+            <thead>
+              <tr><th>任务</th><th>目标</th><th>到期时刻</th><th>方式</th><th>状态</th><th>结果</th><th>更新时间</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in pendingTasks" :key="p.id">
+                <td>{{ p.pull_task_name }}</td>
+                <td>{{ p.target }}</td>
+                <td>{{ fmtTime(p.due_at) }}</td>
+                <td>{{ p.kind === "manual" ? "立即执行" : "定时" }}</td>
+                <td><span v-if="p.status === 'waiting'" class="badge">等待</span><span v-else-if="p.status === 'running'" class="badge">执行中</span><span v-else-if="p.status === 'done'">完成</span><span v-else>失败</span></td>
+                <td class="short">{{ p.result_external_id || p.error || "—" }}</td>
+                <td>{{ fmtTime(p.updated_at) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="row space">
+            <span class="hint">共 {{ pendingTasksTotal }} 条，当前第 {{ pendingTasksOffset + 1 }}–{{ pendingTasksOffset + pendingTasks.length }} 条</span>
+            <span class="row">
+              <button class="btn small" :disabled="pullTasksRefreshing || pendingTasksOffset === 0" @click="pendingTasksPage(-1)">上一页</button>
+              <button class="btn small" :disabled="pullTasksRefreshing || pendingTasksOffset + pendingTasks.length >= pendingTasksTotal" @click="pendingTasksPage(1)">下一页</button>
+            </span>
+          </div>
+        </template>
         <p v-else class="hint">队列目前是空的。</p>
         <p class="hint">
           上次刷新：{{ pullTasksLastRefreshed || "尚未刷新" }}
@@ -674,6 +683,9 @@ let newsRefreshSeq = 0;
 
 const pullTasks = ref([]);
 const pendingTasks = ref([]);
+const pendingTasksOffset = ref(0);
+const pendingTasksTotal = ref(0);
+const pendingTasksPageSize = 10;
 const pullTaskView = ref("list");
 const selectedPullTask = ref(null);
 const newPullTaskName = ref("");
@@ -1085,20 +1097,38 @@ async function refreshPullTasks() {
   pullTasksRefreshing.value = true;
   pullTaskError.value = "";
   try {
-    const [items, pending] = await Promise.all([
+    const [items, data] = await Promise.all([
       adminApi.listPullTasks(key.value),
-      adminApi.listPendingTasks(key.value),
+      adminApi.listPendingTasks(key.value, {
+        limit: pendingTasksPageSize,
+        offset: pendingTasksOffset.value,
+      }),
     ]);
     if (seq === pullTasksRefreshSeq) {
       pullTasks.value = items;
-      pendingTasks.value = pending;
+      pendingTasks.value = data.items;
+      pendingTasksTotal.value = data.total;
       pullTasksLastRefreshed.value = new Date().toLocaleString();
+      // A page left empty because its rows were cancelled (deleting a
+      // task cancels its waiting rows) steps back one page instead of
+      // showing an empty table; same rule as Records.
+      if (pendingTasks.value.length === 0 && pendingTasksOffset.value > 0) {
+        pendingTasksOffset.value -= pendingTasksPageSize;
+        return refreshPullTasks();
+      }
     }
   } catch (e) {
     if (seq === pullTasksRefreshSeq) pullTaskError.value = e.message;
   } finally {
     if (seq === pullTasksRefreshSeq) pullTasksRefreshing.value = false;
   }
+}
+
+function pendingTasksPage(dir) {
+  const next = pendingTasksOffset.value + dir * pendingTasksPageSize;
+  if (next < 0 || (dir > 0 && pendingTasksOffset.value + pendingTasks.value.length >= pendingTasksTotal.value)) return;
+  pendingTasksOffset.value = next;
+  refreshPullTasks();
 }
 
 function openPullTask(t) {

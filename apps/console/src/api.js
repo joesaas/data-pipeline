@@ -108,7 +108,12 @@ export const adminApi = {
   setPullTaskActive: (key, id, active) =>
     api("POST", `/api/v1/admin/pull-tasks/${id}/active`, key, { active }),
   runPullTaskNow: (key, id) => api("POST", `/api/v1/admin/pull-tasks/${id}/run-now`, key, {}),
-  listPendingTasks: (key) => api("GET", "/api/v1/admin/pull-tasks/pending?limit=100", key),
+  listPendingTasks: (key, { limit, offset }) => {
+    const q = new URLSearchParams();
+    q.set("limit", String(limit));
+    q.set("offset", String(offset));
+    return api("GET", `/api/v1/admin/pull-tasks/pending?${q}`, key);
+  },
   // Console chat: single stream; human rows are created here, a Muse
   // worker answers them in order (pending -> processing -> done).
   listChatMessages: (key) => api("GET", "/api/v1/admin/chat/messages?limit=200", key),
