@@ -2,7 +2,7 @@
   "name": "data-pipeline",
   "version": "0.2.0",
   "private": true,
-  "description": "Data pipeline monorepo: apps/api (collection service), workers/cleaner (LLM cleaning), packages/shared (contracts), skills/ (pipe-push variants).",
+  "description": "Data pipeline monorepo: apps/api (collection service), apps/docs (Agent 101 doc reader, migrated from joesaas/doc-reader), workers/cleaner (LLM cleaning), packages/shared (contracts), skills/ (pipe-push variants).",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -13,7 +13,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @data-pipeline/shared && npm run build -w @data-pipeline/api && npm run build -w @data-pipeline/exporter && npm run build -w @data-pipeline/cleaner && npm run build -w @data-pipeline/job-runner && npm run build -w @data-pipeline/console",
+    "build": "npm run build -w @data-pipeline/shared && npm run build -w @data-pipeline/api && npm run build -w @data-pipeline/exporter && npm run build -w @data-pipeline/cleaner && npm run build -w @data-pipeline/job-runner && npm run build -w @data-pipeline/console && npm run build -w @data-pipeline/docs",
     "test": "npm run build && npm run test --workspaces --if-present",
     "start": "npm run start -w @data-pipeline/api",
     "dev": "npm run dev -w @data-pipeline/api",

@@ -49,6 +49,31 @@ module.exports = {
       },
     },
     {
+      // Docs reader (Agent 101 UI), migrated 2026-11-03 from
+      // joesaas/doc-reader into apps/docs, verbatim code + UI.
+      // Separate pm2 process on its old port 3001 so nginx's
+      // agent101.uk -> 3001 mapping needs no change; it only shares
+      // this repo and its auto-deploy. DATA_DIR / CLIENT_DIST are
+      // pinned here because the server's cwd defaults (./data,
+      // ./client/dist) would otherwise resolve under the repo root.
+      // DOC_READER_API_KEY is NOT set here: it lives in the server
+      // .env (root .env loads first, apps/docs/.env is the fallback
+      // candidate) and is never committed.
+      name: "data-docs",
+      cwd: root,
+      script: "apps/docs/dist/server/src/index.js",
+      autorestart: true,
+      max_restarts: 10,
+      min_uptime: 10000,
+      restart_delay: 3000,
+      max_memory_restart: "300M",
+      env: {
+        PORT: 3001,
+        DATA_DIR: path.join(root, "apps/docs/data"),
+        CLIENT_DIST: path.join(root, "apps/docs/client/dist"),
+      },
+    },
+    {
       name: "data-job-runner",
       cwd: root,
       script: "workers/job-runner/dist/src/main.js",
